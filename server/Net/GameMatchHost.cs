@@ -44,42 +44,6 @@ public sealed class GameMatchHost : IDisposable
         public MatchFlowState Flow { get; } = new();
     }
 
-    /// <summary>Dedicated Allies match clock — drives C2 / Time / Round / money (test timings).</summary>
-    private sealed class MatchFlowState
-    {
-        public MatchFlowPhase Phase { get; set; } = MatchFlowPhase.WaitingPlayers;
-        public DateTime PhaseEndsUtc { get; set; } = DateTime.MinValue;
-        /// <summary>1-based round index while prep / live / between rounds.</summary>
-        public int RoundIndex { get; set; }
-        public int ScoreTr { get; set; }
-        public int ScoreCt { get; set; }
-        /// <summary>Consecutive round losses — phone-host <c>TrCoLosses</c>/<c>CtCoLosses</c>.</summary>
-        public int CoLossesTr { get; set; }
-        public int CoLossesCt { get; set; }
-        public bool BombPlanted { get; set; }
-        public int BomberActorNr { get; set; }
-        /// <summary>Fighter actor nrs marked dead this round (<c>death</c> prop or pawn Destroy).</summary>
-        public HashSet<byte> DeadActors { get; } = new();
-        /// <summary>Pending round-end reason when wipe/plant fires mid-phase.</summary>
-        public string? PendingEndReason { get; set; }
-        public MatchTeam PendingWinner { get; set; }
-        /// <summary>One 5s prep extension when a fighter picked team but has no pawn yet.</summary>
-        public bool PrepSpawnExtensionUsed { get; set; }
-    }
-
-    private enum MatchFlowPhase : byte
-    {
-        WaitingPlayers = 0,
-        Warmup = 1,
-        /// <summary>C2=22 short freeze countdown + bomberId assign (phone <c>cnr</c>).</summary>
-        WarmupWillFinish = 2,
-        PurchasePhase = 3,
-        RoundLive = 4,
-        BombPlanted = 5,
-        RoundEndPause = 6,
-        MatchOver = 7,
-    }
-
     private sealed class LivingPawn
     {
         public short ObjectId { get; init; }
@@ -1633,17 +1597,15 @@ public sealed class GameMatchHost : IDisposable
             }
             else if (phase == MatchFlowPhase.MatchOver)
                 return;
-            else if (pendingReason is not null
-                     && phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted)
+            else if (pendingReason is not null && MatchFlowRules.AllowsWipeCheck(phase))
             {
-                // Wipe / early end queued from death/plant path.
+                // Wipe / early end queued from death/plant path — do not wait for phase timer.
             }
             else if (DateTime.UtcNow < ends)
                 return;
         }
 
-        if (pendingReason is not null
-            && phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted)
+        if (pendingReason is not null && MatchFlowRules.AllowsWipeCheck(phase))
         {
             EnterRoundEndPause(room, pendingWinner, pendingReason);
             return;
@@ -1785,6 +1747,10 @@ public sealed class GameMatchHost : IDisposable
 
     private void EnterRoundLive(MatchRoom room)
     {
+        // Prep/prestart deaths: do not start 90s live with a team already wiped.
+        if (TryResolveWipeImmediate(room, bombPlanted: false))
+            return;
+
         int round;
         int bomberId;
         var txBomberFix = false;
@@ -1953,7 +1919,7 @@ public sealed class GameMatchHost : IDisposable
             phase = room.Flow.Phase;
             bombPlanted = room.Flow.BombPlanted;
         }
-        if (phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted)
+        if (MatchFlowRules.AllowsWipeCheck(phase))
         {
             Console.WriteLine(
                 $"[match-host] match-flow: disconnect actor={actorNr} mid-{phase} — wipe check");
@@ -2181,7 +2147,7 @@ public sealed class GameMatchHost : IDisposable
             if (value.Kind != LobbyVariantKind.Byte || (MatchTeam)value.Byte != team)
                 continue;
             fallback = actor;
-            if (preferAlive && !room.Flow.DeadActors.Contains(actor))
+            if (preferAlive && !MatchFlowRules.IsActorDead(room.Flow, room.ActorProps, actor))
                 return actor;
             if (!preferAlive)
                 return actor;
@@ -2233,7 +2199,7 @@ public sealed class GameMatchHost : IDisposable
     private bool TryExtendPrepForAwaitingSpawn(MatchRoom room)
     {
         if (!FightersAwaitingSpawn(room))
-            return false;
+            return false; // includes dead fighters — corpses must not extend prep
 
         double deadline;
         lock (_roomGate)
@@ -2267,27 +2233,20 @@ public sealed class GameMatchHost : IDisposable
         }
         BroadcastRoomProps(room, props);
         Console.WriteLine(
-            "[match-host] match-flow: Prep extended 5s — fighter picked team, awaiting spawn " +
+            "[match-host] match-flow: Prep extended 5s — living fighter awaiting spawn " +
             $"(client Time refreshed; bomberId={(room.Flow.BomberActorNr)})");
         return true;
     }
 
-    private static bool FightersAwaitingSpawn(MatchRoom room)
+    private bool FightersAwaitingSpawn(MatchRoom room)
     {
-        var spawnedOwners = room.LivingPawns.Values.Select(p => p.OwnerActorNr).ToHashSet();
-        foreach (var ((actor, key), value) in room.ActorProps)
+        lock (_roomGate)
         {
-            if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
-                continue;
-            if (value.Kind != LobbyVariantKind.Byte)
-                continue;
-            var team = (MatchTeam)value.Byte;
-            if (team is not (MatchTeam.Tr or MatchTeam.Ct))
-                continue;
-            if (!spawnedOwners.Contains(actor))
-                return true;
+            return MatchFlowRules.FightersAwaitingSpawn(
+                room.Flow,
+                room.ActorProps,
+                room.LivingPawns.Values.Select(p => p.OwnerActorNr));
         }
-        return false;
     }
 
     private static int PickBomberActorNr(MatchRoom room)
@@ -2301,7 +2260,7 @@ public sealed class GameMatchHost : IDisposable
                 continue;
             if ((MatchTeam)value.Byte != MatchTeam.Tr)
                 continue;
-            if (room.Flow.DeadActors.Contains(actor))
+            if (MatchFlowRules.IsActorDead(room.Flow, room.ActorProps, (byte)actor))
                 continue;
             candidates.Add(actor);
         }
@@ -2350,32 +2309,44 @@ public sealed class GameMatchHost : IDisposable
         bool bombPlanted;
         lock (_roomGate)
         {
-            phase = room.Flow.Phase;
-            if (phase is not (MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted))
-                return;
             if (!room.Flow.DeadActors.Add(actorNr))
                 return; // already counted
+            phase = room.Flow.Phase;
             bombPlanted = room.Flow.BombPlanted;
             team = GetActorTeam(room, actorNr);
         }
 
         Console.WriteLine(
             $"[match-host] match-flow: death actor={actorNr} team={team} via {source}");
+
+        if (!MatchFlowRules.AllowsWipeCheck(phase))
+            return;
+
         TryResolveWipeImmediate(room, bombPlanted);
+    }
+
+    private static void LogWipeImmediate(MatchTeam winner, string reason)
+    {
+        var side = reason == "wipe-tr" ? "T" : "CT";
+        var winSide = winner == MatchTeam.Tr ? "T" : "CT";
+        Console.WriteLine(
+            $"[match-host] match-flow: wipe {side} → {winSide} win (immediate RoundEnd)");
     }
 
     /// <summary>
     /// Wipe resolve + immediate RoundEnd TX — do not wait for PollLoop tick (weapon-drop
     /// floods were delaying wipe→banner under load).
     /// </summary>
-    private void TryResolveWipeImmediate(MatchRoom room, bool bombPlanted)
+    /// <returns>True when RoundEnd was entered.</returns>
+    private bool TryResolveWipeImmediate(MatchRoom room, bool bombPlanted)
     {
         if (!TryResolveWipe(room, bombPlanted, out var winner, out var reason))
-            return;
+            return false;
+        LogWipeImmediate(winner, reason);
         EnterRoundEndPause(room, winner, reason);
+        return true;
     }
 
-    /// <returns>True when a wipe end was queued (caller should EnterRoundEndPause now).</returns>
     private bool TryResolveWipe(
         MatchRoom room, bool bombPlanted, out MatchTeam winner, out string reason)
     {
@@ -2383,110 +2354,27 @@ public sealed class GameMatchHost : IDisposable
         reason = "";
         lock (_roomGate)
         {
-            if (room.Flow.Phase is not (MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted))
+            if (!MatchFlowRules.TryResolveWipe(
+                    room.Flow, room.ActorProps, bombPlanted, out winner, out reason))
                 return false;
-            if (room.Flow.PendingEndReason is not null)
+
+            if (reason == "wipe-tr" && (bombPlanted || room.Flow.BombPlanted))
+            {
+                room.Flow.PendingEndReason = null;
+                room.Flow.PendingWinner = MatchTeam.None;
+                winner = MatchTeam.None;
+                reason = "";
+                Console.WriteLine(
+                    "[match-host] match-flow: wipe T with bomb planted — wait fuse/defuse");
                 return false;
-
-            var (aliveTr, aliveCt, totalTr, totalCt) = CountAliveFighters(room);
-            // After ActorLeft full-remove the leaving fighter is gone from totals — treat
-            // empty opposing team as wipe (last-of-team disconnect), not hang until timeout.
-            if (totalTr > 0 && totalCt == 0)
-            {
-                room.Flow.PendingWinner = MatchTeam.Tr;
-                room.Flow.PendingEndReason = "wipe-ct";
-                winner = MatchTeam.Tr;
-                reason = "wipe-ct";
-                Console.WriteLine(
-                    "[match-host] match-flow: no CT remaining (disconnect/wipe) → T win (immediate RoundEnd)");
-                return true;
-            }
-
-            if (totalCt > 0 && totalTr == 0)
-            {
-                if (bombPlanted || room.Flow.BombPlanted)
-                {
-                    Console.WriteLine(
-                        "[match-host] match-flow: no T remaining with bomb planted — wait fuse/defuse");
-                    return false;
-                }
-
-                room.Flow.PendingWinner = MatchTeam.Ct;
-                room.Flow.PendingEndReason = "wipe-tr";
-                winner = MatchTeam.Ct;
-                reason = "wipe-tr";
-                Console.WriteLine(
-                    "[match-host] match-flow: no T remaining (disconnect/wipe) → CT win (immediate RoundEnd)");
-                return true;
-            }
-
-            if (totalCt > 0 && aliveCt == 0)
-            {
-                // All CT dead → T win (even with bomb).
-                room.Flow.PendingWinner = MatchTeam.Tr;
-                room.Flow.PendingEndReason = "wipe-ct";
-                winner = MatchTeam.Tr;
-                reason = "wipe-ct";
-                Console.WriteLine(
-                    "[match-host] match-flow: wipe CT → T win (immediate RoundEnd)");
-                return true;
-            }
-
-            if (totalTr > 0 && aliveTr == 0)
-            {
-                if (bombPlanted || room.Flow.BombPlanted)
-                {
-                    // Bomb planted: T wipe does not end — wait defuse/boom.
-                    Console.WriteLine(
-                        "[match-host] match-flow: wipe T with bomb planted — wait fuse/defuse");
-                    return false;
-                }
-
-                room.Flow.PendingWinner = MatchTeam.Ct;
-                room.Flow.PendingEndReason = "wipe-tr";
-                winner = MatchTeam.Ct;
-                reason = "wipe-tr";
-                Console.WriteLine(
-                    "[match-host] match-flow: wipe T → CT win (immediate RoundEnd)");
-                return true;
             }
         }
 
-        return false;
+        return true;
     }
 
-    private static (int AliveTr, int AliveCt, int TotalTr, int TotalCt) CountAliveFighters(MatchRoom room)
-    {
-        var aliveTr = 0;
-        var aliveCt = 0;
-        var totalTr = 0;
-        var totalCt = 0;
-        foreach (var ((actor, key), value) in room.ActorProps)
-        {
-            if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
-                continue;
-            if (value.Kind != LobbyVariantKind.Byte)
-                continue;
-            var team = (MatchTeam)value.Byte;
-            if (team is not (MatchTeam.Tr or MatchTeam.Ct))
-                continue;
-            if (team == MatchTeam.Tr) totalTr++;
-            else totalCt++;
-            if (room.Flow.DeadActors.Contains(actor))
-                continue;
-            if (team == MatchTeam.Tr) aliveTr++;
-            else aliveCt++;
-        }
-        return (aliveTr, aliveCt, totalTr, totalCt);
-    }
-
-    private static MatchTeam GetActorTeam(MatchRoom room, byte actorNr)
-    {
-        if (room.ActorProps.TryGetValue((actorNr, MatchRoomPropKeys.Team), out var v)
-            && v.Kind == LobbyVariantKind.Byte)
-            return (MatchTeam)v.Byte;
-        return MatchTeam.None;
-    }
+    private static MatchTeam GetActorTeam(MatchRoom room, byte actorNr) =>
+        MatchFlowRules.GetActorTeam(room.ActorProps, actorNr);
 
     private void BroadcastRoomProps(
         MatchRoom room,
