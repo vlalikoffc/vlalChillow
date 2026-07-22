@@ -63,6 +63,8 @@ public sealed class GameMatchHost : IDisposable
         /// <summary>Pending round-end reason when wipe/plant fires mid-phase.</summary>
         public string? PendingEndReason { get; set; }
         public MatchTeam PendingWinner { get; set; }
+        /// <summary>One 5s prep extension when a fighter picked team but has no pawn yet.</summary>
+        public bool PrepSpawnExtensionUsed { get; set; }
     }
 
     private enum MatchFlowPhase : byte
@@ -990,6 +992,7 @@ public sealed class GameMatchHost : IDisposable
                         $"[match-host] team={team} actor={actorNr} — await joiner CreateWorldObject " +
                         $"(echo+rpc1+state; wire name Tr_Tr/Ct_Ct + fusTag=101 looks like *e in ASCII)");
                     TryBeginMatchFlowIfBothTeams(room);
+                    TryAssignBomberOnTrJoin(room, actorNr);
                 }
             }
 
@@ -1165,7 +1168,8 @@ public sealed class GameMatchHost : IDisposable
                 foreach (var oldId in staleIds)
                 {
                     var destroyPkt = MatchCodec.BuildDestroyWorldObject(NextServerTime(), oldId);
-                    var nD = BroadcastInitReady(room, destroyPkt, tag: "match_tx_DestroyWorldObject");
+                    var nD = BroadcastInitReadyExcept(
+                        room, peer, destroyPkt, tag: "match_tx_DestroyWorldObject");
                     Console.WriteLine(
                         $"[match-host] TX relay DestroyWorldObject id={oldId} → peers={nD} " +
                         "(stale-pawn heal)");
@@ -1182,7 +1186,8 @@ public sealed class GameMatchHost : IDisposable
                 trailingPayload: trailing);
             // INIT-ready peers only: late joiners still loading get this pawn via snapshot
             // at their own C2 unlock — avoids double CWO (live broadcast + snapshot) ghost.
-            var nEcho = BroadcastInitReady(room, echo, tag: "match_tx_CreateWorldObject");
+            // Exclude sender: owner already created locally; echo back doubles entities.
+            var nEcho = BroadcastInitReadyExcept(room, peer, echo, tag: "match_tx_CreateWorldObject");
             Console.WriteLine(
                 $"[match-host] TX relay CreateWorldObject id={parsed.ObjectId} " +
                 $"pawn='{parsed.TypeName}' owner={owner} " +
@@ -1210,7 +1215,8 @@ public sealed class GameMatchHost : IDisposable
 
     private void HandleWorldObjectRpc(NetPeer peer, MatchFrameFlags flags, byte[] raw, bool logRpc = true)
     {
-        DumpCapture("match_rx_WorldObjectRpc", raw);
+        if (logRpc)
+            DumpCapture("match_rx_WorldObjectRpc", raw);
         try
         {
             if (!MatchCodec.TryOpenBody(raw, out _, out _, out _, out var bodyBytes))
@@ -1230,7 +1236,9 @@ public sealed class GameMatchHost : IDisposable
             if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
                 return;
 
-            // Echo with HasServerTime (client TX is flags=None) — same pattern as SetProperty.
+            // Echo with HasServerTime (client TX is flags=None) — relay to other INIT-ready
+            // peers only. Echoing back to sender re-triggers WeaponDropManager ohq (field 4/5
+            // ping-pong) → weapon drop duplication flood (run-20260722_102505).
             var stime = NextServerTime();
             var echo = MatchCodec.BuildWorldObjectRpc(
                 stime,
@@ -1240,7 +1248,8 @@ public sealed class GameMatchHost : IDisposable
                 parsed.Field,
                 parsed.TimeValue,
                 parsed.Payload.Length > 0 ? parsed.Payload : null);
-            var n = BroadcastInitReady(st.Room, echo, tag: "match_tx_WorldObjectRpc");
+            var n = BroadcastInitReadyExcept(
+                st.Room, peer, echo, tag: "match_tx_WorldObjectRpc", dumpCapture: logRpc);
             if (logRpc)
             {
                 Console.WriteLine(
@@ -1308,7 +1317,7 @@ public sealed class GameMatchHost : IDisposable
             }
 
             var echo = MatchCodec.BuildDestroyWorldObject(NextServerTime(), objectId);
-            var n = BroadcastInitReady(room, echo, tag: "match_tx_DestroyWorldObject");
+            var n = BroadcastInitReadyExcept(room, peer, echo, tag: "match_tx_DestroyWorldObject");
             Console.WriteLine(
                 $"[match-host] TX relay DestroyWorldObject id={objectId} → peers={n} " +
                 $"unregistered={(removed ? "LivingPawn" : "none")}");
@@ -1458,18 +1467,31 @@ public sealed class GameMatchHost : IDisposable
     /// Reliable to peers who finished INIT (BootstrapSent). Pawn CWO / rpc go here so
     /// late joiners do not get a live CWO and then a second copy from living-pawn snapshot.
     /// </summary>
-    private int BroadcastInitReady(MatchRoom room, byte[] payload, string tag)
+    private int BroadcastInitReady(MatchRoom room, byte[] payload, string tag) =>
+        BroadcastInitReadyExcept(room, except: null, payload, tag, dumpCapture: true);
+
+    /// <summary>
+    /// INIT-ready relay excluding sender — client already applied locally (CWO/Rpc/Destroy).
+    /// </summary>
+    private int BroadcastInitReadyExcept(
+        MatchRoom room,
+        NetPeer? except,
+        byte[] payload,
+        string? tag,
+        bool dumpCapture = true)
     {
         var n = 0;
         foreach (var (p, st) in _peers)
         {
-            if (st.Room == room && st.BootstrapSent)
-            {
-                Send(p, payload);
-                n++;
-            }
+            if (st.Room != room || !st.BootstrapSent)
+                continue;
+            if (except is not null && ReferenceEquals(p, except))
+                continue;
+            Send(p, payload);
+            n++;
         }
-        DumpCapture(tag, payload);
+        if (dumpCapture && tag is not null)
+            DumpCapture(tag, payload);
         return n;
     }
 
@@ -1635,6 +1657,8 @@ public sealed class GameMatchHost : IDisposable
                 EnterPurchasePhase(room, nextRound: true);
                 break;
             case MatchFlowPhase.PurchasePhase:
+                if (TryExtendPrepForAwaitingSpawn(room))
+                    break;
                 EnterRoundLive(room);
                 break;
             case MatchFlowPhase.RoundLive:
@@ -1726,6 +1750,7 @@ public sealed class GameMatchHost : IDisposable
             room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchFlowTestParams.PurchasePhase;
             room.Flow.BombPlanted = false;
             room.Flow.PendingEndReason = null;
+            room.Flow.PrepSpawnExtensionUsed = false;
             room.Flow.DeadActors.Clear();
             // Round 1: keep bomber chosen on C2=22. Later rounds: pick fresh living Tr.
             if (round <= 1 && room.Flow.BomberActorNr > 0)
@@ -2144,6 +2169,73 @@ public sealed class GameMatchHost : IDisposable
             LobbyVariantKind.Byte => v.Byte,
             _ => -1,
         };
+    }
+
+    /// <summary>
+    /// Mid-prep rejoin: Tr picked team while <c>bomberId=0</c> (prior T disconnect) — assign now.
+    /// </summary>
+    private void TryAssignBomberOnTrJoin(MatchRoom room, byte actorNr)
+    {
+        int bomberId;
+        lock (_roomGate)
+        {
+            if (room.Flow.Phase != MatchFlowPhase.PurchasePhase)
+                return;
+            if (room.Flow.BomberActorNr > 0)
+                return;
+            if (GetActorTeam(room, actorNr) != MatchTeam.Tr)
+                return;
+            room.Flow.BomberActorNr = actorNr;
+            bomberId = actorNr;
+        }
+
+        BroadcastRoomProps(room,
+        [
+            (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
+        ]);
+        Console.WriteLine(
+            $"[match-host] match-flow: bomberId={bomberId} (Tr joined during Prep, was 0)");
+    }
+
+    /// <summary>
+    /// Fighter on Tr/Ct picked team but has not TX CreateWorldObject yet — defer Live once.
+    /// </summary>
+    private bool TryExtendPrepForAwaitingSpawn(MatchRoom room)
+    {
+        if (!FightersAwaitingSpawn(room))
+            return false;
+
+        lock (_roomGate)
+        {
+            if (room.Flow.Phase != MatchFlowPhase.PurchasePhase)
+                return false;
+            if (room.Flow.PrepSpawnExtensionUsed)
+                return false;
+            room.Flow.PrepSpawnExtensionUsed = true;
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        }
+
+        Console.WriteLine(
+            "[match-host] match-flow: Prep extended 5s — fighter picked team, awaiting spawn");
+        return true;
+    }
+
+    private static bool FightersAwaitingSpawn(MatchRoom room)
+    {
+        var spawnedOwners = room.LivingPawns.Values.Select(p => p.OwnerActorNr).ToHashSet();
+        foreach (var ((actor, key), value) in room.ActorProps)
+        {
+            if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
+                continue;
+            if (value.Kind != LobbyVariantKind.Byte)
+                continue;
+            var team = (MatchTeam)value.Byte;
+            if (team is not (MatchTeam.Tr or MatchTeam.Ct))
+                continue;
+            if (!spawnedOwners.Contains(actor))
+                return true;
+        }
+        return false;
     }
 
     private static int PickBomberActorNr(MatchRoom room)
