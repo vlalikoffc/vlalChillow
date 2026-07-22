@@ -22,6 +22,39 @@ same owner, also TX Destroy for any stale LivingPawn ids (heal races / missed De
 
 Retest markers: `TX relay DestroyWorldObject id=… → peers=K`; no more `unhandled opcode DestroyWorldObject`.
 
+### Death vs respawn (critical — `run-20260722_105939` false wipe)
+
+**`DestroyWorldObject` is NOT a death.** Clients Destroy+Create their LivingPawn on **every phase
+transition** (Warmup→PreStart→Prep, and between rounds). The phone host does the same on the wire
+(gold `run-20260722_100157`: `Destroy id=0x81` then `Create id=0x82` for the same owner, **no
+round end**). Treating a bare Destroy as a kill (commit `b0b0918`) wiped T during PreStart and
+fired `RoundEnd … round=0` **before round 1** — CT “instantly wins as if time ran out”.
+
+**Signals (evidence):**
+
+| Pattern | Meaning | Evidence (`run-20260722_105939`) |
+|---------|---------|----------------------------------|
+| `Destroy id=X` then `Create id=Y` same owner, **no `death` prop** | phase **respawn** — never a kill | PreStart 040043: Destroy 257 → Create 258; also 385→386 |
+| `Destroy` + actor `SetProperty death=1` (+ opponent `kills`/`fair_kills`/`round_kills`++) | **combat death** | Live 040101: Destroy 258 → `death=1` actor2, `kills`/`fair_kills`/`round_kills=1` actor3 |
+| `round_kills=0` / `round_assists=0` (reset to 0) | round **reset**, not a kill | 040043 before PreStart respawn |
+
+**Host rule (implemented):**
+- Combat death = actor **`death` SetProperty non-zero** → `NoteActorDeath` → wipe check. Valid in
+  any `AllowsWipeCheck` phase (so a real kill or a leaver still ends PreStart/Prep), but a bare
+  Destroy never reaches it.
+- Destroy only **arms a grace** during **RoundLive / BombPlanted** (`DestroyMayBeCombatDeath`). If
+  no respawn CWO for that owner within `DestroyDeathGrace` (1.5s) **and** no `death` prop resolved
+  it, count it as a combat elimination (fallback for a missing death prop). Warmup/PreStart/Prep
+  Destroys are ignored for death entirely.
+- A fighting-pawn CWO for an owner = respawn: cancel the grace, clear `DeadActors` + local `death`.
+- `EnterPurchasePhase` clears `death` props **before** picking `bomberId` — otherwise last round’s
+  `death=1` makes every living T look dead → `bomberId=0` (smoking gun round 2 Prep) → the fighter
+  is treated as a corpse and Prep hangs (`Prep extended … awaiting spawn`).
+
+Retest markers: `pawn Destroy owner=N in WarmupWillFinish — armed … not an immediate wipe` must
+**not** appear (PreStart is not a combat phase → no arm); no `death actor=… via DestroyWorldObject`;
+Live kill shows `death actor=… via SetProperty` then immediate `wipe … RoundEnd`.
+
 ### Ping — server RoundTripTime (not client echo)
 
 Client SetProperty `ping` int is often ≈0/1/2 on LAN. Phone host transport stores LiteNetLib
@@ -70,6 +103,13 @@ Round end UI is **победа / поражение** from local team vs nested 
 `cnp` still owns the state (C2=101). Do **not** TX C2=201 for rounds — that opens
 `FinalHud` (green match WIN, empty scores). Do **not** invent ban/draw unless decompile
 shows real draw use for rounds (`cid.Draw=7` exists but is unused here).
+
+**Phase order + timers (host-owned, per `MatchFlowState.Phase`):** `WaitingPlayers`(10) →
+`Warmup`(21, 10s movable) → `WarmupWillFinish`/PreStart(22, 3s freeze + `bomberId`; clients
+Destroy+Create pawns here — **not** a wipe) → `PurchasePhase`(31, 10s, `Round`/`bomberId`/`Time`) →
+`RoundLive`(101, 90s, money $800) → wipe **or** timeout → `RoundEndPause` (C2 stays 101 + WinTeam
+bag, silent 5s) → next `PurchasePhase`(31) … × 3 rounds → `MatchResults`(205). The **first**
+`RoundEnd` must be `round=1`+ from a real Live outcome — never `round=0` from a PreStart Destroy.
 
 ### Round-end wire — phone-host gold (`run-20260722_100157`)
 

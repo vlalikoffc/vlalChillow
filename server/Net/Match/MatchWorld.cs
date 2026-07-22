@@ -165,6 +165,14 @@ public static class MatchFlowTestParams
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(5);
     /// <summary>Bomb planted fuse (<c>cnl(float)</c>) — ~40s.</summary>
     public static readonly TimeSpan BombFuse = TimeSpan.FromSeconds(40);
+    /// <summary>
+    /// Grace after a Live/BombPlanted pawn Destroy with no respawn before it is counted as a
+    /// combat elimination. Real kills usually also SetProperty <c>death=1</c>
+    /// (<c>run-20260722_105939</c> line 896) which resolves immediately; this is the fallback
+    /// for a missing death prop. Kept short so a genuine wipe still ends the round promptly,
+    /// but long enough that a same-frame Destroy→Create respawn is never mis-read as a kill.
+    /// </summary>
+    public static readonly TimeSpan DestroyDeathGrace = TimeSpan.FromMilliseconds(1500);
     public const int TotalRounds = 3;
     /// <summary>Money on match/round start — bootstrap still uses 10000 like phone.</summary>
     public const int RoundStartMoney = 800;

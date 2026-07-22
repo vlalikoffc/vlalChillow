@@ -33,8 +33,22 @@ public sealed class MatchFlowState
     public int CoLossesCt { get; set; }
     public bool BombPlanted { get; set; }
     public int BomberActorNr { get; set; }
-    /// <summary>Fighter actor nrs marked dead this round (<c>death</c> prop or pawn Destroy).</summary>
+    /// <summary>
+    /// Fighter actor nrs marked dead this round. Populated ONLY by a proven combat death —
+    /// actor <c>death</c> SetProperty (non-zero), or the Live/BombPlanted no-respawn fallback.
+    /// A bare pawn <c>DestroyWorldObject</c> is NOT a death (phase respawn) — see
+    /// <see cref="PendingCombatDestroy"/> and MATCH_WORLD.md "death vs respawn".
+    /// </summary>
     public HashSet<byte> DeadActors { get; } = new();
+    /// <summary>
+    /// Owners whose LivingPawn was Destroyed during <see cref="MatchFlowPhase.RoundLive"/> /
+    /// <see cref="MatchFlowPhase.BombPlanted"/> with no respawn yet, keyed to the Destroy time.
+    /// Deferred combat-death fallback: if no CreateWorldObject re-spawns the owner within
+    /// <c>MatchFlowTestParams.DestroyDeathGrace</c> (and no <c>death</c> prop already resolved it),
+    /// count it as an elimination. During Warmup/PreStart/Prep this stays empty — those Destroys
+    /// are phase respawns, never kills.
+    /// </summary>
+    public Dictionary<byte, DateTime> PendingCombatDestroy { get; } = new();
     /// <summary>Pending round-end reason when wipe/plant fires mid-phase.</summary>
     public string? PendingEndReason { get; set; }
     public MatchTeam PendingWinner { get; set; }
@@ -45,11 +59,26 @@ public sealed class MatchFlowState
 /// <summary>Shared wipe / spawn / alive-count rules for match flow.</summary>
 public static class MatchFlowRules
 {
-    /// <summary>Phases where eliminations can end the round (prep kills count).</summary>
+    /// <summary>
+    /// Phases where a <b>proven combat death</b> (actor <c>death</c> prop) or an empty opposing
+    /// team (disconnect) can end the round. PreStart/Prep are included so a real kill or a
+    /// leaver still resolves — but a bare pawn Destroy must NOT reach here (that is a respawn).
+    /// </summary>
     public static bool AllowsWipeCheck(MatchFlowPhase phase) =>
         phase is MatchFlowPhase.WarmupWillFinish
             or MatchFlowPhase.PurchasePhase
             or MatchFlowPhase.RoundLive
+            or MatchFlowPhase.BombPlanted;
+
+    /// <summary>
+    /// Phases where a bare <c>DestroyWorldObject</c> may indicate a combat elimination.
+    /// Warmup/PreStart/Prep clients Destroy+Create their pawn on every phase transition
+    /// (respawn — the phone host does the same: gold <c>run-20260722_100157</c> Destroy id then
+    /// Create id, no round end), so a Destroy there is never a kill. Only during a live round
+    /// does a Destroy with no respawn mean the fighter was eliminated.
+    /// </summary>
+    public static bool DestroyMayBeCombatDeath(MatchFlowPhase phase) =>
+        phase is MatchFlowPhase.RoundLive
             or MatchFlowPhase.BombPlanted;
 
     public static bool IsActorDead(

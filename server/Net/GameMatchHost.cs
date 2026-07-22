@@ -1111,6 +1111,15 @@ public sealed class GameMatchHost : IDisposable
                     room.LivingPawns.Remove(oldId);
 
                 room.SpawnedPawns.Add(owner);
+                // Respawn (prep / between-round pawn): cancel combat-death grace and clear any
+                // stale dead flag so the fighter counts as alive for wipe / bomber picks.
+                room.Flow.PendingCombatDestroy.Remove(owner);
+                room.Flow.DeadActors.Remove(owner);
+                if (room.ActorProps.TryGetValue((owner, MatchRoomPropKeys.Death), out var deadProp)
+                    && !(deadProp.Kind == LobbyVariantKind.Int && deadProp.Int == 0))
+                {
+                    room.ActorProps[(owner, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(0);
+                }
                 room.LivingPawns[parsed.ObjectId] = new LivingPawn
                 {
                     ObjectId = parsed.ObjectId,
@@ -1291,7 +1300,7 @@ public sealed class GameMatchHost : IDisposable
                 $"unregistered={(removed ? "LivingPawn" : "none")}");
 
             if (ownerNr is { } owner)
-                NoteActorDeath(room, owner, LobbyVariant.FromInt(1), source: "DestroyWorldObject");
+                NotePawnDestroyed(room, owner);
         }
         catch (Exception ex)
         {
@@ -1575,7 +1584,10 @@ public sealed class GameMatchHost : IDisposable
             rooms = _roomsByPassword.Values.ToList();
 
         foreach (var room in rooms)
+        {
+            ProcessPendingCombatDestroys(room);
             TickMatchFlowRoom(room);
+        }
     }
 
     private void TickMatchFlowRoom(MatchRoom room)
@@ -1652,6 +1664,7 @@ public sealed class GameMatchHost : IDisposable
             room.Flow.BombPlanted = false;
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
+            room.Flow.PendingCombatDestroy.Clear();
         }
         // Time/RoundStartTime are doubles in NetManager.bfqt units (TickCount/1000 seconds).
         // FetchServerTime HasServerTime header stays raw TickCount ms — client dws.bfwi divides.
@@ -1718,6 +1731,16 @@ public sealed class GameMatchHost : IDisposable
             room.Flow.PendingEndReason = null;
             room.Flow.PrepSpawnExtensionUsed = false;
             room.Flow.DeadActors.Clear();
+            room.Flow.PendingCombatDestroy.Clear();
+            // Clear last round's death flags LOCALLY before picking the bomber. PickBomberActorNr
+            // skips IsActorDead; if the previous round's `death=1` prop is still set, every living
+            // T looks dead → bomberId=0 (smoking gun round 2 Prep). Broadcast happens below via
+            // ClearFighterDeathFlags.
+            foreach (var a in room.Actors)
+            {
+                if (a.Nr != MatchHostActor.ActorNr)
+                    room.ActorProps[(a.Nr, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(0);
+            }
             // Round 1: keep bomber chosen on C2=22. Later rounds: pick fresh living Tr.
             if (round <= 1 && room.Flow.BomberActorNr > 0)
                 bomberId = room.Flow.BomberActorNr;
@@ -1773,6 +1796,7 @@ public sealed class GameMatchHost : IDisposable
             room.Flow.BombPlanted = false;
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
+            room.Flow.PendingCombatDestroy.Clear();
         }
 
         if (txBomberFix && bomberId > 0)
@@ -2289,6 +2313,87 @@ public sealed class GameMatchHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// A LivingPawn was <c>DestroyWorldObject</c>'d. This is <b>not</b> a death by itself:
+    /// Warmup/PreStart/Prep clients Destroy+Create their pawn on every phase transition
+    /// (respawn), and the phone host does the same (gold <c>run-20260722_100157</c>: Destroy id
+    /// then Create id, no round end). Combat death is the actor <c>death</c> SetProperty
+    /// (<c>run-20260722_105939</c> line 896 <c>death=1</c> right after a real kill).
+    /// <para>
+    /// Root cause of the false RoundEnd at round=0 (b0b0918): Destroy was routed straight to
+    /// <see cref="NoteActorDeath"/> and PreStart/Prep are in <see cref="MatchFlowRules.AllowsWipeCheck"/>,
+    /// so the phase-transition respawn Destroy wiped T before round 1 even started.
+    /// </para>
+    /// Only in RoundLive/BombPlanted do we arm a short grace: if no respawn CWO arrives for this
+    /// owner within <see cref="MatchFlowTestParams.DestroyDeathGrace"/> (and no <c>death</c> prop
+    /// already resolved it), <see cref="ProcessPendingCombatDestroys"/> counts it as an elimination.
+    /// </summary>
+    private void NotePawnDestroyed(MatchRoom room, byte owner)
+    {
+        if (owner == 0 || owner == MatchHostActor.ActorNr)
+            return;
+
+        MatchFlowPhase phase;
+        lock (_roomGate)
+        {
+            phase = room.Flow.Phase;
+            if (!MatchFlowRules.DestroyMayBeCombatDeath(phase))
+            {
+                // Phase-transition respawn window — Destroy is not a kill; drop any stale arm.
+                room.Flow.PendingCombatDestroy.Remove(owner);
+                return;
+            }
+            room.Flow.PendingCombatDestroy[owner] = DateTime.UtcNow;
+        }
+        Console.WriteLine(
+            $"[match-host] match-flow: pawn Destroy owner={owner} in {phase} — armed " +
+            "combat-death grace (await death prop or no-respawn; not an immediate wipe)");
+    }
+
+    /// <summary>
+    /// Tick step: resolve armed Live/BombPlanted pawn Destroys that never respawned and were not
+    /// already covered by a <c>death</c> prop. This is the fallback for a missing death prop —
+    /// the primary combat-death path is the actor <c>death</c> SetProperty. Cleared on respawn,
+    /// on real death, and on any non-combat phase.
+    /// </summary>
+    private void ProcessPendingCombatDestroys(MatchRoom room)
+    {
+        List<byte> eliminated = new();
+        lock (_roomGate)
+        {
+            if (room.Flow.PendingCombatDestroy.Count == 0)
+                return;
+            if (!MatchFlowRules.DestroyMayBeCombatDeath(room.Flow.Phase))
+            {
+                room.Flow.PendingCombatDestroy.Clear();
+                return;
+            }
+            var now = DateTime.UtcNow;
+            foreach (var owner in room.Flow.PendingCombatDestroy.Keys.ToList())
+            {
+                var respawned = room.LivingPawns.Values.Any(p => p.OwnerActorNr == owner);
+                if (respawned || room.Flow.DeadActors.Contains(owner))
+                {
+                    room.Flow.PendingCombatDestroy.Remove(owner);
+                    continue;
+                }
+                if (now - room.Flow.PendingCombatDestroy[owner] >= MatchFlowTestParams.DestroyDeathGrace)
+                {
+                    eliminated.Add(owner);
+                    room.Flow.PendingCombatDestroy.Remove(owner);
+                }
+            }
+        }
+
+        foreach (var owner in eliminated)
+        {
+            Console.WriteLine(
+                $"[match-host] match-flow: combat elimination actor={owner} " +
+                "(Live pawn Destroy, no respawn within grace, no death prop) → NoteActorDeath");
+            NoteActorDeath(room, owner, LobbyVariant.FromInt(1), source: "DestroyNoRespawn");
+        }
+    }
+
     private void NoteActorDeath(MatchRoom room, byte actorNr, LobbyVariant value, string source)
     {
         if (actorNr == 0 || actorNr == MatchHostActor.ActorNr)
@@ -2309,6 +2414,7 @@ public sealed class GameMatchHost : IDisposable
         bool bombPlanted;
         lock (_roomGate)
         {
+            room.Flow.PendingCombatDestroy.Remove(actorNr); // real death supersedes the grace arm
             if (!room.Flow.DeadActors.Add(actorNr))
                 return; // already counted
             phase = room.Flow.Phase;
