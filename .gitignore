@@ -4,3 +4,15 @@ server/obj/
 **/captures/
 **/logs/
 .cursor/
+
+# Large RE binaries / tool caches (docs + scripts are committed)
+decompiled/apk_extract/
+decompiled/tools/
+decompiled/inspector_out/
+decompiled/ghidra_proj/
+decompiled/cpp2il_*/
+decompiled/*.log
+decompiled/discovery_*.txt
+decompiled/serializer_types.txt
+decompiled/ghidra_analyze.log
+decompiled/ghidra_smoke.log
