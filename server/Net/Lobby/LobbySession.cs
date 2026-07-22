@@ -35,7 +35,11 @@ public sealed class LobbySession
     private readonly object _gate = new();
     private readonly Dictionary<NetPeer, ConnectedPlayer> _byPeer = new();
     private readonly List<ConnectedPlayer> _order = new();
-    private int _nextMemberId = 1;
+    /// <summary>
+    /// Lobby chat / NewMember ids start at 2 so they never collide with each client's
+    /// illusion <see cref="ConnectedPlayer.ClientLocalMemberId"/> (=1). Server stays 0.
+    /// </summary>
+    private int _nextMemberId = 2;
     private string _lobbyName;
     private readonly string _lobbyId;
     private string _gameModeId = LobbyPropKeys.DefaultGameModeId;

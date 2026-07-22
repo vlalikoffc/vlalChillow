@@ -7,7 +7,8 @@ using StandChillow.LanServer.Net.Match;
 
 // CLI:
 //   Dedicated host (default):  dotnet run -c Release [-- lobbyTitle]
-//     start match: console `start`/`play` or phone chat `play`/`start`
+//     start match: console `start`/`play` or phone chat `/play` `/start`
+//     lobby chat: `/mode` `/map` (slash commands); player chat relayed with speaker id
 //     defaults: Ranked2v2 + Sandstone 2x2; title «влал хостит рялна»
 //   ConnectAsClient (learning only):  dotnet run -c Release -- --client …
 // Captures under bin/.../captures/ are for analysis only — never replay into host replies.
@@ -141,7 +142,7 @@ static async Task RunDedicatedHostAsync(string[] args)
     Console.WriteLine($"  mode/levels  : {game.Session.GameModeId} / [{string.Join(", ", game.Session.SelectedLevels)}]");
     Console.WriteLine($"  discovery    : cxbl={(current.HasExtraStrings ? 1 : 0)} (1=map waiting, 0=Join in-progress)");
     Console.WriteLine($"  payload hex  : {current.ToHex()}");
-    Console.WriteLine("Phone: LAN list → join → chat play/start (or console start).");
+    Console.WriteLine("Phone: LAN list → join → chat /mode /map · /play|/start (or console start).");
     Console.WriteLine("Expect: op7 → SearchingStarted → op9 LAN:7777 → Handshake → JoinRoom Dedik.");
     Console.WriteLine("Second play/start: re-advertise in-progress only (no new 7777 bind).");
     Console.WriteLine("Captures: server/bin/Release/net8.0/captures/");

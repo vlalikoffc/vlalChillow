@@ -82,9 +82,10 @@ public sealed class GameNetHost : IDisposable
         _listener.PeerDisconnectedEvent += (peer, info) =>
         {
             Console.WriteLine($"[net] peer DISCONNECTED {peer.Address}:{peer.Port}: {info.Reason}");
-            _ = _session.OnPeerDisconnected(peer, out var name);
-            if (name is not null)
+            var left = _session.OnPeerDisconnected(peer, out var name);
+            if (name is not null && left is not null)
             {
+                Broadcast(LobbyCodec.BuildMemberLeft(left.ServerMemberId));
                 BroadcastServerChat($"{name} Отключился!");
                 _onRosterChanged?.Invoke();
             }
@@ -324,9 +325,12 @@ public sealed class GameNetHost : IDisposable
                 ? $" mid-match hasHosting={_advertiseLanIp}:{GameMatchHost.DefaultMatchPort}"
                 : " pre-match hasHosting=0"));
         Send(peer, result.ResponseBytes!);
+
+        // JoinResponse stays Server+self (4-cap bypass). Announce real peers via NewMember so
+        // OpChatMessageEvent can use ServerMemberId (≥2) without colliding with local self=1.
+        AnnounceLobbyMember(result.Player!);
         _onRosterChanged?.Invoke();
 
-        // Welcome + roster from Server (id 0). No OpLobbyNewMemberEvent to other clients (4-cap bypass).
         var nick = result.Player.Name;
         Schedule(0, () =>
         {
@@ -337,7 +341,7 @@ public sealed class GameNetHost : IDisposable
         Schedule(80, () => SendServerChatTo(peer,
             _matchStarted
                 ? "матч уже идёт — JoinRoom Dedik на 7777 (не новый start)"
-                : "чат: play / start — начать матч (Ranked2v2 / Sandstone 2x2)"));
+                : "чат: /mode /map · /play|/start — начать матч"));
 
         // Late joiner into running match: also push PropertyChanged + op9 (JoinResponse may already
         // embed hasHosting; op9 is the live phone path clients always listen for).
@@ -374,11 +378,169 @@ public sealed class GameNetHost : IDisposable
         if (message.Length == 0) return;
         Console.WriteLine($"[chat] {player.Name}: {message}");
 
-        // Per-client roster only has Server+self, so relay as Server with "nick: text".
-        BroadcastServerChat($"{player.Name}: {message}");
+        // Relay as the player (OpChatMessageEvent senderMemberId = ServerMemberId).
+        // Skip sender — client already shows what they typed (no Server echo duplicate).
+        RelayPlayerChat(player, message);
+
+        if (TryHandleSlashCommand(player, message))
+            return;
 
         if (IsStartCommand(message))
             TryStartMatch($"chat:{player.Name}");
+    }
+
+    /// <summary>
+    /// OpChatMessageEvent with the speaker's lobby member id (not Server).
+    /// Live phone host path: etq = i32 senderMemberId + string message.
+    /// </summary>
+    private void RelayPlayerChat(ConnectedPlayer speaker, string message)
+    {
+        var bytes = LobbyCodec.BuildChatEvent(speaker.ServerMemberId, message);
+        foreach (var p in _session.JoinedPlayers())
+        {
+            if (ReferenceEquals(p.Peer, speaker.Peer)) continue;
+            Send(p.Peer, bytes);
+        }
+    }
+
+    /// <summary>
+    /// Introduce <paramref name="joined"/> to existing peers and existing peers to them
+    /// (OpLobbyNewMemberEvent). JoinResponse remains Server+self illusion.
+    /// </summary>
+    private void AnnounceLobbyMember(ConnectedPlayer joined)
+    {
+        var joinedEvt = LobbyCodec.BuildNewMember(ToLobbyMember(joined));
+        foreach (var other in _session.JoinedPlayers())
+        {
+            if (ReferenceEquals(other.Peer, joined.Peer)) continue;
+            Send(other.Peer, joinedEvt);
+            Send(joined.Peer, LobbyCodec.BuildNewMember(ToLobbyMember(other)));
+        }
+    }
+
+    private static LobbyMember ToLobbyMember(ConnectedPlayer p) => new()
+    {
+        Id = p.ServerMemberId,
+        Name = p.Name,
+        Avatar = p.Avatar,
+    };
+
+    private bool TryHandleSlashCommand(ConnectedPlayer player, string message)
+    {
+        if (!message.StartsWith('/'))
+            return false;
+
+        var body = message[1..].Trim();
+        var space = body.IndexOf(' ');
+        var cmd = space < 0 ? body : body[..space];
+        var args = space < 0 ? "" : body[(space + 1)..].Trim();
+
+        if (cmd.Equals("mode", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleModeCommand(player, args);
+            return true;
+        }
+
+        if (cmd.Equals("map", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("maps", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("level", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("levels", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleMapCommand(player, args);
+            return true;
+        }
+
+        // /play /start handled by IsStartCommand after this returns false for unknown,
+        // but those are also slash-prefixed — treat as start commands here.
+        if (IsStartCommand(message))
+        {
+            TryStartMatch($"chat:{player.Name}");
+            return true;
+        }
+
+        return false;
+    }
+
+    private void HandleModeCommand(ConnectedPlayer player, string args)
+    {
+        if (string.IsNullOrWhiteSpace(args)
+            || !GameModeCatalog.TryResolveMode(args, out var mode))
+        {
+            SendServerChatTo(player.Peer, GameModeCatalog.FormatModeHelp());
+            if (!string.IsNullOrWhiteSpace(args))
+                SendServerChatTo(player.Peer, $"неизвестный режим '{args}'");
+            return;
+        }
+
+        var levels = _session.SelectedLevels
+            .Where(L => mode.Levels.Any(c => c.Equals(L, StringComparison.Ordinal)))
+            .ToList();
+        if (levels.Count == 0)
+            levels.Add(GameModeCatalog.DefaultLevelFor(mode.GameModeId));
+
+        _session.GameModeId = mode.GameModeId;
+        _session.SelectedLevels = levels;
+        BroadcastModeLevelProps();
+        _onRosterChanged?.Invoke();
+
+        var msg =
+            $"режим → {mode.GameModeId} ({mode.DisplayName}); карты: {string.Join(", ", levels)}";
+        Console.WriteLine($"[lobby] {player.Name}: {msg}");
+        BroadcastServerChat(msg);
+    }
+
+    private void HandleMapCommand(ConnectedPlayer player, string args)
+    {
+        var modeId = _session.GameModeId;
+        if (!GameModeCatalog.TryGetMode(modeId, out var mode))
+        {
+            SendServerChatTo(player.Peer, GameModeCatalog.FormatMapHelp(modeId, _session.SelectedLevels));
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            SendServerChatTo(player.Peer, GameModeCatalog.FormatMapHelp(modeId, _session.SelectedLevels));
+            return;
+        }
+
+        var tokens = args.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0)
+        {
+            SendServerChatTo(player.Peer, GameModeCatalog.FormatMapHelp(modeId, _session.SelectedLevels));
+            return;
+        }
+
+        var resolved = new List<string>();
+        foreach (var token in tokens)
+        {
+            if (!GameModeCatalog.TryResolveLevel(mode, token, out var level, out var err))
+            {
+                SendServerChatTo(player.Peer, err ?? $"bad map '{token}'");
+                SendServerChatTo(player.Peer, GameModeCatalog.FormatMapHelp(modeId, _session.SelectedLevels));
+                return;
+            }
+
+            if (!resolved.Contains(level, StringComparer.Ordinal))
+                resolved.Add(level);
+        }
+
+        _session.SelectedLevels = resolved;
+        BroadcastModeLevelProps();
+        _onRosterChanged?.Invoke();
+
+        var msg = $"карты ({mode.GameModeId}) → {string.Join(", ", resolved)}";
+        Console.WriteLine($"[lobby] {player.Name}: {msg}");
+        BroadcastServerChat(msg);
+    }
+
+    /// <summary>op7 CustomProperties — same bag as live mode/level change (GameModeId + SelectedLevels).</summary>
+    private void BroadcastModeLevelProps()
+    {
+        var pkt = LobbyCodec.BuildCustomProperties(_session.BuildModeLevelProps());
+        Broadcast(pkt);
+        Console.WriteLine(
+            $"[lobby] op7 mode/levels → {_session.GameModeId} / [{string.Join(", ", _session.SelectedLevels)}]");
     }
 
     public static bool IsStartCommand(string message)
