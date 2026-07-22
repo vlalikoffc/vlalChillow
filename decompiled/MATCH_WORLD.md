@@ -1,5 +1,7 @@
 # Match world bootstrap (post-Found)
 
+Repo layout / mode folders / agent ownership: [`ARCHITECTURE.md`](../ARCHITECTURE.md), [`MATCH_ARCHITECTURE.md`](MATCH_ARCHITECTURE.md), [`AGENT_SWARM.md`](AGENT_SWARM.md). This file is **wire evidence**, not project structure.
+
 Source: ConnectAsClient capture against a **real phone host** (`run-20260722_073504.log`, captures `20260722_003523_*` / `003532_*`), DiffableCs / ISIL, plus dedicated-host work.
 
 Policy: decode → understand → **codec builders**. Never memcpy capture blobs into dedicated host TX.
