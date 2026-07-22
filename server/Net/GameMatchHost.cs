@@ -1058,6 +1058,7 @@ public sealed class GameMatchHost : IDisposable
                     Console.WriteLine(
                         $"[match-host] team bag actor={actorNr} — await joiner CreateWorldObject");
                     TryBeginMatchFlowIfBothTeams(room);
+                    TryAssignBomberOnTrJoin(room, actorNr);
                 }
 
                 if (k == MatchRoomPropKeys.Death)
@@ -1236,9 +1237,10 @@ public sealed class GameMatchHost : IDisposable
             if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
                 return;
 
-            // Echo with HasServerTime (client TX is flags=None) — relay to other INIT-ready
-            // peers only. Echoing back to sender re-triggers WeaponDropManager ohq (field 4/5
-            // ping-pong) → weapon drop duplication flood (run-20260722_102505).
+            // Echo with HasServerTime (client TX is flags=None).
+            // gaa AllCached(2) / Others(1) / All(0): client already executeImmediate — do NOT
+            // echo back to sender (WeaponDropManager field 4/5 ping-pong flood,
+            // run-20260722_102505). gaa *ViaServer(3/4): client waits for host — include sender.
             var stime = NextServerTime();
             var echo = MatchCodec.BuildWorldObjectRpc(
                 stime,
@@ -1248,12 +1250,14 @@ public sealed class GameMatchHost : IDisposable
                 parsed.Field,
                 parsed.TimeValue,
                 parsed.Payload.Length > 0 ? parsed.Payload : null);
+            NetPeer? exceptSender = parsed.GaaTarget is 3 or 4 ? null : peer;
             var n = BroadcastInitReadyExcept(
-                st.Room, peer, echo, tag: "match_tx_WorldObjectRpc", dumpCapture: logRpc);
+                st.Room, exceptSender, echo, tag: "match_tx_WorldObjectRpc", dumpCapture: logRpc);
             if (logRpc)
             {
                 Console.WriteLine(
-                    $"[match-host] TX relay WorldObjectRpc id={parsed.ObjectId} rpc={parsed.RpcId} → peers={n}");
+                    $"[match-host] TX relay WorldObjectRpc id={parsed.ObjectId} rpc={parsed.RpcId} " +
+                    $"→ peers={n} exceptSender={(exceptSender is null ? "no(ViaServer)" : "yes")}");
             }
 
             // BombManager (scene id=8): Rpc(1)/Rpc(2) = plant pose (nyo/nyu). Host drives C2=40.
@@ -1782,14 +1786,37 @@ public sealed class GameMatchHost : IDisposable
     private void EnterRoundLive(MatchRoom room)
     {
         int round;
+        int bomberId;
+        var txBomberFix = false;
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex;
+            // Last chance: living T on roster but bomberId still 0 (late Tr join race).
+            if (room.Flow.BomberActorNr <= 0)
+            {
+                var pick = PickBomberActorNr(room);
+                if (pick > 0)
+                {
+                    room.Flow.BomberActorNr = pick;
+                    txBomberFix = true;
+                }
+            }
+            bomberId = room.Flow.BomberActorNr;
             room.Flow.Phase = MatchFlowPhase.RoundLive;
             room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchFlowTestParams.RoundDuration;
             room.Flow.BombPlanted = false;
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
+        }
+
+        if (txBomberFix && bomberId > 0)
+        {
+            BroadcastRoomProps(room,
+            [
+                (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
+            ]);
+            Console.WriteLine(
+                $"[match-host] match-flow: bomberId={bomberId} (fixed 0→T at RoundLive edge)");
         }
 
         var nowSec = ServerTimeSeconds();
@@ -1808,7 +1835,7 @@ public sealed class GameMatchHost : IDisposable
             $"[match-host] match-flow: RoundLive C2={MatchC2States.MatchStarted} " +
             $"round={round}/{MatchFlowTestParams.TotalRounds} " +
             $"duration={MatchFlowTestParams.RoundDuration.TotalSeconds:0}s " +
-            $"money={MatchFlowTestParams.RoundStartMoney}");
+            $"money={MatchFlowTestParams.RoundStartMoney} bomberId={bomberId}");
     }
 
     private void TryEnterBombPlanted(MatchRoom room, byte sourceRpc)
@@ -1861,12 +1888,15 @@ public sealed class GameMatchHost : IDisposable
 
             room.Flow.PendingWinner = defused ? MatchTeam.Ct : MatchTeam.Tr;
             room.Flow.PendingEndReason = defused ? "bomb-defuse" : "bomb-explode-rpc";
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow;
         }
 
         Console.WriteLine(
             $"[match-host] match-flow: BombManager rpc=6 nzu defused={defused} " +
-            $"→ {(defused ? "CT" : "T")} win queued (immediate round end)");
+            $"→ {(defused ? "CT" : "T")} win (immediate RoundEnd)");
+        EnterRoundEndPause(
+            room,
+            defused ? MatchTeam.Ct : MatchTeam.Tr,
+            defused ? "bomb-defuse" : "bomb-explode-rpc");
     }
 
     /// <summary>
@@ -1927,7 +1957,7 @@ public sealed class GameMatchHost : IDisposable
         {
             Console.WriteLine(
                 $"[match-host] match-flow: disconnect actor={actorNr} mid-{phase} — wipe check");
-            TryResolveWipe(room, bombPlanted);
+            TryResolveWipeImmediate(room, bombPlanted);
         }
     }
 
@@ -2205,6 +2235,7 @@ public sealed class GameMatchHost : IDisposable
         if (!FightersAwaitingSpawn(room))
             return false;
 
+        double deadline;
         lock (_roomGate)
         {
             if (room.Flow.Phase != MatchFlowPhase.PurchasePhase)
@@ -2213,10 +2244,31 @@ public sealed class GameMatchHost : IDisposable
                 return false;
             room.Flow.PrepSpawnExtensionUsed = true;
             room.Flow.PhaseEndsUtc = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            // Re-pick bomber if still 0 but a living T is now on roster.
+            if (room.Flow.BomberActorNr <= 0)
+            {
+                var pick = PickBomberActorNr(room);
+                if (pick > 0)
+                    room.Flow.BomberActorNr = pick;
+            }
         }
 
+        var nowSec = ServerTimeSeconds();
+        deadline = nowSec + 5.0;
+        var props = new List<(string Key, LobbyVariant Value)>
+        {
+            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+        };
+        lock (_roomGate)
+        {
+            if (room.Flow.BomberActorNr > 0)
+                props.Add((MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(room.Flow.BomberActorNr)));
+        }
+        BroadcastRoomProps(room, props);
         Console.WriteLine(
-            "[match-host] match-flow: Prep extended 5s — fighter picked team, awaiting spawn");
+            "[match-host] match-flow: Prep extended 5s — fighter picked team, awaiting spawn " +
+            $"(client Time refreshed; bomberId={(room.Flow.BomberActorNr)})");
         return true;
     }
 
@@ -2309,17 +2361,32 @@ public sealed class GameMatchHost : IDisposable
 
         Console.WriteLine(
             $"[match-host] match-flow: death actor={actorNr} team={team} via {source}");
-        TryResolveWipe(room, bombPlanted);
+        TryResolveWipeImmediate(room, bombPlanted);
     }
 
-    private void TryResolveWipe(MatchRoom room, bool bombPlanted)
+    /// <summary>
+    /// Wipe resolve + immediate RoundEnd TX — do not wait for PollLoop tick (weapon-drop
+    /// floods were delaying wipe→banner under load).
+    /// </summary>
+    private void TryResolveWipeImmediate(MatchRoom room, bool bombPlanted)
     {
+        if (!TryResolveWipe(room, bombPlanted, out var winner, out var reason))
+            return;
+        EnterRoundEndPause(room, winner, reason);
+    }
+
+    /// <returns>True when a wipe end was queued (caller should EnterRoundEndPause now).</returns>
+    private bool TryResolveWipe(
+        MatchRoom room, bool bombPlanted, out MatchTeam winner, out string reason)
+    {
+        winner = MatchTeam.None;
+        reason = "";
         lock (_roomGate)
         {
             if (room.Flow.Phase is not (MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted))
-                return;
+                return false;
             if (room.Flow.PendingEndReason is not null)
-                return;
+                return false;
 
             var (aliveTr, aliveCt, totalTr, totalCt) = CountAliveFighters(room);
             // After ActorLeft full-remove the leaving fighter is gone from totals — treat
@@ -2328,10 +2395,11 @@ public sealed class GameMatchHost : IDisposable
             {
                 room.Flow.PendingWinner = MatchTeam.Tr;
                 room.Flow.PendingEndReason = "wipe-ct";
-                room.Flow.PhaseEndsUtc = DateTime.UtcNow;
+                winner = MatchTeam.Tr;
+                reason = "wipe-ct";
                 Console.WriteLine(
-                    "[match-host] match-flow: no CT remaining (disconnect/wipe) → T win queued");
-                return;
+                    "[match-host] match-flow: no CT remaining (disconnect/wipe) → T win (immediate RoundEnd)");
+                return true;
             }
 
             if (totalCt > 0 && totalTr == 0)
@@ -2340,15 +2408,16 @@ public sealed class GameMatchHost : IDisposable
                 {
                     Console.WriteLine(
                         "[match-host] match-flow: no T remaining with bomb planted — wait fuse/defuse");
-                    return;
+                    return false;
                 }
 
                 room.Flow.PendingWinner = MatchTeam.Ct;
                 room.Flow.PendingEndReason = "wipe-tr";
-                room.Flow.PhaseEndsUtc = DateTime.UtcNow;
+                winner = MatchTeam.Ct;
+                reason = "wipe-tr";
                 Console.WriteLine(
-                    "[match-host] match-flow: no T remaining (disconnect/wipe) → CT win queued");
-                return;
+                    "[match-host] match-flow: no T remaining (disconnect/wipe) → CT win (immediate RoundEnd)");
+                return true;
             }
 
             if (totalCt > 0 && aliveCt == 0)
@@ -2356,9 +2425,11 @@ public sealed class GameMatchHost : IDisposable
                 // All CT dead → T win (even with bomb).
                 room.Flow.PendingWinner = MatchTeam.Tr;
                 room.Flow.PendingEndReason = "wipe-ct";
-                room.Flow.PhaseEndsUtc = DateTime.UtcNow; // tick next loop
-                Console.WriteLine("[match-host] match-flow: wipe CT → T win queued");
-                return;
+                winner = MatchTeam.Tr;
+                reason = "wipe-ct";
+                Console.WriteLine(
+                    "[match-host] match-flow: wipe CT → T win (immediate RoundEnd)");
+                return true;
             }
 
             if (totalTr > 0 && aliveTr == 0)
@@ -2368,15 +2439,20 @@ public sealed class GameMatchHost : IDisposable
                     // Bomb planted: T wipe does not end — wait defuse/boom.
                     Console.WriteLine(
                         "[match-host] match-flow: wipe T with bomb planted — wait fuse/defuse");
-                    return;
+                    return false;
                 }
 
                 room.Flow.PendingWinner = MatchTeam.Ct;
                 room.Flow.PendingEndReason = "wipe-tr";
-                room.Flow.PhaseEndsUtc = DateTime.UtcNow;
-                Console.WriteLine("[match-host] match-flow: wipe T → CT win queued");
+                winner = MatchTeam.Ct;
+                reason = "wipe-tr";
+                Console.WriteLine(
+                    "[match-host] match-flow: wipe T → CT win (immediate RoundEnd)");
+                return true;
             }
         }
+
+        return false;
     }
 
     private static (int AliveTr, int AliveCt, int TotalTr, int TotalCt) CountAliveFighters(MatchRoom room)
