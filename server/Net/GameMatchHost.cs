@@ -53,6 +53,9 @@ public sealed class GameMatchHost : IDisposable
         public int RoundIndex { get; set; }
         public int ScoreTr { get; set; }
         public int ScoreCt { get; set; }
+        /// <summary>Consecutive round losses — phone-host <c>TrCoLosses</c>/<c>CtCoLosses</c>.</summary>
+        public int CoLossesTr { get; set; }
+        public int CoLossesCt { get; set; }
         public bool BombPlanted { get; set; }
         public int BomberActorNr { get; set; }
         /// <summary>Fighter actor nrs marked dead this round (<c>death</c> prop or pawn Destroy).</summary>
@@ -1843,8 +1846,8 @@ public sealed class GameMatchHost : IDisposable
 
     /// <summary>
     /// Immediate full remove on peer disconnect / timeout: drop roster slot, props, pawns,
-    /// TX <c>ActorLeftEvent</c> (fuo=51), then wipe-check remaining fighters via proper round-end
-    /// (C2=111) — never leave ghosts that force rejoin to actorNr=4/5.
+    /// TX <c>ActorLeftEvent</c> (fuo=51), then wipe-check remaining fighters via phone-host
+    /// round-end (C2=101 + WinTeam/TrScore…) — never leave ghosts that force rejoin to actorNr=4/5.
     /// </summary>
     private void RemoveActorFromMatch(MatchRoom room, byte actorNr, string? userId, string reason)
     {
@@ -1905,8 +1908,9 @@ public sealed class GameMatchHost : IDisposable
 
     private void EnterRoundEndPause(MatchRoom room, MatchTeam winner, string reason)
     {
-        int round, scoreTr, scoreCt;
+        int round, scoreTr, scoreCt, coLossesTr, coLossesCt;
         byte mvpNr, mvpCode;
+        int mvpCount = 0;
         lock (_roomGate)
         {
             // Ignore duplicate end while already pausing / over.
@@ -1914,35 +1918,97 @@ public sealed class GameMatchHost : IDisposable
                 return;
 
             round = room.Flow.RoundIndex;
-            if (winner == MatchTeam.Tr) room.Flow.ScoreTr++;
-            else if (winner == MatchTeam.Ct) room.Flow.ScoreCt++;
+            if (winner == MatchTeam.Tr)
+            {
+                room.Flow.ScoreTr++;
+                room.Flow.CoLossesCt++;
+                room.Flow.CoLossesTr = 0;
+            }
+            else if (winner == MatchTeam.Ct)
+            {
+                room.Flow.ScoreCt++;
+                room.Flow.CoLossesTr++;
+                room.Flow.CoLossesCt = 0;
+            }
             scoreTr = room.Flow.ScoreTr;
             scoreCt = room.Flow.ScoreCt;
+            coLossesTr = room.Flow.CoLossesTr;
+            coLossesCt = room.Flow.CoLossesCt;
             (mvpNr, mvpCode) = PickRoundMvp(room, winner, reason);
+            if (mvpNr != 0)
+            {
+                mvpCount = ReadActorIntProp(room, mvpNr, MatchRoomPropKeys.Mvp);
+                if (mvpCount < 0)
+                    mvpCount = 0;
+                mvpCount++;
+                room.ActorProps[(mvpNr, MatchRoomPropKeys.Mvp)] = LobbyVariant.FromInt(mvpCount);
+            }
             room.Flow.Phase = MatchFlowPhase.RoundEndPause;
             room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchFlowTestParams.RoundEndPause;
             room.Flow.BombPlanted = false;
             room.Flow.PendingEndReason = null;
         }
 
-        // Round UI: C2=111 (ckq/ResultRoundView) + WinTeam + Score — NOT C2=201 (cjf/FinalHud).
-        // No short Time deadline (avoids fake timer UI during silent pause).
-        // Score before WinTeam so client bbs.one during WinTeam handler sees updated Tr/Ct.
+        // Phone-host gold (run-20260722_100157 len≈151): actor mvp SetProperty first, then
+        // room SetProperties: Time, {Tr|Ct}Score, {loser}CoLosses, {winner}CoLosses, WinTeam, C2=101.
+        // NOT nested Score={Tr,Ct}, NOT C2=111/201, NOT winTeam/resultActor key names.
+        if (mvpNr != 0)
+        {
+            var mvpPkt = MatchCodec.BuildSetProperty(
+                NextServerTime(), mvpNr, MatchRoomPropKeys.Mvp, LobbyVariant.FromInt(mvpCount));
+            BroadcastRoom(room, mvpPkt, tag: "match_tx_SetProperty");
+            Console.WriteLine(
+                $"[match-host] match-flow TX SetProperty actor={mvpNr} mvp={mvpCount}");
+        }
+
+        var nowSec = ServerTimeSeconds();
         var winTeamProps = BuildWinTeamProps(winner, mvpNr, mvpCode);
-        var scoreProps = BuildScoreProps(scoreTr, scoreCt);
-        BroadcastRoomProps(room,
-        [
-            (MatchRoomPropKeys.Score, LobbyVariant.FromProps(scoreProps)),
-            (MatchRoomPropKeys.WinTeam, LobbyVariant.FromProps(winTeamProps)),
-            (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
-            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.RoundEnd)),
-        ]);
+        var roomProps = BuildRoundEndRoomProps(
+            nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps);
+        BroadcastRoomProps(room, roomProps);
         Console.WriteLine(
-            $"[match-host] match-flow: RoundEnd C2={MatchC2States.RoundEnd} round={round} " +
-            $"winner={winner} reason={reason} score Tr={scoreTr} Ct={scoreCt} " +
+            $"[match-host] match-flow: RoundEnd C2={MatchC2States.MatchStarted} round={round} " +
+            $"winner={winner} reason={reason} " +
+            $"TrScore={scoreTr} CtScore={scoreCt} " +
+            $"TrCoLosses={coLossesTr} CtCoLosses={coLossesCt} " +
             $"mvpPlayer={mvpNr} mvpCode={mvpCode} " +
-            $"(ckq/WinTeam+Score; not FinalHud C2={MatchC2States.FinalHud}; " +
+            $"(phone-host WinTeam+TrScore/CtScore; not FinalHud C2={MatchC2States.FinalHud}; " +
             $"silent pause {MatchFlowTestParams.RoundEndPause.TotalSeconds:0}s)");
+    }
+
+    /// <summary>
+    /// Allies phone-host round-end room bag order (gold len≈151):
+    /// Time, winner flat score, loser CoLosses, winner CoLosses=0 streak reset, WinTeam, C2=101.
+    /// </summary>
+    private static List<(string Key, LobbyVariant Value)> BuildRoundEndRoomProps(
+        double nowSec,
+        MatchTeam winner,
+        int scoreTr,
+        int scoreCt,
+        int coLossesTr,
+        int coLossesCt,
+        List<(string Key, LobbyVariant Value)> winTeamProps)
+    {
+        var props = new List<(string Key, LobbyVariant Value)>
+        {
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+        };
+        if (winner == MatchTeam.Tr)
+        {
+            props.Add((MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)));
+            props.Add((MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(coLossesCt)));
+            props.Add((MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(coLossesTr)));
+        }
+        else
+        {
+            props.Add((MatchRoomPropKeys.CtScore, LobbyVariant.FromInt(scoreCt)));
+            props.Add((MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(coLossesTr)));
+            props.Add((MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(coLossesCt)));
+        }
+
+        props.Add((MatchRoomPropKeys.WinTeam, LobbyVariant.FromProps(winTeamProps)));
+        props.Add((MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchStarted)));
+        return props;
     }
 
     private void ContinueAfterRoundEnd(MatchRoom room)
@@ -1973,23 +2039,20 @@ public sealed class GameMatchHost : IDisposable
     }
 
     /// <summary>
-    /// Nested <c>WinTeam</c> for round end (<c>bbs.onv</c> / <c>cnp.WinTeam</c>).
-    /// <c>mvpCode</c> = <see cref="MatchMvpCodes"/> (<c>cns</c>); <c>mvpPlayer</c> = winning-team
-    /// actor nr (bomber / top <c>round_kills</c>). Zeroed MVP makes client <c>cnp.zau</c> skip
-    /// Defeat branch → fake WIN for everyone.
+    /// Nested <c>WinTeam</c> for round end — gold keys <c>team</c>/<c>mvpPlayer</c>/<c>mvpCode</c>/
+    /// <c>resultRoundType</c>/<c>resultRoundActor</c> as Byte. <c>mvpCode</c> = <see cref="MatchMvpCodes"/>.
+    /// <c>resultRoundActor</c> is 0 on all four Allies gold outcomes (not mirrored from mvpPlayer).
     /// </summary>
     private static List<(string Key, LobbyVariant Value)> BuildWinTeamProps(
         MatchTeam winner,
         byte mvpNr,
         byte mvpCode) =>
     [
-        (MatchWinTeamKeys.WinTeam, LobbyVariant.FromByte((byte)winner)),
+        (MatchWinTeamKeys.Team, LobbyVariant.FromByte((byte)winner)),
         (MatchWinTeamKeys.MvpPlayer, LobbyVariant.FromByte(mvpNr)),
         (MatchWinTeamKeys.MvpCode, LobbyVariant.FromByte(mvpCode)),
-        // No evidenced non-zero Allies resultRoundType for wipe/defuse/timeout — keep 0.
         (MatchWinTeamKeys.ResultRoundType, LobbyVariant.FromByte(0)),
-        // Same featured actor as mvp when present (WinTeam 5-arg dur slot).
-        (MatchWinTeamKeys.ResultActor, LobbyVariant.FromByte(mvpNr)),
+        (MatchWinTeamKeys.ResultRoundActor, LobbyVariant.FromByte(0)),
     ];
 
     /// <summary>
@@ -2083,13 +2146,6 @@ public sealed class GameMatchHost : IDisposable
         };
     }
 
-    private static List<(string Key, LobbyVariant Value)> BuildScoreProps(int scoreTr, int scoreCt) =>
-    [
-        // bbs.onq: Enum.ToString(cux) keys "Tr"/"Ct" as Int (nested under room "Score").
-        ("Tr", LobbyVariant.FromInt(scoreTr)),
-        ("Ct", LobbyVariant.FromInt(scoreCt)),
-    ];
-
     private static int PickBomberActorNr(MatchRoom room)
     {
         var candidates = new List<int>();
@@ -2174,6 +2230,35 @@ public sealed class GameMatchHost : IDisposable
                 return;
 
             var (aliveTr, aliveCt, totalTr, totalCt) = CountAliveFighters(room);
+            // After ActorLeft full-remove the leaving fighter is gone from totals — treat
+            // empty opposing team as wipe (last-of-team disconnect), not hang until timeout.
+            if (totalTr > 0 && totalCt == 0)
+            {
+                room.Flow.PendingWinner = MatchTeam.Tr;
+                room.Flow.PendingEndReason = "wipe-ct";
+                room.Flow.PhaseEndsUtc = DateTime.UtcNow;
+                Console.WriteLine(
+                    "[match-host] match-flow: no CT remaining (disconnect/wipe) → T win queued");
+                return;
+            }
+
+            if (totalCt > 0 && totalTr == 0)
+            {
+                if (bombPlanted || room.Flow.BombPlanted)
+                {
+                    Console.WriteLine(
+                        "[match-host] match-flow: no T remaining with bomb planted — wait fuse/defuse");
+                    return;
+                }
+
+                room.Flow.PendingWinner = MatchTeam.Ct;
+                room.Flow.PendingEndReason = "wipe-tr";
+                room.Flow.PhaseEndsUtc = DateTime.UtcNow;
+                Console.WriteLine(
+                    "[match-host] match-flow: no T remaining (disconnect/wipe) → CT win queued");
+                return;
+            }
+
             if (totalCt > 0 && aliveCt == 0)
             {
                 // All CT dead → T win (even with bomb).

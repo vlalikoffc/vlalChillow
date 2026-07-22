@@ -22,7 +22,19 @@ public static class MatchRoomPropKeys
     /// <summary>Round start absolute double (<c>bbs.cabv</c> / <c>omv</c> via <c>NetManager.bfqt</c>).</summary>
     public const string RoundStartTime = "RoundStartTime";
     public const string RoundCount = "round_count";
+    /// <summary>
+    /// Nested score bag (<c>bbs.cacf</c> / <c>onq</c>) — FinalHud / other modes.
+    /// Allies phone-host round end uses flat <see cref="TrScore"/> / <see cref="CtScore"/> instead.
+    /// </summary>
     public const string Score = "Score";
+    /// <summary>Flat T round wins — phone-host round end (<c>bbs.onf(Tr)+"Score"</c>). Int.</summary>
+    public const string TrScore = "TrScore";
+    /// <summary>Flat CT round wins — phone-host round end. Int.</summary>
+    public const string CtScore = "CtScore";
+    /// <summary>Flat T consecutive-loss counter — phone-host round end (<c>onf(Tr)+"CoLosses"</c>). Int.</summary>
+    public const string TrCoLosses = "TrCoLosses";
+    /// <summary>Flat CT consecutive-loss counter — phone-host round end. Int.</summary>
+    public const string CtCoLosses = "CtCoLosses";
     public const string WinTeam = "WinTeam";
     public const string FinalWinTeam = "FinalWinTeam";
     /// <summary>Room bomber actor nr (<c>bcb.cadb</c> / <c>opg</c>) — Int.</summary>
@@ -38,6 +50,8 @@ public static class MatchRoomPropKeys
     public const string Ping = "ping";
     /// <summary>Actor death flag (<c>bbo.cabe</c>) — Int; non-zero = dead this round.</summary>
     public const string Death = "death";
+    /// <summary>Cumulative MVP awards (<c>bbo.cabd</c>) — Int; phone TX before round-end WinTeam.</summary>
+    public const string Mvp = "mvp";
     /// <summary>Per-round eliminations (<c>bbo.caba</c>) — Int; used for MVP MostEliminations.</summary>
     public const string RoundKills = "round_kills";
     /// <summary>Match eliminations (<c>bbo.caay</c>) — Int; fallback when round_kills missing.</summary>
@@ -60,21 +74,22 @@ public static class MatchMvpCodes
 }
 
 /// <summary>
-/// Nested <c>WinTeam</c> PropertiesRecord keys from <c>bbs.onv</c> / metadata
-/// (<c>winTeam</c>, <c>mvpPlayer</c>, <c>mvpCode</c>, <c>resultRoundType</c>, <c>resultActor</c>).
-/// Wire values are <b>Byte</b> (<c>bbs.onv</c> ISIL type token FA8 / byte-sized fields — not Int;
-/// Score nested Tr/Ct stay Int via <c>bbs.onq</c>). Outer room key is
-/// <see cref="MatchRoomPropKeys.WinTeam"/>.
-/// Per-player победа/поражение is client-side (<c>cid.Win/Defeat</c>) from own team vs <c>winTeam</c>
-/// on live / C2=111 (<c>ckq</c>) — do not invent a ban/draw round outcome.
+/// Nested <c>WinTeam</c> PropertiesRecord keys — phone-host gold
+/// (<c>run-20260722_100157</c> len≈151 SetProperties). Wire values are <b>Byte</b>.
+/// Keys on wire: <c>team</c>, <c>mvpPlayer</c>, <c>mvpCode</c>, <c>resultRoundType</c>,
+/// <c>resultRoundActor</c> (not <c>winTeam</c>/<c>resultActor</c> — those were wrong guesses).
+/// Outer room key is <see cref="MatchRoomPropKeys.WinTeam"/>.
+/// Per-player победа/поражение is client-side from own team vs nested <c>team</c>.
 /// </summary>
 public static class MatchWinTeamKeys
 {
-    public const string WinTeam = "winTeam";
+    /// <summary>Winning <c>cux</c> byte — gold key name <c>team</c>.</summary>
+    public const string Team = "team";
     public const string MvpPlayer = "mvpPlayer";
     public const string MvpCode = "mvpCode";
     public const string ResultRoundType = "resultRoundType";
-    public const string ResultActor = "resultActor";
+    /// <summary>Gold key <c>resultRoundActor</c>; Allies captures always Byte 0.</summary>
+    public const string ResultRoundActor = "resultRoundActor";
 }
 
 /// <summary>
@@ -113,12 +128,15 @@ public static class MatchC2States
     public const byte PurchasePhase = 31;
     /// <summary>Bomb planted (<c>cnl.xvv=40</c>); fuse ~40s.</summary>
     public const byte BombPlanted = 40;
-    /// <summary>MatchStarted / round live (<c>cnp.xvv=101</c>).</summary>
+    /// <summary>
+    /// MatchStarted / round live (<c>cnp.xvv=101</c>). Allies phone-host also re-TX C2=101
+    /// on round end together with <c>WinTeam</c>/<c>TrScore</c> (gold len≈151) — not 111.
+    /// </summary>
     public const byte MatchStarted = 101;
     /// <summary>
-    /// RankedDefuse round-end (<c>ckq.xvv=111</c>) — ResultRoundView / MVP chrome.
-    /// <c>RankedDefuseController.wkf</c> registers 111→ckq (has ResultRoundView).
-    /// Do <b>not</b> use 201 here: <c>cjf.xvv=201</c> opens <c>FinalHud</c> (match-wide WIN).
+    /// RankedDefuse registry id (<c>ckq.xvv=111</c>). Allies phone-host round end does
+    /// <b>not</b> use this — gold captures keep C2=<see cref="MatchStarted"/>. Do not TX 111
+    /// for Allies; do <b>not</b> use 201 (<c>FinalHud</c>) for round end either.
     /// </summary>
     public const byte RoundEnd = 111;
     /// <summary>
