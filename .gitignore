@@ -1,0 +1,6 @@
+*.apk
+server/bin/
+server/obj/
+**/captures/
+**/logs/
+.cursor/
