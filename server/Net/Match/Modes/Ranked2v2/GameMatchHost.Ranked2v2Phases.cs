@@ -573,25 +573,9 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// <summary>
-    /// Allies: client often plants while host internal phase is still C2=22/31
-    /// (silent Live / UI already in «round») — allow WarmupWillFinish + PurchasePhase + RoundLive.
-    /// Generic Ranked: RoundLive only.
-    /// </summary>
-    private bool IsAlliesPlantPhaseAllowed(MatchRoom room, MatchFlowPhase phase)
-    {
-        if (IsAlliesRoom(room))
-        {
-            return phase is MatchFlowPhase.RoundLive
-                or MatchFlowPhase.PurchasePhase
-                or MatchFlowPhase.WarmupWillFinish;
-        }
-
-        return phase == MatchFlowPhase.RoundLive;
-    }
-
-    /// <summary>
-    /// Evidence plant: <c>BombManager</c> field=1/2. Allies also accepts Prep/PreStart host
-    /// phases when the client is already in round UI (see <see cref="IsAlliesPlantPhaseAllowed"/>).
+    /// Plant only in <see cref="MatchFlowPhase.RoundLive"/>. Prep/PreStart plant is rejected
+    /// (anti-cheat). Allies desync fix: do not idle 10s on C2=22 while clients already play —
+    /// <see cref="EnterAlliesPreStart"/> chains straight into C2=31 Prep.
     /// </summary>
     private void TryEnterBombPlanted(
         MatchRoom room,

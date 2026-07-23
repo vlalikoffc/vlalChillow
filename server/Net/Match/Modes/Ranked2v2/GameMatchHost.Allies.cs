@@ -195,21 +195,23 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// PreStart C2=22 — ReCreate 4/5/6/8, Round++, bomberId, money. Gold ≈10s before Prep C2=31.
+    /// C2=22 bag (ReCreate, Round++, bomberId, money) then <b>immediately</b> C2=31 Prep.
+    /// Phone gold idled ~10s on C2=22; dedicated must not — clients already enter the round UI
+    /// while host was still WarmupWillFinish (plant IGNORED / «server in the clouds»).
+    /// Both wire bags kept; no 10s host stall between them.
     /// </summary>
     private void EnterAlliesPreStart(MatchRoom room)
     {
         int round;
         int bomberId;
-        var dur = AlliesFlowParams.PreStart;
-        var ends = DateTime.UtcNow + dur;
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex + 1;
             if (round < 1) round = 1;
             room.Flow.RoundIndex = round;
             room.Flow.Phase = MatchFlowPhase.WarmupWillFinish;
-            room.Flow.PhaseEndsUtc = ends;
+            // No idle wait — Prep follows in this call (PhaseEndsUtc overwritten there).
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow;
             room.Flow.PendingEndReason = null;
             room.Flow.PrepSpawnExtensionUsed = false;
             room.Flow.DeadActors.Clear();
@@ -227,7 +229,7 @@ public sealed partial class GameMatchHost
         ClearBombAuthority(room, $"Allies PreStart C2=22 round={round} bomberId={bomberId}");
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
-        // Gold C2=22: Time == RoundStartTime == nowSec; ~10s host wait before Prep (no wire countdown).
+        // Gold C2=22: Time == RoundStartTime == nowSec (anchor).
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
@@ -241,9 +243,11 @@ public sealed partial class GameMatchHost
         DestroyTrackedRoundEntities(room, reason: "Allies PreStart");
         Console.WriteLine(
             $"[match-host] allies: PreStart C2={MatchC2States.WarmupWillFinish} " +
-            $"dur={dur.TotalSeconds:0}s round={round} bomberId={bomberId} money={MatchFlowTestParams.RoundStartMoney} " +
-            "(gold RX 22→31 ≈10s; manual plant field=1/2 during Live)");
-        PostServerDebugChat($"PreStart · раунд {round} (C2=22)");
+            $"round={round} bomberId={bomberId} money={MatchFlowTestParams.RoundStartMoney} " +
+            "(no host idle — chain Prep C2=31 immediately; desync fix)");
+        PostServerDebugChat($"PreStart · раунд {round} → Prep");
+
+        EnterAlliesPrep(room);
     }
 
     /// <summary>PurchasePhase C2=31 — gold len≈90; only phase with wire countdown Time deadline.</summary>
@@ -402,10 +406,8 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Allies manual plant — gold len≈14: C2=40 only (no Time / RoundStartTime on wire).
-    /// Host tracks fuse and fan-outs planter BombManager Rpc to all INIT-ready peers.
-    /// Accepts RoundLive / PurchasePhase / WarmupWillFinish — client «round» often starts
-    /// while host is still on C2=22/31 (latest.log IGNORED WarmupWillFinish plants).
+    /// Allies manual plant — <b>RoundLive only</b> (no Prep/PreStart — anti-cheat).
+    /// Gold len≈14 C2=40 + BombManager Rpc fan-out to all peers.
     /// </summary>
     private void TryEnterAlliesBombPlanted(
         MatchRoom room,
@@ -432,13 +434,11 @@ public sealed partial class GameMatchHost
                     $"IGNORED — pendingEnd={room.Flow.PendingEndReason}");
                 return;
             }
-            if (fromPhase is not (MatchFlowPhase.RoundLive
-                or MatchFlowPhase.PurchasePhase
-                or MatchFlowPhase.WarmupWillFinish))
+            if (fromPhase is not MatchFlowPhase.RoundLive)
             {
                 Console.WriteLine(
                     $"[match-host] allies: BombManager plant field={sourceField} " +
-                    $"IGNORED — phase={fromPhase}");
+                    $"IGNORED — phase={fromPhase} (RoundLive only; fix desync, do not accept Prep plant)");
                 return;
             }
 

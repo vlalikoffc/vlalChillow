@@ -270,13 +270,13 @@ public sealed partial class GameMatchHost
                         "IGNORED — already planted this round (one bomb/round; no relay)");
                     dropRelay = true;
                 }
-                else if (!IsAlliesPlantPhaseAllowed(st.Room, plantPhase))
+                else if (plantPhase != MatchFlowPhase.RoundLive)
                 {
-                    // WarmUp / waiting / round-end — do not invent C2=40.
+                    // Prep/PreStart plant = cheat or desync — never invent C2=40; fix Live sync instead.
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
                         $"from actor={st.ActorNr} IGNORED — phase={plantPhase} " +
-                        "(not a plantable phase; no relay)");
+                        "(RoundLive only; no Prep/PreStart plant)");
                     dropRelay = true;
                 }
                 else
@@ -296,7 +296,6 @@ public sealed partial class GameMatchHost
                         rpcId: parsed.RpcId,
                         gaaTarget: parsed.GaaTarget);
                     // Host fan-out covers all peers for Allies; relay would duplicate.
-                    // Non-Allies Ranked still relays below unless plant failed.
                     lock (_roomGate)
                     {
                         if (!st.Room.Flow.BombPlanted
