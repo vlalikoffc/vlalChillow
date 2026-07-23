@@ -6,16 +6,13 @@ Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engi
 
 ## What works
 
-- **LAN discovery** — Bonjour V2 probe/reply on UDP **5056**; phones find the host like a phone-hosted lobby
 - **Lobby** — LiteNetLib on UDP **7778** (join, roster, chat, mode/map selection)
-- **Match host** — LiteNetLib on UDP **7777** after `/play` (Handshake + JoinRoom)
-- **Console / chat commands** — `/mode`, `/map`, `/set`, `/play`, `/start`, status, plugins
-- **Escalation** on **Prison** (and other bomb maps) — live mode loop from reverse + gold captures
-- **Ranked 2v2** — default lobby mode (MR-8, first to 5)
-- **CLI dashboard** — full-screen terminal UI when stdout is a TTY
-- **Plugins** — optional sidecars (Telegram status pusher included in source)
+- **Auto-discovery** — Bonjour V2 probe/reply on UDP **5056**; when phones search LAN lobbies, this host appears automatically (same as a phone-hosted lobby)
+- **Escalation on Prison** — the only fully playable match mode today: `/mode escalation`, `/map Prison`, then `/play` → match on UDP **7777** (WarmUp → rounds → defuse/wipe/explode)
 
-Other game modes are registered but may be partial or unimplemented — check each mode's README under `server/Net/Match/Modes/`.
+Console/chat commands (`/mode`, `/map`, `/set start`, `/play`, …) and the CLI dashboard (TTY) support the above.
+
+**Not ready:** Ranked 2v2, Defuse, DeathMatch, and other modes are registered in the catalog but stub or partial — no reliable playable match yet. See each mode's README under `server/Net/Match/Modes/`.
 
 ## Requirements
 
@@ -48,17 +45,16 @@ Two steps matter:
 1. **`play`** (or phone **`/play`**) — creates the match channel and moves clients to UDP 7777. Use again for rematch (tears down the previous match).
 2. **`set start`** / **`start`** / **`/set start`** — arms WarmUp once both teams have at least one player. Without this, the match stays in waiting (C2=10).
 
-Typical flow: everyone joins lobby → host runs `play` → both teams pick CT/T → host runs `set start` → WarmUp → live rounds.
+Typical flow: everyone joins lobby → host runs `mode escalation` and `map Prison` → host runs `play` → both teams pick CT/T → host runs `set start` → WarmUp → live rounds.
 
 ### Useful console commands
 
 ```
-mode escalation          # or ranked2v2, defuse, …
-map Prison               # map id from GameModeCatalog
+mode escalation          # only mode with a full match loop today
+map Prison               # Escalation is verified on Prison only
 set start                # arm WarmUp when both teams ready
 play                     # launch / rematch
 status                   # lobby + match summary
-set round 8              # MR-N rounds (default 8 → first to 5)
 plugins                  # list loaded plugins
 quit
 ```
