@@ -148,6 +148,12 @@ public sealed partial class GameMatchHost
             }
             else if (phase == MatchFlowPhase.MatchOver)
                 return;
+            else if (phase is MatchFlowPhase.HalfTimeIntro
+                or MatchFlowPhase.HalfTimeSwap
+                or MatchFlowPhase.HalfTimeTransition)
+            {
+                // Half-time — no combat/wipe; timer drives 111→112→113→PreStart.
+            }
         }
 
         // Event outcomes preempt phase timers: wipe / pending end every tick while combat
@@ -218,6 +224,19 @@ public sealed partial class GameMatchHost
 
         if (DateTime.UtcNow < ends)
             return;
+
+        switch (phase)
+        {
+            case MatchFlowPhase.HalfTimeIntro:
+                EnterHalfTimeSwap(room);
+                return;
+            case MatchFlowPhase.HalfTimeSwap:
+                EnterHalfTimeTransition(room);
+                return;
+            case MatchFlowPhase.HalfTimeTransition:
+                EnterWarmupWillFinish(room);
+                return;
+        }
 
         switch (phase)
         {
@@ -337,6 +356,7 @@ public sealed partial class GameMatchHost
         }
 
         ClearBombAuthority(room, $"PreStart C2=22 round={round} bomberId={bomberId}");
+        BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
         var deadline = nowSec + dur.TotalSeconds;
         // One clock: wire Time == PhaseEndsUtc deadline (not Time=now + longer private timer).

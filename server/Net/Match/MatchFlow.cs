@@ -27,6 +27,12 @@ public enum MatchFlowPhase : byte
     DeathMatchEnded = 10,
     /// <summary>C2=201 FinalHud published; holding before teardown C2=255.</summary>
     DeathMatchFinalHud = 11,
+    /// <summary>Allies half-time intro C2=111 after round 7 (not round-end UI).</summary>
+    HalfTimeIntro = 12,
+    /// <summary>Allies half-time swap C2=112 (<c>swapped_team</c> + score flip).</summary>
+    HalfTimeSwap = 13,
+    /// <summary>Allies half-time transition C2=113 before round 8 PreStart.</summary>
+    HalfTimeTransition = 14,
 }
 
 /// <summary>Per-room match clock — C2 / Time / Round / scores / wipe state.
@@ -94,6 +100,10 @@ public sealed class MatchFlowState
     /// combat signals. 0 = none committed this match.
     /// </summary>
     public int RoundEndCommittedRound { get; set; }
+    /// <summary>
+    /// Allies half-time swap completed (C2=112 + server-forced team flip). Set once per match.
+    /// </summary>
+    public bool TeamsSwapped { get; set; }
 }
 
 /// <summary>Shared wipe / spawn / alive-count rules for match flow.</summary>

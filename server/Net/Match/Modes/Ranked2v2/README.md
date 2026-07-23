@@ -2,9 +2,11 @@
 
 **Owner agent:** mode-ranked2v2 (see `decompiled/AGENT_SWARM.md`)
 
-**Status:** IMPLEMENTED — live Allies loop in GameMatchHost.Ranked2v2*.cs partials
+**Status:** IMPLEMENTED — Allies loop with half-time swap + first-to-8 in GameMatchHost.Ranked2v2*.cs
 
-**SelectedLevels (probe run-20260722_213859):** Prison 2x2 … Sandstone 2x2
+**Probe doc:** [MATCH_ALLIES_PROBE.md](./MATCH_ALLIES_PROBE.md) (`allies-probe` Sandstone 2x2 run-20260723_215727)
+
+**SelectedLevels (probe run-20260723_215727):** Sandstone 2x2 … Prison 2x2
 
 **Family:** bomb — bomb-family modes may share phase *interfaces* later; implementations stay in this folder only. **Do not import sibling Modes/\***.
 

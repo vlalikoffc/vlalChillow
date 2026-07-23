@@ -207,8 +207,8 @@ public sealed partial class GameMatchHost
             scoreCt = room.Flow.ScoreCt;
         }
 
-        // MR-N: first to WinsNeeded (=N/2+1), or all N rounds played (draw possible N/2:N/2).
-        if (MatchHostSettings.IsMatchSeriesOver(round, scoreTr, scoreCt))
+        // Allies: first to WinsNeeded (default 8). Half-time after round 7 — not match end.
+        if (MatchHostSettings.IsAlliesMatchOver(scoreTr, scoreCt))
         {
             lock (_roomGate)
             {
@@ -219,21 +219,27 @@ public sealed partial class GameMatchHost
             [
                 (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchResults)),
             ], reason: $"MatchResults Tr={scoreTr} Ct={scoreCt}");
-            var why = scoreTr >= MatchHostSettings.WinsNeeded || scoreCt >= MatchHostSettings.WinsNeeded
-                ? $"first-to-{MatchHostSettings.WinsNeeded} (MR-{MatchHostSettings.TotalRounds})"
-                : $"full series {MatchHostSettings.TotalRounds} rounds";
             Console.WriteLine(
                 $"[match-host] match-flow: MatchResults C2={MatchC2States.MatchResults} " +
-                $"Tr={scoreTr} Ct={scoreCt} after round={round} — {why} " +
-                "(FinalWinTeam wire unknown — C2 only)");
+                $"Tr={scoreTr} Ct={scoreCt} after round={round} — " +
+                $"first-to-{MatchHostSettings.WinsNeeded}");
+            return;
+        }
+
+        if (NeedsAlliesHalfTime(room, round))
+        {
+            Console.WriteLine(
+                $"[match-host] match-flow: half-time after round {round} " +
+                $"(score {scoreTr}:{scoreCt}) — C2=111→112→113 then PreStart");
+            EnterHalfTimeIntro(room);
             return;
         }
 
         Console.WriteLine(
             $"[match-host] match-flow: next-round after RoundEnd pause — " +
             $"enter PreStart C2={MatchC2States.WarmupWillFinish} " +
-            $"(round {round}→{round + 1}; series MR-{MatchHostSettings.TotalRounds} " +
-            $"first-to-{MatchHostSettings.WinsNeeded}; gold — never skip C2=22)");
+            $"(round {round}→{round + 1}; first-to-{MatchHostSettings.WinsNeeded}; " +
+            "gold — never skip C2=22)");
         EnterWarmupWillFinish(room);
     }
 

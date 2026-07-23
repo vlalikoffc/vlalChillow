@@ -2,15 +2,16 @@ namespace StandChillow.LanServer.Net.Match;
 
 /// <summary>
 /// Mutable dedicated-host knobs — lobby/console <c>/set</c> (and console <c>set</c>).
-/// Bomb-family MR-N: play until one side reaches <see cref="WinsNeeded"/> (= N/2+1),
-/// or all <see cref="TotalRounds"/> are played (draw possible at N/2:N/2 when N even).
-/// Default N=8 → first to 5, or 4:4 after 8.
+/// Allies / Ranked2v2: first to <see cref="WinsNeeded"/> round wins (default 8); half-time
+/// after round 7. Escalation MR-N: <see cref="IsMatchSeriesOver"/> still caps at
+/// <see cref="TotalRounds"/> with wins = N/2+1 when configured via <c>/set round</c>.
 /// </summary>
 public static class MatchHostSettings
 {
     private static readonly object Gate = new();
 
     private static int _totalRounds = 8;
+    private static int _winsNeeded = 8;
     private static int _roundStartMoney = MatchFlowTestParams.DefaultRoundStartMoney;
     private static int _warmupSeconds = 3;
     // C2=22 / _roundStartingTime ≈3s freeze (MATCH_PHASES_TIMERS) — not Prep's 10s.
@@ -45,13 +46,15 @@ public static class MatchHostSettings
         }
     }
 
-    /// <summary>Rounds a team must win to take the match: <c>TotalRounds/2 + 1</c>.</summary>
+    /// <summary>Rounds a team must win (Allies default 8). Overridable via <c>/set wins</c>.</summary>
     public static int WinsNeeded
     {
-        get
+        get { lock (Gate) return _winsNeeded; }
+        set
         {
-            lock (Gate)
-                return _totalRounds / 2 + 1;
+            if (value < 1) value = 1;
+            if (value > 64) value = 64;
+            lock (Gate) _winsNeeded = value;
         }
     }
 
@@ -116,13 +119,23 @@ public static class MatchHostSettings
     }
 
     /// <summary>
-    /// After a RoundEnd score bump: match over if a side hit <see cref="WinsNeeded"/>,
+    /// Allies / Ranked2v2: match over when either side reaches <see cref="WinsNeeded"/>.
+    /// No round-count cap — play continues past round 7 half-time until first-to-N.
+    /// </summary>
+    public static bool IsAlliesMatchOver(int scoreTr, int scoreCt)
+    {
+        var wins = WinsNeeded;
+        return scoreTr >= wins || scoreCt >= wins;
+    }
+
+    /// <summary>
+    /// Escalation MR-N: match over if a side hit <c>TotalRounds/2+1</c>,
     /// or <paramref name="roundIndex"/> already reached <see cref="TotalRounds"/> (full series /
     /// possible draw).
     /// </summary>
     public static bool IsMatchSeriesOver(int roundIndex, int scoreTr, int scoreCt)
     {
-        var wins = WinsNeeded;
+        var wins = TotalRounds / 2 + 1;
         if (scoreTr >= wins || scoreCt >= wins)
             return true;
         return roundIndex >= TotalRounds;
@@ -137,8 +150,7 @@ public static class MatchHostSettings
                 : "start=waiting for /set start";
             var debugChat = _debugMatchChat ? "debug-chat=on" : "debug-chat=off";
             return
-                $"rounds={_totalRounds} (first to { _totalRounds / 2 + 1}, " +
-                $"or {_totalRounds / 2}:{_totalRounds / 2} after {_totalRounds}) " +
+                $"rounds={_totalRounds} (Escalation MR cap) wins={_winsNeeded} (Allies first-to) " +
                 $"money={_roundStartMoney} warmup={_warmupSeconds}s prestart={_preStartSeconds}s " +
                 $"prep={_prepSeconds}s round={_roundSeconds}s pause={_roundEndPauseSeconds}s " +
                 $"fuse={_bombFuseSeconds}s {start} {debugChat}";
@@ -150,7 +162,8 @@ public static class MatchHostSettings
         /set — параметры дедика:
           /set start         разрешить WarmUp когда обе команды ≥1 (иначе C2=10 ждёт)
                              (то же: console start|startmatch; НЕ /play — /play = rematch teardown)
-          /set round <N>     макс. раундов (MR-N), default 8; победа = N/2+1 (16→до 9) или ничья N/2:N/2
+          /set round <N>     Escalation MR-N max rounds (default 8)
+          /set wins <N>      Allies first-to-N wins (default 8)
           /set team <t>      ct|tr|t|spectator — себе в матче (SetProperty team)
           /set money <N>     деньги на старт раунда (0–16000)
           /set fuse <сек>    таймер бомбы

@@ -65,6 +65,11 @@ public static class MatchRoomPropKeys
     /// <see cref="CtRoundStartPlayersCount"/>).
     /// </summary>
     public const string TrRoundStartPlayersCount = "Tr_RoundStartPlayersCount";
+    /// <summary>
+    /// Half-time team swap flag — phone gold C2=112 bag after round 7
+    /// (<c>allies-probe</c> run-20260723_215727). Bool <c>true</c> once per match.
+    /// </summary>
+    public const string SwappedTeam = "swapped_team";
 
     // bbo — actor props on SetProperty / SetProperties
     public const string Team = "team"; // <c>bbo.caav</c> / <c>cux</c> byte
@@ -197,11 +202,19 @@ public static class MatchC2States
     /// </summary>
     public const byte DeathMatchEnded = 200;
     /// <summary>
-    /// RankedDefuse registry id (<c>ckq.xvv=111</c>). Allies phone-host round end does
-    /// <b>not</b> use this — gold captures keep C2=<see cref="MatchStarted"/>. Do not TX 111
-    /// for Allies; do <b>not</b> use 201 (<c>FinalHud</c>) for round end either.
+    /// RankedDefuse registry id (<c>ckq.xvv=111</c>). Allies phone-host <b>round</b> end uses
+    /// C2=<see cref="MatchStarted"/> (101) + WinTeam — not 111. C2=111 appears only for
+    /// <b>half-time intro</b> after round 7 (<c>allies-probe</c> run-20260723_215727).
     /// </summary>
     public const byte RoundEnd = 111;
+    /// <summary>
+    /// Half-time swap bag (<c>allies-probe</c>): <c>swapped_team=true</c>, flipped
+    /// <see cref="MatchRoomPropKeys.TrScore"/>/<see cref="MatchRoomPropKeys.CtScore"/>,
+    /// CoLosses reset, host SetProperty team on every fighter.
+    /// </summary>
+    public const byte HalfTimeSwap = 112;
+    /// <summary>Half-time transition — brief pause before round 8 PreStart C2=22.</summary>
+    public const byte HalfTimeTransition = 113;
     /// <summary>
     /// FinalHud / match-итоги state (<c>cjf.xvv=201</c>). Reads <c>FinalWinTeam</c>, not round UI.
     /// Publishing C2=201 mid-match shows green match WIN + empty scores — never use for round end.
@@ -304,6 +317,24 @@ public static class EscalationFlowParams
     /// <summary>Prison BombSite=1 plant point (gold field=3 decode).</summary>
     public static readonly (float X, float Y, float Z) PrisonBombSite1 =
         (26.324486f, -0.41500017f, 21.995567f);
+}
+
+/// <summary>
+/// Allies / Ranked2v2 («союзники») — first-to-<see cref="MatchHostSettings.WinsNeeded"/> wins
+/// (default 8), half-time team swap after round 7. Gold: <c>allies-probe</c> run-20260723_215727.
+/// </summary>
+public static class AlliesFlowParams
+{
+    /// <summary>Round index after which half-time 111→112→113 runs (not match end).</summary>
+    public const int HalfTimeAfterRound = 7;
+    /// <summary>ReCreateSceneManager ids on every PreStart C2=22 (same as Escalation gold).</summary>
+    public static readonly short[] RecreateSceneManagerIds = EscalationFlowParams.RecreateSceneManagerIds;
+    /// <summary>C2=111 half-time intro — gold ≈5s before team swap bag.</summary>
+    public static readonly TimeSpan HalfTimeIntro = TimeSpan.FromSeconds(5);
+    /// <summary>C2=112 → C2=113 — gold ≈1s.</summary>
+    public static readonly TimeSpan HalfTimeSwapHold = TimeSpan.FromSeconds(1);
+    /// <summary>C2=113 → round 8 PreStart C2=22 — gold ≈7s.</summary>
+    public static readonly TimeSpan HalfTimeTransition = TimeSpan.FromSeconds(7);
 }
 
 /// <summary>

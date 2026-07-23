@@ -12,7 +12,7 @@ using StandChillow.LanServer.Plugins;
 //     start match: console `start`/`play` or phone chat `/play` `/start`
 //     lobby chat: `/mode` `/map` `/set` (slash commands); player chat relayed with speaker id
 //     --debug-chat / DEBUG_MATCH_CHAT=1 → Server posts plant/kill/round-end lines into chat
-//     defaults: Ranked2v2 + Sandstone 2x2; MR-8 (first to 5); title «влал хостит рялна»
+//     defaults: Ranked2v2 + Sandstone 2x2; Allies first-to-8; title «влал хостит рялна»
 //   ConnectAsClient (learning only):  dotnet run -c Release -- --client …
 // Captures under bin/.../captures/ are for analysis only — never replay into host replies.
 //
@@ -378,7 +378,21 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
             MatchHostSettings.TotalRounds = n;
             feedback(
                 $"rounds → MR-{MatchHostSettings.TotalRounds} " +
-                $"(first to {MatchHostSettings.WinsNeeded})");
+                $"(Escalation first to {MatchHostSettings.TotalRounds / 2 + 1})");
+            return;
+        }
+
+        if (key.Equals("wins", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("win", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!int.TryParse(val, out var n) || n < 1)
+            {
+                feedback("usage: set wins <N>");
+                return;
+            }
+
+            MatchHostSettings.WinsNeeded = n;
+            feedback($"wins → first-to-{MatchHostSettings.WinsNeeded} (Allies)");
             return;
         }
 

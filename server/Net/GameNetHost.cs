@@ -557,9 +557,24 @@ public sealed class GameNetHost : IDisposable
             MatchHostSettings.TotalRounds = n;
             var msg =
                 $"раунды → MR-{MatchHostSettings.TotalRounds} " +
-                $"(победа до {MatchHostSettings.WinsNeeded}, " +
-                $"или ничья {MatchHostSettings.TotalRounds / 2}:{MatchHostSettings.TotalRounds / 2} " +
-                $"после {MatchHostSettings.TotalRounds})";
+                $"(Escalation: победа до {MatchHostSettings.TotalRounds / 2 + 1}, " +
+                $"или ничья {MatchHostSettings.TotalRounds / 2}:{MatchHostSettings.TotalRounds / 2})";
+            Console.WriteLine($"[lobby] {player.Name}: {msg}");
+            BroadcastServerChat(msg);
+            return;
+        }
+
+        if (key.Equals("wins", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("win", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!int.TryParse(val, out var n) || n < 1)
+            {
+                SendServerChatTo(player.Peer, "usage: /set wins <N>  (Allies first-to-N, default 8)");
+                return;
+            }
+
+            MatchHostSettings.WinsNeeded = n;
+            var msg = $"победа → first-to-{MatchHostSettings.WinsNeeded} (Allies / Ranked2v2)";
             Console.WriteLine($"[lobby] {player.Name}: {msg}");
             BroadcastServerChat(msg);
             return;
