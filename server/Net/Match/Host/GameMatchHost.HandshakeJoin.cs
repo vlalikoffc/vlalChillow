@@ -119,6 +119,20 @@ public sealed partial class GameMatchHost
             st.ActorNr = nr;
             actor = nr;
             result = JoinRoomResult.Found;
+            if (st.UserId is { } reconnectUid)
+            {
+                MatchTeam prevTeam;
+                bool remembered;
+                lock (_roomGate)
+                    remembered = _reconnectTeams.TryGetValue(reconnectUid, out prevTeam);
+                if (remembered && prevTeam is MatchTeam.Tr or MatchTeam.Ct)
+                {
+                    st.PendingReconnectTeam = prevTeam;
+                    Console.WriteLine(
+                        $"[match-host] reconnect-pending: userId='{reconnectUid}' " +
+                        $"restore team={prevTeam} after INIT (new actor={nr})");
+                }
+            }
             Console.WriteLine(
                 $"[match-host] JoinRoom Found passwordKey='{room.PasswordKey}' " +
                 $"roster={MatchRoomField.Describe(req.Room)} actorNr={nr} " +
@@ -131,10 +145,17 @@ public sealed partial class GameMatchHost
         {
             List<(byte Nr, string Name)> actorsSnap;
             byte roomC2;
+            string modeId;
+            string levelId;
             lock (_roomGate)
             {
                 actorsSnap = room.Actors.ToList();
                 roomC2 = room.RoomC2;
+                modeId = _matchGameModeId;
+                levelId = _matchSelectedLevel;
+                // Keep actor=0 room props in sync for late-join snapshots.
+                room.ActorProps[(0, MatchRoomPropKeys.C0)] = LobbyVariant.FromString(modeId);
+                room.ActorProps[(0, MatchRoomPropKeys.C1)] = LobbyVariant.FromString(levelId);
             }
 
             // Phone-host probe (20260722_003523_* / run-20260722_073504): thin Found ~148B —
@@ -143,15 +164,13 @@ public sealed partial class GameMatchHost
             // MaxActorsHint ≥ live roster so Found never advertises fewer slots than actors present.
             var maxHint = (byte)Math.Clamp(
                 Math.Max(MatchGapDefaults.MaxActorsHint, actorsSnap.Count), 1, 255);
+            // C0/C1 from lobby selection (SetMatchSelection), not hardcoded Ranked2v2/Sandstone.
             gap = new MatchGapRoom
             {
                 RoomName = LanCreateRoomPasswordKey,
                 Open = true,
                 MaxActorsHint = maxHint,
-                RoomProps = MatchGapDefaults.BuildRoomProps(
-                    LobbyPropKeys.DefaultGameModeId,
-                    LobbyPropKeys.DefaultSelectedLevel,
-                    c2: roomC2),
+                RoomProps = MatchGapDefaults.BuildRoomProps(modeId, levelId, c2: roomC2),
                 Actors = actorsSnap.Select(a => new MatchGapActor
                 {
                     ActorNr = a.Nr,
@@ -173,7 +192,7 @@ public sealed partial class GameMatchHost
         DumpCapture("match_tx_JoinRoomResponse", resp);
         Console.WriteLine(
             $"[match-host] TX JoinRoomResponse result={MatchCodec.JoinRoomResultName(result)} " +
-            $"actor={(actor?.ToString() ?? "-")} gap={(gap is null ? "none" : $"props={gap.Value.RoomProps.Count} actors={gap.Value.Actors.Count} C2={room?.RoomC2}")} " +
+            $"actor={(actor?.ToString() ?? "-")} gap={(gap is null ? "none" : $"props={gap.Value.RoomProps.Count} actors={gap.Value.Actors.Count} C2={room?.RoomC2} C0={_matchGameModeId} C1={_matchSelectedLevel}")} " +
             $"len={resp.Length}");
 
         if (result == JoinRoomResult.Found && room is not null && actor is { } joinerNr)

@@ -14,27 +14,63 @@ public sealed partial class GameMatchHost
     private void EnterRoundEndPause(MatchRoom room, MatchTeam winner, string reason)
     {
         int round, scoreTr, scoreCt, coLossesTr, coLossesCt;
+        int beforeTr = 0, beforeCt = 0;
         byte mvpNr, mvpCode;
         int mvpCount = 0;
+        string scoreBumpKey = "";
         lock (_roomGate)
         {
             // Ignore duplicate end while already pausing / over.
             if (room.Flow.Phase is MatchFlowPhase.RoundEndPause or MatchFlowPhase.MatchOver)
+            {
+                Console.WriteLine(
+                    $"[match-host] match-flow: RoundEnd IGNORED (already {room.Flow.Phase}) " +
+                    $"reason={reason} — no score bump");
                 return;
+            }
 
             round = room.Flow.RoundIndex;
+            beforeTr = room.Flow.ScoreTr;
+            beforeCt = room.Flow.ScoreCt;
+            // Same-round double-fire (defuse + wipe / timeout race): commit score once.
+            if (round > 0 && room.Flow.RoundEndCommittedRound == round)
+            {
+                Console.WriteLine(
+                    $"[match-host] match-flow: RoundEnd IGNORED (round {round} already scored) " +
+                    $"reason={reason} TrScore={beforeTr} CtScore={beforeCt} — no score bump");
+                room.Flow.PendingEndReason = null;
+                room.Flow.Phase = MatchFlowPhase.RoundEndPause;
+                room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchFlowTestParams.RoundEndPause;
+                room.Flow.BombPlanted = false;
+                room.Flow.BombPlantedUtc = DateTime.MinValue;
+                room.Flow.PendingBombPlant = false;
+                room.LastCombatDamage.Clear();
+                return;
+            }
+
             if (winner == MatchTeam.Tr)
             {
                 room.Flow.ScoreTr++;
                 room.Flow.CoLossesCt++;
                 room.Flow.CoLossesTr = 0;
+                scoreBumpKey = MatchRoomPropKeys.TrScore;
             }
             else if (winner == MatchTeam.Ct)
             {
                 room.Flow.ScoreCt++;
                 room.Flow.CoLossesTr++;
                 room.Flow.CoLossesCt = 0;
+                scoreBumpKey = MatchRoomPropKeys.CtScore;
             }
+            else
+            {
+                Console.WriteLine(
+                    $"[match-host] match-flow: RoundEnd IGNORED (winner={winner} not Tr/Ct) " +
+                    $"reason={reason} — no score bump");
+                return;
+            }
+
+            room.Flow.RoundEndCommittedRound = round;
             scoreTr = room.Flow.ScoreTr;
             scoreCt = room.Flow.ScoreCt;
             coLossesTr = room.Flow.CoLossesTr;
@@ -51,12 +87,27 @@ public sealed partial class GameMatchHost
             room.Flow.Phase = MatchFlowPhase.RoundEndPause;
             room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchFlowTestParams.RoundEndPause;
             room.Flow.BombPlanted = false;
+            room.Flow.BombPlantedUtc = DateTime.MinValue;
+            room.Flow.PendingBombPlant = false;
+            room.Flow.EscalationCombatStarted = false;
             room.Flow.PendingEndReason = null;
+            room.Flow.PendingCombatDestroy.Clear();
+            room.LastCombatDamage.Clear();
         }
+
+        Console.WriteLine(
+            $"[match-host] match-flow: bomb authority clear (RoundEnd) " +
+            $"BombPlanted=false BombPlantedUtc=cleared PendingBombPlant=false reason={reason}");
+        DestroyTrackedRoundEntities(room, reason: $"RoundEnd:{reason}");
+        Console.WriteLine(
+            $"[match-host] match-flow: score bump +1 {scoreBumpKey} " +
+            $"reason={reason} round={round} winner={winner} " +
+            $"TrScore={beforeTr}→{scoreTr} CtScore={beforeCt}→{scoreCt}");
 
         // Phone-host gold (run-20260722_100157 len≈151): actor mvp SetProperty first, then
         // room SetProperties: Time, {Tr|Ct}Score, {loser}CoLosses, {winner}CoLosses, WinTeam, C2=101.
-        // NOT nested Score={Tr,Ct}, NOT C2=111/201, NOT winTeam/resultActor key names.
+        // Dedicated also always includes BOTH TrScore+CtScore in the bag so stay-in clients
+        // cannot stick on a prior 1:0 after a CT win (gold bag alone only carries winner key).
         if (mvpNr != 0)
         {
             var mvpPkt = MatchCodec.BuildSetProperty(
@@ -70,20 +121,44 @@ public sealed partial class GameMatchHost
         var winTeamProps = BuildWinTeamProps(winner, mvpNr, mvpCode);
         var roomProps = BuildRoundEndRoomProps(
             nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps);
-        BroadcastRoomProps(room, roomProps);
+        // Gold bag (both scores + WinTeam + C2=101) to all room peers — no exceptSender.
+        BroadcastRoomProps(room, roomProps, reason: $"RoundEnd {reason} round={round}");
+        // Explicit TrScore+CtScore SetProperty to ALL connected match peers so stay-in
+        // clients match late-join snapshot (rejoin was the only path that had both scores).
+        BroadcastMatchScoresToAllPeers(room, scoreTr, scoreCt);
+        var pause = MatchFlowTestParams.RoundEndPause;
         Console.WriteLine(
             $"[match-host] match-flow: RoundEnd C2={MatchC2States.MatchStarted} round={round} " +
             $"winner={winner} reason={reason} " +
             $"TrScore={scoreTr} CtScore={scoreCt} " +
             $"TrCoLosses={coLossesTr} CtCoLosses={coLossesCt} " +
             $"mvpPlayer={mvpNr} mvpCode={mvpCode} " +
-            $"(phone-host WinTeam+TrScore/CtScore; not FinalHud C2={MatchC2States.FinalHud}; " +
-            $"silent pause {MatchFlowTestParams.RoundEndPause.TotalSeconds:0}s)");
+            $"pause={pause.TotalSeconds:0}s src=MATCH_WORLD silent " +
+            $"(WinTeam bag + both score SetProperty to all peers; then {pause.TotalSeconds:0}s " +
+            $"before PreStart C2=22; not FinalHud C2={MatchC2States.FinalHud})");
+
+        if (reason is "bomb-defuse")
+            PostServerDebugChat("бомба обезврежена");
+        else if (reason is "bomb-explode" or "bomb-explode-rpc")
+            PostServerDebugChat("бомба взорвалась");
+
+        var winSideShort = winner == MatchTeam.Tr ? "T" : winner == MatchTeam.Ct ? "CT" : "?";
+        PostServerDebugChat(
+            $"раунд {round}: {winSideShort} ({FormatRoundEndReasonRu(reason)}) {scoreTr}:{scoreCt}");
+
+        var winSide = winner == MatchTeam.Tr ? "ATTACK (T)" : winner == MatchTeam.Ct ? "DEFENSE (CT)" : "—";
+        var mvpName = mvpNr != 0 ? ResolveActorName(mvpNr) : null;
+        Dashboard.DashboardHub.PostRoundResult(
+            $"Round {round}: {winSide} win  ·  {scoreTr}:{scoreCt}  ({reason})",
+            winner, mvpNr, mvpName, isFinal: false);
     }
 
     /// <summary>
     /// Allies phone-host round-end room bag order (gold len≈151):
     /// Time, winner flat score, loser CoLosses, winner CoLosses=0 streak reset, WinTeam, C2=101.
+    /// Dedicated always publishes <b>both</b> <c>TrScore</c> and <c>CtScore</c> (winner first),
+    /// then follows with <see cref="BroadcastMatchScoresToAllPeers"/> so stay-in peers never
+    /// keep a stale opposing score after RoundEnd.
     /// </summary>
     private static List<(string Key, LobbyVariant Value)> BuildRoundEndRoomProps(
         double nowSec,
@@ -98,15 +173,18 @@ public sealed partial class GameMatchHost
         {
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
         };
+        // Winner score key first (gold order), then the other team score (dedicated stay-in).
         if (winner == MatchTeam.Tr)
         {
             props.Add((MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)));
+            props.Add((MatchRoomPropKeys.CtScore, LobbyVariant.FromInt(scoreCt)));
             props.Add((MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(coLossesCt)));
             props.Add((MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(coLossesTr)));
         }
         else
         {
             props.Add((MatchRoomPropKeys.CtScore, LobbyVariant.FromInt(scoreCt)));
+            props.Add((MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)));
             props.Add((MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(coLossesTr)));
             props.Add((MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(coLossesCt)));
         }
@@ -122,7 +200,15 @@ public sealed partial class GameMatchHost
         lock (_roomGate)
             round = room.Flow.RoundIndex;
 
-        if (round >= MatchFlowTestParams.TotalRounds)
+        int scoreTr, scoreCt;
+        lock (_roomGate)
+        {
+            scoreTr = room.Flow.ScoreTr;
+            scoreCt = room.Flow.ScoreCt;
+        }
+
+        // MR-N: first to WinsNeeded (=N/2+1), or all N rounds played (draw possible N/2:N/2).
+        if (MatchHostSettings.IsMatchSeriesOver(round, scoreTr, scoreCt))
         {
             lock (_roomGate)
             {
@@ -132,15 +218,23 @@ public sealed partial class GameMatchHost
             BroadcastRoomProps(room,
             [
                 (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchResults)),
-            ]);
+            ], reason: $"MatchResults Tr={scoreTr} Ct={scoreCt}");
+            var why = scoreTr >= MatchHostSettings.WinsNeeded || scoreCt >= MatchHostSettings.WinsNeeded
+                ? $"first-to-{MatchHostSettings.WinsNeeded} (MR-{MatchHostSettings.TotalRounds})"
+                : $"full series {MatchHostSettings.TotalRounds} rounds";
             Console.WriteLine(
                 $"[match-host] match-flow: MatchResults C2={MatchC2States.MatchResults} " +
-                $"after {MatchFlowTestParams.TotalRounds} rounds " +
+                $"Tr={scoreTr} Ct={scoreCt} after round={round} — {why} " +
                 "(FinalWinTeam wire unknown — C2 only)");
             return;
         }
 
-        EnterPurchasePhase(room, nextRound: true);
+        Console.WriteLine(
+            $"[match-host] match-flow: next-round after RoundEnd pause — " +
+            $"enter PreStart C2={MatchC2States.WarmupWillFinish} " +
+            $"(round {round}→{round + 1}; series MR-{MatchHostSettings.TotalRounds} " +
+            $"first-to-{MatchHostSettings.WinsNeeded}; gold — never skip C2=22)");
+        EnterWarmupWillFinish(room);
     }
 
     /// <summary>

@@ -41,17 +41,22 @@ public sealed class GameNetClient : IDisposable
     private IPEndPoint? _lobbyEndpoint;
     private readonly IPAddress? _forceMatchIp;
     private readonly IPAddress? _bindAddress;
+    private readonly MatchTeam _probeTeam;
     private string? _lobbyId;
     private string? _gameModeId;
 
     public GameNetClient(
         string profileName = "probe",
         bool saveCaptures = true,
-        IPAddress? forceMatchIp = null)
+        IPAddress? forceMatchIp = null,
+        MatchTeam probeTeam = MatchTeam.Spectator)
     {
         _profileName = profileName;
         _saveCaptures = saveCaptures;
         _forceMatchIp = forceMatchIp;
+        _probeTeam = probeTeam is MatchTeam.Tr or MatchTeam.Ct or MatchTeam.Spectator
+            ? probeTeam
+            : MatchTeam.Spectator;
         _captureDir = Path.Combine(AppContext.BaseDirectory, "captures");
         if (_saveCaptures)
             Directory.CreateDirectory(_captureDir);
@@ -249,7 +254,25 @@ public sealed class GameNetClient : IDisposable
             case LobbyOpcode.OpLobbyPropertyChangedEvent:
             {
                 var ch = LobbyCodec.ParsePropertyChanged(r);
-                Console.WriteLine($"[client-lobby] PropChanged kind={ch.Kind} key={ch.Key ?? "(none)"} value={ch.Value}");
+                // Lobby room bag = MATCH-like; member props are per-player in lobby space.
+                if (ch.Kind == LobbyPropKind.CustomProperties
+                    && ch.Value.Kind == LobbyVariantKind.Properties
+                    && ch.Value.Props is { } bag)
+                {
+                    Console.WriteLine("[client-lobby] LOBBY-MATCH PropChanged (CustomProperties bag):");
+                    foreach (var (k, v) in bag)
+                        Console.WriteLine($"  MATCH lobby  {k} = {v}");
+                }
+                else if (ch.Kind == LobbyPropKind.CustomProperty)
+                {
+                    Console.WriteLine(
+                        $"[client-lobby] LOBBY-MATCH PropChanged key={ch.Key ?? "(none)"} value={ch.Value}");
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"[client-lobby] LOBBY PropChanged kind={ch.Kind} key={ch.Key ?? "(none)"} value={ch.Value}");
+                }
                 HandleSearchingProp(ch);
                 break;
             }
@@ -353,12 +376,16 @@ public sealed class GameNetClient : IDisposable
                 gameModeId: _gameModeId,
                 // Live fuy.cwgt = participant roster (self nick under illusion).
                 // When probing a phone host, use our lobby join name.
-                rosterRoom: _profileName);
+                rosterRoom: _profileName,
+                probeTeam: _probeTeam);
             Console.WriteLine(
                 $"[client-lobby] match JoinRoom wire plan: appId='{MatchAuth.AppId}' " +
                 $"password='{GameMatchHost.LanCreateRoomPasswordKey}' mode=JoinOnly " +
                 $"room(roster)='{_profileName}' lobbyId='{_lobbyId ?? "(none)"}' " +
-                "(after Found: probe → Spectator via SetProperty team FF03)");
+                $"probeTeam={_probeTeam}" +
+                (_probeTeam is MatchTeam.Ct or MatchTeam.Tr
+                    ? " (fighting pawn after bootstrap)"
+                    : " (Spectator after bootstrap)"));
             _match.Connect(resolved.Endpoint, resolved.Fallback);
         }
         catch (Exception ex)

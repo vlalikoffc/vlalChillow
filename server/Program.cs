@@ -1,15 +1,18 @@
 ﻿using System.Net;
 using StandChillow.LanServer;
+using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
+using StandChillow.LanServer.Plugins;
 
 // CLI:
-//   Dedicated host (default):  dotnet run -c Release [-- lobbyTitle]
+//   Dedicated host (default):  dotnet run -c Release [--debug-chat] [-- lobbyTitle]
 //     start match: console `start`/`play` or phone chat `/play` `/start`
-//     lobby chat: `/mode` `/map` (slash commands); player chat relayed with speaker id
-//     defaults: Ranked2v2 + Sandstone 2x2; title «влал хостит рялна»
+//     lobby chat: `/mode` `/map` `/set` (slash commands); player chat relayed with speaker id
+//     --debug-chat / DEBUG_MATCH_CHAT=1 → Server posts plant/kill/round-end lines into chat
+//     defaults: Ranked2v2 + Sandstone 2x2; MR-8 (first to 5); title «влал хостит рялна»
 //   ConnectAsClient (learning only):  dotnet run -c Release -- --client …
 // Captures under bin/.../captures/ are for analysis only — never replay into host replies.
 //
@@ -19,18 +22,29 @@ using StandChillow.LanServer.Net.Match;
 //   UDP 7777 = LiteNetLib game/match after OpGameHostingStateChangedEvent (esz).
 //              Connect key = fwv.cwpw "MyVerySecretKey" (AcceptIfKey); ChannelsCount=3.
 
-var logPath = RunLog.Start();
-Console.WriteLine($"[log] writing to {logPath}");
-Console.WriteLine($"[log] read from start: less '{logPath}'   or   tail -n 200 '{logPath}'");
-Console.WriteLine();
-
 if (IsClientMode(args, out var clientArgs))
 {
+    var clientLog = RunLog.Start(dashboardMode: false);
+    Console.WriteLine($"[log] writing to {clientLog}");
+    Console.WriteLine($"[log] read from start: less '{clientLog}'   or   tail -n 200 '{clientLog}'");
+    Console.WriteLine();
     await RunConnectAsClientAsync(clientArgs);
     return;
 }
 
-await RunDedicatedHostAsync(args);
+// Dedicated host: own the terminal with the CLI dashboard whenever stdout is a real console.
+// In dashboard mode all normal Console.WriteLine logging is routed to latest.log only.
+var useDashboard = !Console.IsOutputRedirected;
+var logPath = RunLog.Start(dashboardMode: useDashboard);
+if (!useDashboard)
+{
+    Console.WriteLine($"[log] writing to {logPath}");
+    Console.WriteLine($"[log] read from start: less '{logPath}'   or   tail -n 200 '{logPath}'");
+    Console.WriteLine();
+}
+
+ConsumeDebugMatchChatFlag(ref args);
+await RunDedicatedHostAsync(args, useDashboard);
 
 static bool IsClientMode(string[] args, out string[] rest)
 {
@@ -47,11 +61,43 @@ static bool IsClientMode(string[] args, out string[] rest)
     return false;
 }
 
-static async Task RunDedicatedHostAsync(string[] args)
+/// <summary>
+/// Enable <see cref="MatchHostSettings.DebugMatchChat"/> from <c>--debug-chat</c> /
+/// <c>--debug-match-chat</c> or env <c>DEBUG_MATCH_CHAT=1|true|yes|on</c>. Strips those
+/// flags from <paramref name="args"/> so they are not used as lobby title.
+/// </summary>
+static void ConsumeDebugMatchChatFlag(ref string[] args)
 {
-    Console.Title = "StandChillow LAN Dedicated Lobby";
+    var on = EnvTruthy(Environment.GetEnvironmentVariable("DEBUG_MATCH_CHAT"));
+    var kept = new List<string>(args.Length);
+    foreach (var a in args)
+    {
+        if (a is "--debug-chat" or "--debug-match-chat")
+        {
+            on = true;
+            continue;
+        }
+        if (a is "--no-debug-chat")
+        {
+            on = false;
+            continue;
+        }
+        kept.Add(a);
+    }
+    args = kept.ToArray();
+    MatchHostSettings.DebugMatchChat = on;
+}
+
+static bool EnvTruthy(string? value) =>
+    !string.IsNullOrWhiteSpace(value)
+    && value.Trim() is "1" or "true" or "TRUE" or "True" or "yes" or "YES" or "Yes"
+        or "on" or "ON" or "On";
+
+static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
+{
+    Console.Title = "влалChillow LAN Dedicated Lobby";
     Console.WriteLine("╔══════════════════════════════════════════════════════════╗");
-    Console.WriteLine("║  StandChillow LAN dedicated host                       ║");
+    Console.WriteLine("║  влалChillow LAN dedicated host                        ║");
     Console.WriteLine("║  discovery UDP 5056  ·  lobby UDP 7778                 ║");
     Console.WriteLine("║  match UDP 7777 (Handshake + JoinRoom)                 ║");
     Console.WriteLine("║  default: Ranked2v2 / Sandstone 2x2 («союзники»)       ║");
@@ -118,6 +164,9 @@ static async Task RunDedicatedHostAsync(string[] args)
                 : $"[discovery] WAITING — cxbl=1 Extra1='{map}' Extra2='{mode}', members={n}");
     }
 
+    using var plugins = new PluginManager();
+    Console.WriteLine($"[plugins] root: {plugins.PluginsRoot}");
+
     var advertiseIp = LanInterfacePicker.PickLanBindAddress();
     using var game = new GameNetHost(
         lobbyTitle,
@@ -125,8 +174,25 @@ static async Task RunDedicatedHostAsync(string[] args)
         discovery.BoundEndpoints,
         onRosterChanged: SyncDiscovery,
         advertiseLanIp: advertiseIp,
-        onMatchStarted: SyncDiscovery);
+        onMatchStarted: () =>
+        {
+            SyncDiscovery();
+            plugins.NotifyMatchStarted("host");
+        });
     gameRef = game;
+    plugins.AttachHost(game);
+    plugins.LoadAll();
+
+    using var pluginTickCts = new CancellationTokenSource();
+    var pluginTick = Task.Run(async () =>
+    {
+        while (!pluginTickCts.IsCancellationRequested)
+        {
+            plugins.Tick();
+            try { await Task.Delay(500, pluginTickCts.Token); }
+            catch (OperationCanceledException) { break; }
+        }
+    });
 
     // Live: discovery HostName == LobbyId property (32-char uppercase MD5 hex).
     current = current with { HostName = game.Session.LobbyId };
@@ -142,78 +208,312 @@ static async Task RunDedicatedHostAsync(string[] args)
     Console.WriteLine($"  mode/levels  : {game.Session.GameModeId} / [{string.Join(", ", game.Session.SelectedLevels)}]");
     Console.WriteLine($"  discovery    : cxbl={(current.HasExtraStrings ? 1 : 0)} (1=map waiting, 0=Join in-progress)");
     Console.WriteLine($"  payload hex  : {current.ToHex()}");
-    Console.WriteLine("Phone: LAN list → join → chat /mode /map · /play|/start (or console start).");
+    Console.WriteLine("Phone: LAN list → join → chat /mode /map /set · /play (launch) · /set start (WarmUp).");
     Console.WriteLine("Expect: op7 → SearchingStarted → op9 LAN:7777 → Handshake → JoinRoom Dedik.");
-    Console.WriteLine("Second play/start: re-advertise in-progress only (no new 7777 bind).");
+    Console.WriteLine("After both teams: /set start | set start | start | startmatch → WarmUp.");
+    Console.WriteLine("Rematch: /play only (teardown previous match then fresh start).");
     Console.WriteLine("Captures: server/bin/Release/net8.0/captures/");
-    Console.WriteLine("Commands: start|play|level|members|status|binds|roster|quit");
+    Console.WriteLine("Commands: play|start|set start|startmatch|mode|map|status|binds|roster|plugins|quit");
+    Console.WriteLine($"  defaults: {MatchHostSettings.FormatStatusLine()}");
+    if (MatchHostSettings.DebugMatchChat)
+        Console.WriteLine("  debug-chat: ON — Server posts plant/kill/round-end into lobby chat");
 
-    if (Console.IsInputRedirected)
+    // Command handler shared by the dashboard input line and the plain stdin loop.
+    // Feedback goes to the dashboard notice/chat area when active, else to the console.
+    CliDashboard? dashboard = null;
+    void Feedback(string text)
     {
-        Console.WriteLine("[main] stdin redirected — running until SIGTERM");
-        await Task.Delay(Timeout.Infinite);
+        if (dashboard is not null) dashboard.PostLocalNotice(text);
+        else Console.WriteLine(text);
     }
-    else
+
+    bool HandleCommand(string line)
     {
-        var running = true;
-        while (running)
+        var trimmed = line.Trim();
+        if (trimmed.Length == 0) return true;
+
+        // Slash form: /set start, /play, … — same as phone chat (silent command, no chat bubble).
+        if (trimmed.StartsWith('/'))
         {
-            var line = Console.ReadLine();
-            if (line is null) break;
-            var parts = line.Split(' ', 2, StringSplitOptions.TrimEntries);
-            if (parts.Length == 0 || parts[0].Length == 0) continue;
-            switch (parts[0].ToLowerInvariant())
+            var body = trimmed[1..].Trim();
+            if (body.Length == 0) return true;
+            return HandleCommand(body);
+        }
+
+        var parts = trimmed.Split(' ', 2, StringSplitOptions.TrimEntries);
+        if (parts.Length == 0 || parts[0].Length == 0) return true;
+        switch (parts[0].ToLowerInvariant())
+        {
+            case "quit":
+            case "exit":
+                return false;
+            case "play":
+                // Explicit rematch / first launch — may HardResetMatchForNewStart.
+                game.TryStartMatch("console");
+                break;
+            case "start":
+            case "startmatch":
+                // Arm WarmUp when match already up; first launch only if never Play'd.
+                // Never HardReset (that was the `start`/`stat` teardown bug).
+                game.TryArmWarmupOrFirstPlay("console");
+                break;
+            case "stat":
+                // Typo for status — never chat/teardown (latest.log: `stat` was broadcast then
+                // a follow-up `start` tore down the live WaitingPlayers room).
+                goto case "status";
+            case "mode" when parts.Length == 2:
+                if (GameModeCatalog.TryResolveMode(parts[1], out var m))
+                {
+                    game.Session.GameModeId = m.GameModeId;
+                    game.Session.SelectedLevels = new[] { GameModeCatalog.DefaultLevelFor(m.GameModeId) };
+                    SyncDiscovery();
+                    Feedback($"mode → {m.GameModeId} / {game.Session.SelectedLevels[0]}");
+                }
+                else Feedback($"unknown mode '{parts[1]}'");
+                break;
+            case "map" when parts.Length == 2:
+            case "level" when parts.Length == 2 && parts[1].Contains(' '):
+                game.Session.SelectedLevels = new[] { parts[1] };
+                SyncDiscovery();
+                Feedback($"map → {parts[1]}");
+                break;
+            case "title" when parts.Length == 2:
+                lobbyTitle = parts[1];
+                game.LobbyName = parts[1];
+                SyncDiscovery();
+                Feedback($"title → {parts[1]}");
+                break;
+            case "members" when parts.Length == 2 && byte.TryParse(parts[1], out var n):
+                current = current with { MemberCount = n };
+                discovery.UpdateInfo(current);
+                break;
+            case "binds":
+                foreach (var e in discovery.BoundEndpoints)
+                    Feedback($"{e.InterfaceName} {e.Address} br={e.Broadcast}");
+                break;
+            case "roster":
+                foreach (var (name, status) in game.Session.SnapshotRoster())
+                    Feedback($"{name} ({LobbySession.FormatStatus(status)})");
+                break;
+            case "status":
+                SyncDiscovery();
+                Feedback(
+                    $"members={current.MemberCount} mode={game.Session.GameModeId} " +
+                    $"match={game.MatchStarted} peers={game.PeerCount} joined={game.JoinedCount} " +
+                    $"matchPeers={game.Match.PeerCount}");
+                Feedback(MatchHostSettings.FormatStatusLine());
+                break;
+            case "set":
+                HandleConsoleSet(parts.Length > 1 ? parts[1] : "", Feedback, game);
+                break;
+            case "plugins":
+            case "plugin":
             {
-                case "quit":
-                case "exit":
-                    running = false;
+                var sub = parts.Length > 1 ? parts[1].Trim() : "";
+                if (sub.Equals("reload", StringComparison.OrdinalIgnoreCase))
+                {
+                    var n = plugins.Reload();
+                    Feedback($"[plugins] reloaded → {n} ({string.Join(", ", plugins.LoadedNames)})");
+                }
+                else
+                {
+                    var names = plugins.LoadedNames;
+                    Feedback(
+                        names.Count == 0
+                            ? $"[plugins] none loaded (drop DLLs in {plugins.PluginsRoot})"
+                            : $"[plugins] loaded: {string.Join(", ", names)}");
+                    Feedback("usage: plugins | plugins reload");
+                }
+                break;
+            }
+            default:
+            {
+                // Plugin console commands first; else free text → lobby chat as Server.
+                var cmd = parts[0];
+                var argsRest = parts.Length > 1 ? parts[1] : "";
+                if (plugins.TryHandleConsoleCommand(cmd, argsRest, Feedback))
                     break;
-                case "start":
-                case "play":
-                    game.TryStartMatch("console");
-                    break;
-                case "level" when parts.Length == 2:
-                    lobbyTitle = parts[1];
-                    game.LobbyName = parts[1];
-                    SyncDiscovery();
-                    break;
-                case "members" when parts.Length == 2 && byte.TryParse(parts[1], out var n):
-                    current = current with { MemberCount = n };
-                    discovery.UpdateInfo(current);
-                    break;
-                case "binds":
-                    foreach (var e in discovery.BoundEndpoints)
-                        Console.WriteLine($"  {e.InterfaceName} {e.Address} br={e.Broadcast}");
-                    break;
-                case "roster":
-                    foreach (var (name, status) in game.Session.SnapshotRoster())
-                        Console.WriteLine($"  {name} ({LobbySession.FormatStatus(status)})");
-                    break;
-                case "status":
-                    SyncDiscovery();
-                    Console.WriteLine(
-                        $"lobbyId={current.HostName} level={current.LevelName} members={current.MemberCount} " +
-                        $"cxbl={(current.HasExtraStrings ? 1 : 0)} extras=[{current.Extra1}|{current.Extra2}] " +
-                        $"mode={game.Session.GameModeId} levels=[{string.Join(", ", game.Session.SelectedLevels)}] " +
-                        $"advPort={current.GamePort} match={game.AdvertiseLanIp}:{GameMatchHost.DefaultMatchPort} " +
-                        $"matchStarted={game.MatchStarted} matchListening={game.Match.IsListening} " +
-                        $"matchPeers={game.Match.PeerCount} " +
-                        $"dg={discovery.DatagramsReceived} probes={discovery.ProbesMatched} " +
-                        $"replies={discovery.RepliesSent} err={discovery.ReplyErrors} " +
-                        $"netConnect={game.ConnectRequests} unconn={game.UnconnectedMessages} " +
-                        $"peers={game.PeerCount} joined={game.JoinedCount}");
-                    break;
-                default:
-                    Console.WriteLine("start|play|level|members|status|binds|roster|quit");
+                game.BroadcastConsoleChat(trimmed);
+                break;
+            }
+        }
+        return true;
+    }
+
+    static void HandleConsoleSet(string args, Action<string> feedback, GameNetHost game)
+    {
+        if (string.IsNullOrWhiteSpace(args)
+            || args.Equals("help", StringComparison.OrdinalIgnoreCase))
+        {
+            feedback(MatchHostSettings.FormatSetHelp().Replace("/set", "set"));
+            feedback(MatchHostSettings.FormatStatusLine());
+            return;
+        }
+
+        var bits = args.Split(' ', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var key = bits[0];
+        var val = bits.Length > 1 ? bits[1] : "";
+        if (key.Equals("status", StringComparison.OrdinalIgnoreCase))
+        {
+            feedback(MatchHostSettings.FormatStatusLine());
+            return;
+        }
+
+        if (key.Equals("start", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("startmatch", StringComparison.OrdinalIgnoreCase))
+        {
+            game.ArmMatchStart("console");
+            return;
+        }
+
+        if (key.Equals("round", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("rounds", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!int.TryParse(val, out var n) || n < 1)
+            {
+                feedback("usage: set round <N>");
+                return;
+            }
+
+            MatchHostSettings.TotalRounds = n;
+            feedback(
+                $"rounds → MR-{MatchHostSettings.TotalRounds} " +
+                $"(first to {MatchHostSettings.WinsNeeded})");
+            return;
+        }
+
+        if (key.Equals("money", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(val, out var money))
+        {
+            MatchHostSettings.RoundStartMoney = money;
+            feedback($"money → {MatchHostSettings.RoundStartMoney}");
+            return;
+        }
+
+        if (key.Equals("fuse", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var fuse))
+        {
+            MatchHostSettings.BombFuseSeconds = fuse;
+            feedback($"fuse → {MatchHostSettings.BombFuseSeconds}s");
+            return;
+        }
+
+        if (key.Equals("prep", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var prep))
+        {
+            MatchHostSettings.PrepSeconds = prep;
+            feedback($"prep → {MatchHostSettings.PrepSeconds}s");
+            return;
+        }
+
+        if (key.Equals("prestart", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var ps))
+        {
+            MatchHostSettings.PreStartSeconds = ps;
+            feedback($"prestart → {MatchHostSettings.PreStartSeconds}s");
+            return;
+        }
+
+        if (key.Equals("warmup", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var wu))
+        {
+            MatchHostSettings.WarmupSeconds = wu;
+            feedback($"warmup → {MatchHostSettings.WarmupSeconds}s");
+            return;
+        }
+
+        if (key.Equals("roundtime", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var rt))
+        {
+            MatchHostSettings.RoundSeconds = rt;
+            feedback($"roundtime → {MatchHostSettings.RoundSeconds}s");
+            return;
+        }
+
+        if (key.Equals("pause", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var pause))
+        {
+            MatchHostSettings.RoundEndPauseSeconds = pause;
+            feedback($"pause → {MatchHostSettings.RoundEndPauseSeconds}s");
+            return;
+        }
+
+        feedback("set help | set start | set round N | set money N | set fuse|prep|prestart|warmup|roundtime|pause N");
+    }
+
+    try
+    {
+        if (useDashboard)
+        {
+            dashboard = new CliDashboard(game);
+            dashboard.Start();
+            try
+            {
+                if (Console.IsInputRedirected)
+                {
+                    // No keyboard, but keep the live dashboard on screen until SIGTERM.
+                    await Task.Delay(Timeout.Infinite);
+                }
+                else
+                {
+                    while (true)
+                    {
+                        var line = dashboard.NextCommand();
+                        if (line is null || !HandleCommand(line))
+                            break;
+                    }
+                }
+            }
+            finally
+            {
+                dashboard.Stop();
+            }
+        }
+        else if (Console.IsInputRedirected)
+        {
+            Console.WriteLine("[main] stdin redirected — running until SIGTERM");
+            await Task.Delay(Timeout.Infinite);
+        }
+        else
+        {
+            while (true)
+            {
+                var line = Console.ReadLine();
+                if (line is null || !HandleCommand(line))
                     break;
             }
         }
+    }
+    finally
+    {
+        pluginTickCts.Cancel();
+        try { await pluginTick.WaitAsync(TimeSpan.FromSeconds(2)); }
+        catch { /* ignore */ }
+    }
+}
+
+// Interactive lobby picker (only used with --pick and a real TTY). Discovery is already
+// quieted by the caller, so the prompt is readable. Enter = index 0; a valid number joins
+// immediately; q/quit cancels; anything else re-prompts (never hangs silently).
+static int PromptForLobbyIndex(int count)
+{
+    while (true)
+    {
+        Console.Write($"Select index 0..{count - 1} (Enter = 0, q = quit): ");
+        var line = Console.ReadLine();
+        if (line is null)
+        {
+            Console.WriteLine("[client] stdin closed — using index 0");
+            return 0;
+        }
+        line = line.Trim();
+        if (line.Length == 0)
+            return 0;
+        if (line is "q" or "quit" or "exit")
+            return -1;
+        if (int.TryParse(line, out var n) && n >= 0 && n < count)
+            return n;
+        Console.WriteLine($"[client] '{line}' is not 0..{count - 1} — Enter for 0, q to quit.");
     }
 }
 
 static async Task RunConnectAsClientAsync(string[] args)
 {
-    Console.Title = "StandChillow LAN ConnectAsClient";
+    Console.Title = "влалChillow LAN ConnectAsClient";
     Console.WriteLine("╔══════════════════════════════════════════════════════════╗");
     Console.WriteLine("║  ConnectAsClient — learn from a REAL phone host        ║");
     Console.WriteLine("║  UDP 5056 = discovery probe/reply (Bonjour V2)         ║");
@@ -228,17 +528,21 @@ static async Task RunConnectAsClientAsync(string[] args)
     Console.WriteLine($"      mode=JoinOnly, Handshake AppId={MatchAuth.AppId}.");
     Console.WriteLine("      After Found: stay connected and capture ALL further match RX (world/RPC).");
     Console.WriteLine("      If op9 IP is off our LAN subnet (or connect fails), match uses lobby LAN IP + op9 port.");
+    Console.WriteLine("      Lobby pick: default auto-joins first lobby (never hangs); --pick = interactive; --index N = force.");
     Console.WriteLine("      Skip discovery: --ip <phone> --port 7778");
     Console.WriteLine("      Force match IP: --match-ip <lan-ip> (keeps op9 port, usually 7777)");
+    Console.WriteLine("      Fighting probe: --team ct|tr  (default Spectator; Ct/Tr spawn killable pawn)");
     Console.WriteLine();
 
     var profileName = "probe";
     var autoPick = false;
+    var interactivePick = false;
     string? forceIp = null;
     string? forceMatchIpRaw = null;
     int? forcePort = null;
     int? forceIndex = null;
     var waitSeconds = 12;
+    var probeTeam = MatchTeam.Spectator;
 
     for (var i = 0; i < args.Length; i++)
     {
@@ -246,6 +550,10 @@ static async Task RunConnectAsClientAsync(string[] args)
         {
             case "--auto":
                 autoPick = true;
+                break;
+            case "--pick":
+            case "--interactive":
+                interactivePick = true;
                 break;
             case "--name" when i + 1 < args.Length:
                 profileName = args[++i];
@@ -268,6 +576,21 @@ static async Task RunConnectAsClientAsync(string[] args)
                 waitSeconds = Math.Clamp(w, 1, 120);
                 i++;
                 break;
+            case "--team" when i + 1 < args.Length:
+            {
+                var t = args[++i].Trim().ToLowerInvariant();
+                probeTeam = t switch
+                {
+                    "ct" or "2" or "counter" => MatchTeam.Ct,
+                    "tr" or "t" or "1" or "terror" or "terrorist" => MatchTeam.Tr,
+                    "spec" or "spectator" or "3" => MatchTeam.Spectator,
+                    _ => MatchTeam.Spectator,
+                };
+                if (t is not ("ct" or "2" or "counter" or "tr" or "t" or "1" or "terror"
+                    or "terrorist" or "spec" or "spectator" or "3"))
+                    Console.WriteLine($"[client] unknown --team '{t}' — using Spectator");
+                break;
+            }
             default:
                 Console.WriteLine($"[client] ignore arg: {args[i]}");
                 break;
@@ -305,10 +628,20 @@ static async Task RunConnectAsClientAsync(string[] args)
     {
         await using var disc = new LanDiscoveryClient();
         disc.Start();
+
+        // Interactive --pick waits the whole window so we can list every lobby that answered.
+        // Auto (default) returns on the first reply for a snappy connect.
+        var interactive = interactivePick && !autoPick && forceIndex is null && !Console.IsInputRedirected;
         Console.WriteLine(
             $"[client] probing discovery UDP {LanDiscoveryHost.DiscoveryPort} for {waitSeconds}s " +
             $"(hosting phone must be answering; join will use port from reply, usually {LanDiscoveryHost.DefaultGamePort}) …");
-        var found = await disc.WaitForLobbiesAsync(TimeSpan.FromSeconds(waitSeconds), minCount: 1);
+        var found = await disc.WaitForLobbiesAsync(
+            TimeSpan.FromSeconds(waitSeconds), minCount: 1, waitFullWindow: interactive);
+
+        // Silence discovery BEFORE printing the list / prompting so the RX/TX flood can't
+        // drown stdin (root cause of the "select never joins" hang) and stops probing traffic.
+        disc.Quiet();
+
         if (found.Count == 0)
         {
             Console.WriteLine();
@@ -340,17 +673,27 @@ static async Task RunConnectAsClientAsync(string[] args)
         if (forceIndex is not null)
         {
             pick = forceIndex.Value;
+            Console.WriteLine($"[client] --index {pick}");
         }
-        else if (autoPick || Console.IsInputRedirected)
+        else if (interactive && found.Count > 1)
         {
-            pick = 0;
-            Console.WriteLine("[client] auto-pick index 0");
+            pick = PromptForLobbyIndex(found.Count);
+            if (pick < 0)
+            {
+                Console.WriteLine("[client] cancelled");
+                return;
+            }
         }
         else
         {
-            Console.Write("Select index (default 0): ");
-            var line = Console.ReadLine();
-            pick = int.TryParse(line, out var n) ? n : 0;
+            // Default UX: auto-pick the first lobby so a bare `--client` never hangs forever.
+            // Interactive selection is opt-in via --pick.
+            pick = 0;
+            var why = autoPick ? "--auto"
+                : Console.IsInputRedirected ? "stdin not a TTY"
+                : interactivePick ? "only one lobby"
+                : "default (pass --pick to choose manually)";
+            Console.WriteLine($"[client] auto-pick index 0 ({why}) → {found[0].JoinEndpoint}");
         }
 
         if (pick < 0 || pick >= found.Count)
@@ -361,14 +704,21 @@ static async Task RunConnectAsClientAsync(string[] args)
         joinEp = found[pick].JoinEndpoint;
         if (forcePort is not null)
             joinEp = new IPEndPoint(joinEp.Address, forcePort.Value);
+        Console.WriteLine($"[client] Connecting to lobby [{pick}] {joinEp} …");
     }
 
-    using var client = new GameNetClient(profileName, saveCaptures: true, forceMatchIp: forceMatchIp);
+    using var client = new GameNetClient(
+        profileName, saveCaptures: true, forceMatchIp: forceMatchIp, probeTeam: probeTeam);
     client.Connect(joinEp);
 
-    Console.WriteLine("Logging host ops. On Play → follow op9 → Handshake → JoinRoom(Dedik).");
+    Console.WriteLine(
+        $"Logging host ops. probeTeam={probeTeam}" +
+        (probeTeam is MatchTeam.Ct or MatchTeam.Tr
+            ? " — after Found: team + Ct_Ct/Tr_Tr pawn + State (killable)."
+            : " — after Found: Spectator.") +
+        " On Play → follow op9 → Handshake → JoinRoom(Dedik).");
     Console.WriteLine("After Found: leave running — capture post-Found match RX. Captures → bin/.../captures/");
-    Console.WriteLine("Commands: status|quit");
+    Console.WriteLine("Commands: status|roster|quit");
     if (Console.IsInputRedirected)
     {
         await Task.Delay(Timeout.Infinite);
@@ -381,6 +731,11 @@ static async Task RunConnectAsClientAsync(string[] args)
         if (line is null) break;
         var cmd = line.Trim().ToLowerInvariant();
         if (cmd is "quit" or "exit") break;
+        if (cmd is "roster")
+        {
+            Console.WriteLine(client.Match?.DescribeRoster() ?? "[roster] match not connected yet");
+            continue;
+        }
         if (cmd is "status")
         {
             Console.WriteLine(
@@ -389,10 +744,13 @@ static async Task RunConnectAsClientAsync(string[] args)
                 $"match={(client.Match?.IsConnected == true ? client.Match.Endpoint?.ToString() : "not connected")} " +
                 $"joinOk={client.Match?.JoinSucceeded ?? false} " +
                 $"postJoinRx={client.Match?.PostJoinRxCount ?? 0} " +
+                $"probeTeam={probeTeam} " +
                 $"appId='{client.Match?.AppId ?? MatchAuth.AppId}' " +
                 $"roster='{client.Match?.RosterRoom ?? profileName}'");
+            if (client.Match is not null)
+                Console.WriteLine(client.Match.DescribeRoster());
+            continue;
         }
-        else
-            Console.WriteLine("status|quit");
+        Console.WriteLine("status|roster|quit");
     }
 }

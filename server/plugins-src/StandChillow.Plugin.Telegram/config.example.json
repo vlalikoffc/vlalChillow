@@ -1,0 +1,6 @@
+{
+  "url": "http://127.0.0.1:5267/state",
+  "interval_ms": 2000,
+  "enabled": true,
+  "timeout_ms": 1500
+}

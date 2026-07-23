@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>StandChillow.Server.Plugins</RootNamespace>
+    <AssemblyName>StandChillow.Server.Plugins</AssemblyName>
+    <Product>влалChillow</Product>
+    <Description>Stable plugin API for влалChillow LAN dedicated server. Plugins reference this only — never invent match opcodes.</Description>
+  </PropertyGroup>
+
+</Project>

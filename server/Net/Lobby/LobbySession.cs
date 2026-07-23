@@ -278,6 +278,10 @@ public sealed class LobbySession
         _ => "Лобби",
     };
 
+    /// <summary>
+    /// Host-side full roster text (all real members). For console/log use only — NOT sent to
+    /// clients, since it would reveal every peer and defeat the hide-peers 4-cap illusion.
+    /// </summary>
     public string BuildPlayerListMessage()
     {
         var roster = SnapshotRoster();
@@ -291,6 +295,21 @@ public sealed class LobbySession
             sb.Append(FormatStatus(status));
             sb.Append(')');
         }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Per-client player-list chat under the hide-peers illusion: only Server + the requesting
+    /// player, matching what that client sees in its JoinResponse roster (Server 0 + self 1).
+    /// Never lists other real peers, so the client 4-slot lobby view stays consistent.
+    /// </summary>
+    public string BuildIllusionPlayerListMessageFor(ConnectedPlayer self)
+    {
+        var status = GameInProgress ? PlayerLobbyStatus.InMatch : PlayerLobbyStatus.Lobby;
+        var sb = new System.Text.StringBuilder();
+        sb.Append("Текущие игроки в лобби:");
+        sb.Append('\n').Append(ServerPlayerName).Append('(').Append(FormatStatus(status)).Append(')');
+        sb.Append('\n').Append(self.Name).Append('(').Append(FormatStatus(self.Status)).Append(')');
         return sb.ToString();
     }
 }

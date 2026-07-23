@@ -48,6 +48,13 @@ public sealed partial class GameMatchHost : IDisposable
     private int _captureIndex;
     private int _serverTimeSeed;
 
+    /// <summary>
+    /// Match gap <c>C0</c>/<c>C1</c> — must follow lobby <c>GameModeId</c>/<c>SelectedLevels[0]</c>.
+    /// JoinRoomResponse previously hardcoded Ranked2v2/Sandstone, so /mode duel still loaded союзники.
+    /// </summary>
+    private string _matchGameModeId = LobbyPropKeys.DefaultGameModeId;
+    private string _matchSelectedLevel = LobbyPropKeys.DefaultSelectedLevel;
+
     // WorldObjectState flood control (same idea as GameMatchClient.AllowNoisyLog).
     private const int StateLogFirst = 8;
     private const int StateLogEveryK = 50;
@@ -65,6 +72,62 @@ public sealed partial class GameMatchHost : IDisposable
     private int _dropRpcRxSeen;
     private int _dropRpcRxSuppressed;
     private DateTime _lastDropRpcSummaryUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// userId → last fighting team before disconnect. Used to restore mid-match reconnects
+    /// (new actorNr after ActorLeft). Cleared on HardReset / successful restore / spectator fallback.
+    /// </summary>
+    private readonly Dictionary<string, MatchTeam> _reconnectTeams = new(StringComparer.Ordinal);
+
+    private static readonly TimeSpan ReconnectRestoreSettle = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan ReconnectRestoreTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Mid-match ChatManager text that looks like a lobby slash command (<c>/set start</c>, …).
+    /// Payload decode is length-prefixed UTF-8 from live ChatManager Rpc captures — not invented.
+    /// Lobby OpChat cannot see these; wire this from <see cref="GameNetHost"/>.
+    /// </summary>
+    public Action<IPAddress, string>? OnMatchChatSlashCommand { get; set; }
+
+    /// <summary>
+    /// Host-originated debug chat (Server nick) when <see cref="MatchHostSettings.DebugMatchChat"/>
+    /// is on. Wired from <see cref="GameNetHost.BroadcastConsoleChat"/> — same lobby OpChat path
+    /// phones already see (not silent slash commands).
+    /// </summary>
+    public Action<string>? OnServerDebugChat { get; set; }
+
+    /// <summary>
+    /// No-op unless <see cref="MatchHostSettings.DebugMatchChat"/>. Posts via
+    /// <see cref="OnServerDebugChat"/> (lobby OpChat as Server).
+    /// </summary>
+    private void PostServerDebugChat(string text)
+    {
+        if (!MatchHostSettings.DebugMatchChat) return;
+        text = text.Trim();
+        if (text.Length == 0) return;
+        try { OnServerDebugChat?.Invoke(text); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[match-host] debug-chat failed: {ex.Message}");
+        }
+    }
+
+    private static string DebugTeamTag(MatchTeam team) => team switch
+    {
+        MatchTeam.Tr => "T",
+        MatchTeam.Ct => "CT",
+        _ => "?",
+    };
+
+    private static string FormatRoundEndReasonRu(string reason) => reason switch
+    {
+        "wipe-ct" => "вайп CT",
+        "wipe-tr" => "вайп T",
+        "bomb-defuse" => "дефьюз",
+        "bomb-explode" or "bomb-explode-rpc" => "взрыв",
+        "timeout" => "тайм",
+        _ => reason,
+    };
 
     public GameMatchHost(string lobbyId, int port = DefaultMatchPort, IPAddress? advertiseHint = null)
     {
@@ -140,6 +203,84 @@ public sealed partial class GameMatchHost : IDisposable
     }
 
     /// <summary>
+    /// Push lobby mode/map into match gap props (<c>C0</c>/<c>C1</c>) before JoinRoom Found.
+    /// </summary>
+    public void SetMatchSelection(string gameModeId, string selectedLevel)
+    {
+        if (string.IsNullOrWhiteSpace(gameModeId))
+            gameModeId = LobbyPropKeys.DefaultGameModeId;
+        if (string.IsNullOrWhiteSpace(selectedLevel))
+            selectedLevel = LobbyPropKeys.DefaultSelectedLevel;
+
+        lock (_roomGate)
+        {
+            _matchGameModeId = gameModeId.Trim();
+            _matchSelectedLevel = selectedLevel.Trim();
+        }
+
+        Console.WriteLine(
+            $"[match-host] match selection C0='{_matchGameModeId}' C1='{_matchSelectedLevel}'");
+    }
+
+    public (string GameModeId, string SelectedLevel) GetMatchSelection()
+    {
+        lock (_roomGate)
+            return (_matchGameModeId, _matchSelectedLevel);
+    }
+
+    /// <summary>
+    /// Host-authored <c>SetProperty team</c> for the match peer (<c>/set team</c>).
+    /// Broadcasts like a normal team pick.
+    /// </summary>
+    public bool TryForceTeam(NetPeer peer, MatchTeam team, out string message)
+    {
+        if (!_peers.TryGetValue(peer, out var st) || st.Room is null || st.ActorNr == 0)
+        {
+            message = "не в матче — /set team только после JoinRoom";
+            return false;
+        }
+
+        if (team is not (MatchTeam.Tr or MatchTeam.Ct or MatchTeam.Spectator))
+        {
+            message = "team: ct | tr | spectator";
+            return false;
+        }
+
+        var room = st.Room;
+        var actorNr = st.ActorNr;
+        var value = LobbyVariant.FromByte((byte)team);
+        lock (_roomGate)
+            room.ActorProps[(actorNr, MatchRoomPropKeys.Team)] = value;
+
+        var outPkt = MatchCodec.BuildSetProperty(NextServerTime(), actorNr, MatchRoomPropKeys.Team, value);
+        BroadcastRoom(room, outPkt, tag: "match_tx_SetProperty_team_force");
+        Console.WriteLine($"[match-host] /set team → actor={actorNr} team={team} (host-forced)");
+
+        if (team is MatchTeam.Tr or MatchTeam.Ct)
+        {
+            TryBeginMatchFlowIfBothTeams(room);
+            TryAssignBomberOnTrJoin(room, actorNr);
+        }
+
+        message = $"team → {team} (actor={actorNr})";
+        return true;
+    }
+
+    /// <summary>Match peer by LAN IP (lobby and match use different UDP ports).</summary>
+    public bool TryForceTeamByIp(IPAddress ip, MatchTeam team, out string message)
+    {
+        foreach (var (p, _) in _peers)
+        {
+            if (p.Address is null) continue;
+            if (!p.Address.Equals(ip)) continue;
+            return TryForceTeam(p, team, out message);
+        }
+
+        message = "матч-peer с этим IP не найден (зайди в игру / дождись JoinRoom)";
+        return false;
+    }
+
+    /// <summary>
     /// Register/ensure the LAN match room under password key <see cref="LanCreateRoomPasswordKey"/>
     /// (<c>Dedik</c>). Host lookup is <c>fyi.boeh(password)</c> — room string is not the dict key.
     /// </summary>
@@ -179,18 +320,31 @@ public sealed partial class GameMatchHost : IDisposable
 
     private int _stateTickCounter;
 
+    /// <summary>
+    /// Host simulation tick — 128 Hz for wipe / fuse / phase-deadline detection.
+    /// Wire timers (fuse 40s, pause 6s, …) stay gold durations; only the poll cadence
+    /// is raised so decisive outcomes EnterRoundEnd on the same tick they become true.
+    /// </summary>
+    private static readonly TimeSpan HostTickPeriod = TimeSpan.FromMilliseconds(1000.0 / 128.0);
+
     private async Task PollLoop()
     {
+        Console.WriteLine(
+            $"[match-host] poll loop tickrate=128 Hz period={HostTickPeriod.TotalMilliseconds:0.###}ms " +
+            "(wipe/fuse/phase checks every tick; WorldObjectState thin ticks ~every 3rd)");
         while (!_cts.IsCancellationRequested)
         {
+            var tickStart = Environment.TickCount64;
             _manager.PollEvents();
             _stateTickCounter++;
-            // Phone WorldObjectState ≈50ms; PollLoop is 15ms → every 3rd poll.
-            if (_stateTickCounter % 3 == 0)
+            // Phone WorldObjectState ≈50ms; at 128 Hz ≈7.8ms → every 6th–7th poll ≈50ms.
+            if (_stateTickCounter % 6 == 0)
                 TickLivingPawnStates();
-            // Match flow (warmup→countdown→round) ~ every poll; cheap checks.
+            // Match flow every tick: wipe / fuse expiry / phase deadlines.
             TickMatchFlow();
-            try { await Task.Delay(15, _cts.Token); }
+            var elapsed = Environment.TickCount64 - tickStart;
+            var delayMs = (int)Math.Max(0, HostTickPeriod.TotalMilliseconds - elapsed);
+            try { await Task.Delay(delayMs, _cts.Token); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -339,6 +493,130 @@ public sealed partial class GameMatchHost : IDisposable
                 $"(logging first {DropRpcLogFirst} + every {DropRpcLogEveryK}th)");
         }
         return false;
+    }
+
+    /// <summary>
+    /// True when Dedik room has progressed past a clean lobby-ready WaitingPlayers (scores,
+    /// fighters, live phase, MatchOver, leftovers) — a second /play must tear down first.
+    /// </summary>
+    public bool HasStaleMatchState()
+    {
+        lock (_roomGate)
+        {
+            if (!_roomsByPassword.TryGetValue(LanCreateRoomPasswordKey, out var room))
+                return false;
+            if (room.Flow.Phase != MatchFlowPhase.WaitingPlayers)
+                return true;
+            if (room.Flow.RoundIndex != 0
+                || room.Flow.ScoreTr != 0
+                || room.Flow.ScoreCt != 0
+                || room.Flow.BombPlanted
+                || room.Flow.RoundEndCommittedRound != 0)
+                return true;
+            if (room.Actors.Count > 1)
+                return true;
+            if (room.LivingPawns.Count > 0 || room.TrackedRoundEntities.Count > 0)
+                return true;
+            if (room.RoomC2 > MatchC2States.WaitingPlayers)
+                return true;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Hard reset before a rematch /play: stop flow on old room, Destroy leftover entities,
+    /// drop match peers, replace Dedik room with a fresh WaitingPlayers host slot.
+    /// Does <b>not</b> rebind UDP 7777 (singleton). Evidence: dedicated rematch hang was
+    /// re-advertising op9 into MatchOver / mid-round state with stale actors/C2.
+    /// </summary>
+    public void HardResetMatchForNewStart(string reason)
+    {
+        Console.WriteLine(
+            $"[match-flow] tearing down previous match before start ({reason})");
+
+        MatchRoom? oldRoom;
+        List<NetPeer> peersToDrop;
+        List<short> pawnIds;
+        lock (_roomGate)
+        {
+            _roomsByPassword.TryGetValue(LanCreateRoomPasswordKey, out oldRoom);
+            peersToDrop = _peers
+                .Where(kv => kv.Value.Room is not null || kv.Value.ActorNr > 0 || kv.Value.Handshaken)
+                .Select(kv => kv.Key)
+                .ToList();
+            pawnIds = oldRoom?.LivingPawns.Keys.ToList() ?? new List<short>();
+        }
+
+        if (oldRoom is not null)
+        {
+            ClearBombAuthority(oldRoom, $"HardReset:{reason}");
+            lock (_roomGate)
+            {
+                oldRoom.Flow.PendingEndReason = null;
+                oldRoom.Flow.DeadActors.Clear();
+                oldRoom.Flow.PendingCombatDestroy.Clear();
+                oldRoom.Flow.Phase = MatchFlowPhase.MatchOver;
+            }
+            // Best-effort Destroy while peers may still be on the old scene.
+            DestroyTrackedRoundEntities(oldRoom, reason: "teardown");
+            foreach (var id in pawnIds)
+            {
+                var destroy = MatchCodec.BuildDestroyWorldObject(NextServerTime(), id);
+                var n = BroadcastInitReady(oldRoom, destroy, tag: "match_tx_DestroyWorldObject");
+                Console.WriteLine(
+                    $"[match-flow] round cleanup destroy id={id} name='LivingPawn' " +
+                    $"→ peers={n} reason=teardown");
+            }
+        }
+
+        foreach (var peer in peersToDrop)
+        {
+            try
+            {
+                if (_peers.TryGetValue(peer, out var st))
+                    ResetPeerStateForRematch(st);
+                peer.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[match-flow] teardown disconnect peer failed: {ex.Message}");
+            }
+        }
+
+        lock (_roomGate)
+        {
+            _roomsByPassword[LanCreateRoomPasswordKey] = CreateRoomWithServerHost(
+                LanCreateRoomPasswordKey, _lobbyId);
+            // Orphan any peer state still pointing at the old room instance.
+            foreach (var st in _peers.Values)
+                ResetPeerStateForRematch(st);
+        }
+
+        MatchHostSettings.MatchStartArmed = false;
+        lock (_roomGate)
+            _reconnectTeams.Clear();
+        Console.WriteLine("[match-flow] previous match cleared");
+    }
+
+    private static void ResetPeerStateForRematch(MatchPeerState st)
+    {
+        try { st.BootstrapTimeoutCts?.Cancel(); }
+        catch { /* ignore */ }
+        st.BootstrapTimeoutCts = null;
+        st.Room = null;
+        st.ActorNr = 0;
+        st.RosterName = null;
+        st.Handshaken = false;
+        st.UserId = null;
+        st.AppId = null;
+        st.BootstrapPending = false;
+        st.BootstrapSent = false;
+        st.JoinerUidSeen = false;
+        st.JoinerFromLobbySeen = false;
+        st.JoinerAvatarSeen = false;
+        st.JoinerPingSeen = false;
+        st.PendingReconnectTeam = null;
     }
 
     public void Dispose()

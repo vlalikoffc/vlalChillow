@@ -29,7 +29,7 @@ public sealed partial class GameMatchHost
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
-        ]);
+        ], reason: $"Prep Tr-join bomberId={bomberId}");
         Console.WriteLine(
             $"[match-host] match-flow: bomberId={bomberId} (Tr joined during Prep, was 0)");
     }
@@ -72,7 +72,7 @@ public sealed partial class GameMatchHost
             if (room.Flow.BomberActorNr > 0)
                 props.Add((MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(room.Flow.BomberActorNr)));
         }
-        BroadcastRoomProps(room, props);
+        BroadcastRoomProps(room, props, reason: "Prep spawn-extend 5s");
         Console.WriteLine(
             "[match-host] match-flow: Prep extended 5s — living fighter awaiting spawn " +
             $"(client Time refreshed; bomberId={(room.Flow.BomberActorNr)})");

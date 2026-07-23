@@ -17,9 +17,23 @@ public enum MatchFlowPhase : byte
     BombPlanted = 5,
     RoundEndPause = 6,
     MatchOver = 7,
+    // DeathMatch / TDM phases (C0=DeathMatch). Separate from Ranked2v2 bomb loop above —
+    // no prep / bomb / multi-round. See Modes/DeathMatch/GameMatchHost.DeathMatch.cs.
+    /// <summary>C2=21 WarmUp (<c>_startingDuration</c>) — phone gold ≈3s before Live.</summary>
+    DeathMatchWarmup = 8,
+    /// <summary>C2=30 continuous TDM live (5min); kills bump room TrScore/CtScore, no wipe.</summary>
+    DeathMatchLive = 9,
+    /// <summary>C2=200 end bag published (FinalWinTeam+MvpPlayer); holding before FinalHud.</summary>
+    DeathMatchEnded = 10,
+    /// <summary>C2=201 FinalHud published; holding before teardown C2=255.</summary>
+    DeathMatchFinalHud = 11,
 }
 
-/// <summary>Per-room match clock — C2 / Time / Round / scores / wipe state.</summary>
+/// <summary>Per-room match clock — C2 / Time / Round / scores / wipe state.
+/// Filled by observe-then-forward on RX (MATCH_ARCHITECTURE.md): <see cref="DeadActors"/>,
+/// <see cref="BombPlantedUtc"/>+fuse, <see cref="Phase"/> + <see cref="PhaseEndsUtc"/>
+/// (host C2; wipe/defuse/explode/plant override timers). Living pawns live on the room.
+/// </summary>
 public sealed class MatchFlowState
 {
     public MatchFlowPhase Phase { get; set; } = MatchFlowPhase.WaitingPlayers;
@@ -32,6 +46,19 @@ public sealed class MatchFlowState
     public int CoLossesTr { get; set; }
     public int CoLossesCt { get; set; }
     public bool BombPlanted { get; set; }
+    /// <summary>
+    /// UTC moment the host accepted a real <c>BombManager</c> plant Rpc during
+    /// <see cref="MatchFlowPhase.RoundLive"/> (fuse start). Explode only when
+    /// <c>BombPlanted</c> and <c>UtcNow &gt;= BombPlantedUtc + BombFuse</c> (~40s).
+    /// <see cref="DateTime.MinValue"/> = no fuse — never invent / re-anchor.
+    /// </summary>
+    public DateTime BombPlantedUtc { get; set; } = DateTime.MinValue;
+    /// <summary>
+    /// Legacy one-bomb/round latch. Must stay <c>false</c> — never defer PreStart/Prep
+    /// plants into Live (deferred leftovers invented C2=40 / free T wins). Cleared on
+    /// WarmUp / PreStart / HardReset / RoundEnd with the other bomb flags.
+    /// </summary>
+    public bool PendingBombPlant { get; set; }
     public int BomberActorNr { get; set; }
     /// <summary>
     /// Fighter actor nrs marked dead this round. Populated ONLY by a proven combat death —
@@ -54,6 +81,19 @@ public sealed class MatchFlowState
     public MatchTeam PendingWinner { get; set; }
     /// <summary>One 5s prep extension when a living fighter picked team but has no pawn yet.</summary>
     public bool PrepSpawnExtensionUsed { get; set; }
+    /// <summary>
+    /// Escalation: C2=31 combat bag already published this round (after C2=40 auto-plant gap).
+    /// Cleared on PreStart / RoundEnd.
+    /// </summary>
+    public bool EscalationCombatStarted { get; set; }
+    /// <summary>Escalation active plant site (0/1) — published as room <c>BombSite</c> on C2=22.</summary>
+    public byte EscalationBombSite { get; set; }
+    /// <summary>
+    /// <see cref="RoundIndex"/> that already committed a RoundEnd score bump. Prevents
+    /// double +1 when wipe/defuse/timeout race while phase is stuck or Prep still allows
+    /// combat signals. 0 = none committed this match.
+    /// </summary>
+    public int RoundEndCommittedRound { get; set; }
 }
 
 /// <summary>Shared wipe / spawn / alive-count rules for match flow.</summary>
@@ -61,14 +101,15 @@ public static class MatchFlowRules
 {
     /// <summary>
     /// Phases where a <b>proven combat death</b> (actor <c>death</c> prop) or an empty opposing
-    /// team (disconnect) can end the round. PreStart/Prep are included so a real kill or a
-    /// leaver still resolves — but a bare pawn Destroy must NOT reach here (that is a respawn).
+    /// team (disconnect, Live/BombPlanted only) can end the round. Prep allows wipe from
+    /// observed deaths; PreStart does <b>not</b> — empty-team wipe there invented free
+    /// RoundEnd scores after disconnect (latest.log rounds 6–8). Bare Destroy during
+    /// PreStart/Prep is still a respawn (see <see cref="DestroyMayBeCombatDeath"/>).
     /// </summary>
     public static bool AllowsWipeCheck(MatchFlowPhase phase) =>
-        phase is MatchFlowPhase.WarmupWillFinish
-            or MatchFlowPhase.PurchasePhase
-            or MatchFlowPhase.RoundLive
-            or MatchFlowPhase.BombPlanted;
+        phase is MatchFlowPhase.RoundLive
+            or MatchFlowPhase.BombPlanted
+            or MatchFlowPhase.PurchasePhase;
 
     /// <summary>
     /// Phases where a bare <c>DestroyWorldObject</c> may indicate a combat elimination.
@@ -77,9 +118,15 @@ public static class MatchFlowRules
     /// Create id, no round end), so a Destroy there is never a kill. Only during a live round
     /// does a Destroy with no respawn mean the fighter was eliminated.
     /// </summary>
-    public static bool DestroyMayBeCombatDeath(MatchFlowPhase phase) =>
+    public static bool DestroyMayBeCombatDeath(MatchFlowPhase phase, bool bombPlanted = false) =>
         phase is MatchFlowPhase.RoundLive
-            or MatchFlowPhase.BombPlanted;
+            or MatchFlowPhase.BombPlanted
+            // TDM: a pawn Destroy during live with no respawn is a fallback kill signal
+            // (primary is the actor death prop). Warmup Destroys are respawns, never kills.
+            or MatchFlowPhase.DeathMatchLive
+            // Escalation combat is C2=31 PurchasePhase with bomb already planted — Destroy
+            // there is a kill (MATCH_ESCALATION_PROBE). Ranked Prep keeps bombPlanted=false.
+            || (phase == MatchFlowPhase.PurchasePhase && bombPlanted);
 
     public static bool IsActorDead(
         MatchFlowState flow,
@@ -173,8 +220,13 @@ public static class MatchFlowRules
 
         var (aliveTr, aliveCt, totalTr, totalCt) = CountAliveFighters(flow, actorProps);
         var planted = bombPlanted || flow.BombPlanted;
+        // Empty-roster wipe only during Live/BombPlanted (real mid-round disconnect).
+        // Prep: require observed deaths (alive==0 with total>0) — do not invent RoundEnd
+        // from a missing opposing team during buy time.
+        var allowEmptyRosterWipe = flow.Phase is MatchFlowPhase.RoundLive
+            or MatchFlowPhase.BombPlanted;
 
-        if (totalTr > 0 && totalCt == 0)
+        if (allowEmptyRosterWipe && totalTr > 0 && totalCt == 0)
         {
             flow.PendingWinner = MatchTeam.Tr;
             flow.PendingEndReason = "wipe-ct";
@@ -183,7 +235,7 @@ public static class MatchFlowRules
             return true;
         }
 
-        if (totalCt > 0 && totalTr == 0)
+        if (allowEmptyRosterWipe && totalCt > 0 && totalTr == 0)
         {
             if (planted)
                 return false;

@@ -603,11 +603,19 @@ public sealed class LanDiscoveryClient : IAsyncDisposable
     private long _parseFails;
     private long _replies;
     private int _probeRoundLogged;
+    private volatile bool _quiet;
 
     public IReadOnlyList<DiscoveredLobby> Snapshot()
     {
         lock (_gate) return _lobbies.Values.OrderBy(l => l.FirstSeenUtc).ToList();
     }
+
+    /// <summary>
+    /// Silence all console logging and stop sending probes. Call this before an interactive
+    /// stdin prompt (or before connecting) so the discovery flood can't drown the console /
+    /// bury the "Select index" prompt. RX sockets stay alive but no longer print.
+    /// </summary>
+    public void Quiet() => _quiet = true;
 
     public long ProbesSent => Interlocked.Read(ref _probesSent);
     public long DatagramsReceived => Interlocked.Read(ref _datagrams);
@@ -645,15 +653,21 @@ public sealed class LanDiscoveryClient : IAsyncDisposable
         _probeTask = Task.Run(() => ProbeLoopAsync(_cts.Token));
     }
 
-    public async Task<IReadOnlyList<DiscoveredLobby>> WaitForLobbiesAsync(TimeSpan timeout, int minCount = 1)
+    /// <param name="waitFullWindow">
+    /// When false (default), returns as soon as <paramref name="minCount"/> lobbies are seen —
+    /// fast path for auto-pick. When true, keeps collecting for the whole window so an
+    /// interactive picker can show every lobby that answered.
+    /// </param>
+    public async Task<IReadOnlyList<DiscoveredLobby>> WaitForLobbiesAsync(
+        TimeSpan timeout, int minCount = 1, bool waitFullWindow = false)
     {
         var deadline = DateTime.UtcNow + timeout;
         var nextStatus = DateTime.UtcNow + TimeSpan.FromSeconds(2);
         while (DateTime.UtcNow < deadline)
         {
             var snap = Snapshot();
-            if (snap.Count >= minCount) return snap;
-            if (DateTime.UtcNow >= nextStatus)
+            if (!waitFullWindow && snap.Count >= minCount) return snap;
+            if (!_quiet && DateTime.UtcNow >= nextStatus)
             {
                 Console.WriteLine(
                     $"[client-disc] waiting… probes={ProbesSent} rx={DatagramsReceived} " +
@@ -676,6 +690,12 @@ public sealed class LanDiscoveryClient : IAsyncDisposable
         {
             try
             {
+                if (_quiet)
+                {
+                    // Paused before a stdin prompt / connect — stop flooding the network + console.
+                    await Task.Delay(250, ct);
+                    continue;
+                }
                 var logRound = Interlocked.Increment(ref _probeRoundLogged) <= 2;
                 foreach (var sock in _sockets)
                 {
@@ -764,18 +784,20 @@ public sealed class LanDiscoveryClient : IAsyncDisposable
             buf.SequenceEqual(LanDiscoveryHost.ProbeMagicSosalbolt))
         {
             var n = Interlocked.Increment(ref _echoes);
-            if (n <= 4)
+            if (!_quiet && n <= 4)
                 Console.WriteLine($"[client-disc] RX echo/probe from {from} len={buf.Length} hex={hex}");
             return;
         }
 
-        // Always log raw RX so flaky parse / unexpected payloads are visible.
-        Console.WriteLine($"[client-disc] RX from {from} len={buf.Length} hex={hex}");
+        // Always log raw RX so flaky parse / unexpected payloads are visible (unless quieted).
+        if (!_quiet)
+            Console.WriteLine($"[client-disc] RX from {from} len={buf.Length} hex={hex}");
 
         if (!LanDiscoveryInfo.TryDeserialize(buf, out var info))
         {
             Interlocked.Increment(ref _parseFails);
-            Console.WriteLine($"[client-disc] RX parse FAIL (not LanDiscoveryInfo) from {from}");
+            if (!_quiet)
+                Console.WriteLine($"[client-disc] RX parse FAIL (not LanDiscoveryInfo) from {from}");
             return;
         }
 
@@ -789,9 +811,10 @@ public sealed class LanDiscoveryClient : IAsyncDisposable
                 existing.Remote = from;
                 existing.LastSeenUtc = DateTime.UtcNow;
                 existing.HitCount++;
-                Console.WriteLine(
-                    $"[client-disc] RX again '{info.HostName}' / '{info.LevelName}' " +
-                    $"hits={existing.HitCount} join={from.Address}:{info.GamePort}");
+                if (!_quiet)
+                    Console.WriteLine(
+                        $"[client-disc] RX again '{info.HostName}' / '{info.LevelName}' " +
+                        $"hits={existing.HitCount} join={from.Address}:{info.GamePort}");
             }
             else
             {
