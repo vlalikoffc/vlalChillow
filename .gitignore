@@ -1,18 +1,38 @@
-*.apk
-server/bin/
-server/obj/
+# Build outputs
+**/bin/
+**/obj/
+*.dll
+*.pdb
+*.deps.json
+
+# Runtime / captures / logs
 **/captures/
 **/logs/
-.cursor/
+**/latest.log
+*.log
 
-# Large RE binaries / tool caches (docs + scripts are committed)
-decompiled/apk_extract/
-decompiled/tools/
-decompiled/inspector_out/
-decompiled/ghidra_proj/
-decompiled/cpp2il_*/
-decompiled/*.log
-decompiled/discovery_*.txt
-decompiled/serializer_types.txt
-decompiled/ghidra_analyze.log
-decompiled/ghidra_smoke.log
+# Secrets & local plugin config
+.env
+.env.*
+**/.env
+**/config.json
+!**/config.example.json
+
+# Reverse-engineering dumps (local only — not shipped)
+decompiled/
+original/
+*.apk
+*.aab
+*.so
+*.dat
+*.unity3d
+
+# IDE / agent tooling
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+
+# OS junk
+.DS_Store
+Thumbs.db
+*~

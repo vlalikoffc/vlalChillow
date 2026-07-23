@@ -227,6 +227,124 @@ public sealed partial class GameMatchHost
         // other actors' identity so joiner is not stuck on WaitingPlayers with empty world.
         SendMatchStateSnapshotToPeer(peer, room, excludeActorNr: joinerActorNr);
         SendLivingPawnSnapshotToPeer(peer, room, excludeOwnerActorNr: joinerActorNr);
+
+        // Abrupt reconnect into same match: re-force previous Tr/Ct after INIT (spawn path).
+        MaybeScheduleReconnectRestore(peer, room, joinerActorNr);
+    }
+
+    /// <summary>
+    /// After INIT: host-force remembered fighting team (same SetProperty team path as join),
+    /// wait ~5s for LivingPawn; on failure force Spectator. Evidence: team prop + joiner CWO.
+    /// </summary>
+    private void MaybeScheduleReconnectRestore(NetPeer peer, MatchRoom room, byte joinerActorNr)
+    {
+        if (!_peers.TryGetValue(peer, out var st))
+            return;
+        var team = st.PendingReconnectTeam;
+        if (team is not (MatchTeam.Tr or MatchTeam.Ct))
+            return;
+
+        st.PendingReconnectTeam = null;
+        var userId = st.UserId;
+        var actorNr = joinerActorNr;
+        Console.WriteLine(
+            $"[match-host] reconnect-restore: scheduled team={team} actor={actorNr} " +
+            $"userId='{userId}' settle={ReconnectRestoreSettle.TotalMilliseconds:0}ms " +
+            $"timeout={ReconnectRestoreTimeout.TotalSeconds:0}s");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(ReconnectRestoreSettle, _cts.Token).ConfigureAwait(false);
+                if (_cts.IsCancellationRequested)
+                    return;
+                if (!_peers.TryGetValue(peer, out var cur)
+                    || cur.Room != room
+                    || cur.ActorNr != actorNr)
+                {
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: ABORT actor={actorNr} — peer gone/replaced");
+                    return;
+                }
+
+                if (!TryForceTeam(peer, team.Value, out var msg))
+                {
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: force team FAILED actor={actorNr}: {msg}");
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: forced team={team} actor={actorNr} — " +
+                        "await joiner CreateWorldObject");
+                }
+
+                await Task.Delay(ReconnectRestoreTimeout, _cts.Token).ConfigureAwait(false);
+                if (_cts.IsCancellationRequested)
+                    return;
+                if (!_peers.TryGetValue(peer, out cur)
+                    || cur.Room != room
+                    || cur.ActorNr != actorNr)
+                {
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: peer left before timeout actor={actorNr}");
+                    if (userId is { } uidLeft)
+                    {
+                        lock (_roomGate)
+                            _reconnectTeams.Remove(uidLeft);
+                    }
+                    return;
+                }
+
+                bool hasPawn;
+                MatchTeam liveTeam = MatchTeam.None;
+                lock (_roomGate)
+                {
+                    hasPawn = room.LivingPawns.Values.Any(p => p.OwnerActorNr == actorNr);
+                    if (room.ActorProps.TryGetValue((actorNr, MatchRoomPropKeys.Team), out var tv)
+                        && tv.Kind == LobbyVariantKind.Byte)
+                        liveTeam = (MatchTeam)tv.Byte;
+                }
+
+                if (hasPawn && liveTeam == team)
+                {
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: OK actor={actorNr} team={liveTeam} " +
+                        "pawn present");
+                    if (userId is { } uidOk)
+                    {
+                        lock (_roomGate)
+                            _reconnectTeams.Remove(uidOk);
+                    }
+                    return;
+                }
+
+                Console.WriteLine(
+                    $"[match-host] reconnect-restore: FAILED actor={actorNr} " +
+                    $"team={liveTeam} hasPawn={hasPawn} → Spectator fallback");
+                if (TryForceTeam(peer, MatchTeam.Spectator, out var specMsg))
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: Spectator forced actor={actorNr} ({specMsg})");
+                else
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: Spectator force failed actor={actorNr}: {specMsg}");
+                if (userId is { } uidFail)
+                {
+                    lock (_roomGate)
+                        _reconnectTeams.Remove(uidFail);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                /* host dispose */
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[match-host] reconnect-restore: error actor={actorNr}: {FormatException(ex)}");
+            }
+        });
     }
 
     /// <summary>

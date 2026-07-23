@@ -1,5 +1,6 @@
 using System.Threading;
 using LiteNetLib;
+using StandChillow.LanServer.Net.Match;
 
 namespace StandChillow.LanServer.Net.Match.Host;
 
@@ -25,6 +26,12 @@ internal sealed class MatchPeerState
     public bool JoinerAvatarSeen { get; set; }
     public bool JoinerPingSeen { get; set; }
     public CancellationTokenSource? BootstrapTimeoutCts { get; set; }
+
+    /// <summary>
+    /// Mid-match reconnect: host will re-force this fighting team after INIT (same path as
+    /// inbound team SetProperty / <c>/set team</c>). Cleared after restore attempt or spectator fallback.
+    /// </summary>
+    public MatchTeam? PendingReconnectTeam { get; set; }
 
     public bool IsJoinerIdentityReady =>
         JoinerUidSeen && JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen);

@@ -5,11 +5,35 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <Product>влалChillow</Product>
+    <AssemblyTitle>влалChillow LAN Server</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageReference Include="LiteNetLib" Version="2.1.4" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Plugins\StandChillow.Server.Plugins\StandChillow.Server.Plugins.csproj" />
+  </ItemGroup>
+
+  <!-- Nested plugin API / src projects have their own csproj — do not compile them into the host. -->
+  <ItemGroup>
+    <Compile Remove="Plugins\StandChillow.Server.Plugins\**\*.cs" />
+    <Compile Remove="plugins-src\**\*.cs" />
+    <None Include="Plugins\StandChillow.Server.Plugins\**\*" Exclude="Plugins\StandChillow.Server.Plugins\**\bin\**;Plugins\StandChillow.Server.Plugins\**\obj\**" />
+    <None Include="plugins-src\**\*" Exclude="plugins-src\**\bin\**;plugins-src\**\obj\**" />
+  </ItemGroup>
+
+  <!-- Ensure plugins/ exists beside the built exe (drop DLLs here). -->
+  <Target Name="EnsurePluginsFolder" AfterTargets="Build">
+    <MakeDir Directories="$(OutputPath)plugins" />
+    <WriteLinesToFile
+      File="$(OutputPath)plugins\.keep"
+      Lines="Drop plugin DLLs here. See ../../Plugins/README.md"
+      Overwrite="false"
+      Condition="!Exists('$(OutputPath)plugins\.keep')" />
+  </Target>
 
 </Project>

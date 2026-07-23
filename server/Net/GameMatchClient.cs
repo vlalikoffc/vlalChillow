@@ -43,10 +43,13 @@ public sealed class GameMatchClient : IDisposable
     /// <summary>Cap WorldObjectState .bin captures so long matches do not fill disk.</summary>
     private const int MaxWorldObjectStateCaptures = 12;
     /// <summary>
-    /// If host bootstrap (C2=10) is slow/missing, still TX Spectator after this delay —
-    /// phone OBT may force CT on the host actor; probe always self-assigns Spectator on wire.
+    /// Spectator-only: if host bootstrap (C2=10) is slow/missing, still TX team=Spectator after this
+    /// delay. Fighting probes do NOT use a timer — they wait for a real peer pawn (see
+    /// <see cref="TryDetectPeerFighterFromCwo"/>).
     /// </summary>
-    private static readonly TimeSpan SpectatorFallbackDelay = TimeSpan.FromSeconds(2.5);
+    private static readonly TimeSpan TeamAssignFallbackDelay = TimeSpan.FromSeconds(2.5);
+    /// <summary>WorldObjectState tick while probe is a fighting pawn (killable).</summary>
+    private static readonly TimeSpan FightingStateInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>One JoinRoom attempt: room field + password field + why.</summary>
     private readonly record struct JoinCandidate(string Room, string Password, string Why);
@@ -84,8 +87,24 @@ public sealed class GameMatchClient : IDisposable
     private bool _joinInFlight;
     private byte? _localActorNr;
     private bool _bootstrapReady;
-    private bool _spectatorSent;
+    private bool _probeTeamSent;
+    private bool _probeSpawned;
+    private short _probePawnObjectId;
+    private byte _probePawnViewSeq;
+    private uint _probeStateSeq;
+    private CancellationTokenSource? _probeStateCts;
     private int _sceneManagersSeen;
+    // Fighter probe waits for a REAL peer pawn on the same team, then copies its spawn pose.
+    private readonly HashSet<short> _peerFighterPawnIds = new();
+    private short _activePeerPawnId;
+    private byte[]? _lastPeerCwoTrailing;
+    private bool _probeRespawnPending;
+    private byte _roomC2;
+    private (float X, float Y, float Z) _probeSpawnPos;
+    private (float X, float Y, float Z, float W) _probeSpawnQuat;
+    private bool _probeSpawnPosKnown;
+    private readonly MatchTeam _probeTeam;
+    private readonly MatchProbeDecode _decode = new();
     private DateTime _lastRxUtc = DateTime.UtcNow;
     private DateTime _lastIdleLogUtc = DateTime.UtcNow;
 
@@ -97,7 +116,8 @@ public sealed class GameMatchClient : IDisposable
         string? userId = null,
         string? roomId = null,
         string? gameModeId = null,
-        string? rosterRoom = null)
+        string? rosterRoom = null,
+        MatchTeam probeTeam = MatchTeam.Spectator)
     {
         _saveCaptures = saveCaptures;
         _onConnected = onConnected;
@@ -109,6 +129,9 @@ public sealed class GameMatchClient : IDisposable
         _gameModeId = gameModeId;
         // Live JoinRoom room field = roster nickname (illusion → self); not LobbyId.
         _rosterRoom = string.IsNullOrEmpty(rosterRoom) ? null : rosterRoom;
+        _probeTeam = probeTeam is MatchTeam.Tr or MatchTeam.Ct or MatchTeam.Spectator
+            ? probeTeam
+            : MatchTeam.Spectator;
         _joinCandidates = BuildJoinCandidates(_rosterRoom, _lobbyId, _gameModeId);
         _captureDir = Path.Combine(AppContext.BaseDirectory, "captures");
         if (_saveCaptures)
@@ -132,8 +155,19 @@ public sealed class GameMatchClient : IDisposable
             _joinInFlight = false;
             _localActorNr = null;
             _bootstrapReady = false;
-            _spectatorSent = false;
+            _probeTeamSent = false;
+            _probeSpawned = false;
+            _probePawnObjectId = 0;
+            _probePawnViewSeq = 0;
+            _probeStateSeq = 0;
+            StopProbeStateLoop();
             _sceneManagersSeen = 0;
+            _peerFighterPawnIds.Clear();
+            _activePeerPawnId = 0;
+            _lastPeerCwoTrailing = null;
+            _probeRespawnPending = false;
+            _roomC2 = 0;
+            _probeSpawnPosKnown = false;
             _lastRxUtc = DateTime.UtcNow;
             Console.WriteLine(
                 $"[match-net] CONNECTED to {peer.Address}:{peer.Port} (game channel, " +
@@ -361,9 +395,10 @@ public sealed class GameMatchClient : IDisposable
         Console.WriteLine(
             $"[match-net] still connected {peer.Address}:{peer.Port} " +
             $"joinOk={_joinSucceeded} joinAttempts={_joinAttempts} " +
-            $"actor={_localActorNr?.ToString() ?? "-"} spectatorSent={_spectatorSent} " +
+            $"actor={_localActorNr?.ToString() ?? "-"} teamSent={_probeTeamSent} spawned={_probeSpawned} " +
+            $"probeTeam={_probeTeam} peerFighters={_peerFighterPawnIds.Count} " +
             $"rx={_rxLogged} postJoinRx={_postJoinRx} idle={idle.TotalSeconds:0.0}s " +
-            $"(post-Found: capture RX; probe TX team=Spectator when bootstrap ready)");
+            $"(fighter probe spawns only when a peer {_probeTeam} pawn appears)");
     }
 
     /// <summary>
@@ -450,12 +485,14 @@ public sealed class GameMatchClient : IDisposable
         });
     }
 
+    /// <summary>Human decode roster (actors + objectId→owner). For console <c>roster</c>.</summary>
+    public string DescribeRoster() => _decode.FormatRoster();
+
     private void OnReceive(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod method)
     {
         var len = reader.AvailableBytes;
         var payload = reader.GetRemainingBytes();
         _lastRxUtc = DateTime.UtcNow;
-        var head = Convert.ToHexString(payload.AsSpan(0, Math.Min(payload.Length, 48)));
         var n = Interlocked.Increment(ref _rxLogged);
         var parsed = MatchCodec.TryParseEnvelope(
             payload, out var flags, out var opcode, out var serverTime, out var bodyOffset);
@@ -463,26 +500,53 @@ public sealed class GameMatchClient : IDisposable
         var noisy = parsed && opcode == MatchOpcode.WorldObjectState;
         var logDetail = !noisy || AllowNoisyLog();
 
-        if (logDetail)
-        {
-            Console.WriteLine(
-                $"[match-net] RX#{n} from {peer.Address}:{peer.Port} ch={channel} method={method} " +
-                $"len={len} flags={flags}{(serverTime is int st ? $" serverTime={st}" : "")} " +
-                $"op={opLabel} head={head}");
-        }
         if (len == 0)
             Console.WriteLine("[match-net] empty RX (LiteNetLib keepalive / zero-payload)");
+
         DumpCapture($"match_rx{n:D3}_{opLabel}", payload, opcode: parsed ? opcode : null);
 
-        if (!parsed) return;
+        if (!parsed)
+        {
+            Console.WriteLine(
+                $"[match-net] RX#{n} UNPARSED envelope len={len} " +
+                $"head={Convert.ToHexString(payload.AsSpan(0, Math.Min(payload.Length, 48)))}");
+            return;
+        }
+
         try
         {
+            if (logDetail)
+            {
+                var decoded = _decode.FormatPacket(
+                    "RX", n, flags, opcode, serverTime, payload, bodyOffset, includeNoisyDetail: true);
+                if (!string.IsNullOrEmpty(decoded))
+                    Console.WriteLine(decoded);
+            }
+            else if (noisy)
+            {
+                // Rate-limited WOS: still update object map quietly when possible.
+                TryNoteStateObjectQuiet(payload, bodyOffset);
+            }
+
             HandleMatchPayload(peer, payload, flags, opcode, bodyOffset, logDetail);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[match-net] decode error: {ex.Message}");
         }
+    }
+
+    private void TryNoteStateObjectQuiet(byte[] payload, int bodyOffset)
+    {
+        try
+        {
+            if (!MatchCodec.TryOpenBody(payload, out _, out _, out _, out var body))
+                return;
+            var r = new LobbyReader(body);
+            if (r.Remaining < 2) return;
+            _ = r.ReadInt16(); // id — map already known from CreateWorldObject
+        }
+        catch { /* ignore */ }
     }
 
     private void HandleMatchPayload(
@@ -497,10 +561,9 @@ public sealed class GameMatchClient : IDisposable
         {
             case MatchOpcode.HandshakeResponse:
             {
+                // Human decode already printed by FormatPacket.
                 var r = new LobbyReader(payload.AsSpan(bodyOffset));
                 var result = MatchCodec.ParseHandshakeResponseBody(r);
-                Console.WriteLine(
-                    $"[match-net] HandshakeResponse result={result} ({(byte)result}) flags={flags}");
                 if (result == HandshakeResult.Success)
                     SendJoinRoom(peer, "after HandshakeResponse Success");
                 else
@@ -513,26 +576,28 @@ public sealed class GameMatchClient : IDisposable
                 var r = new LobbyReader(payload.AsSpan(bodyOffset));
                 var body = MatchCodec.ParseJoinRoomResponseBody(r);
                 var name = MatchCodec.JoinRoomResultName(body.Result);
-                Console.WriteLine(
-                    $"[match-net] JoinRoomResponse result={name} ({(byte)body.Result}) " +
-                    $"actor={(body.ActorNr?.ToString() ?? "-")} " +
-                    $"msg='{body.Message ?? ""}' debug='{body.DebugMessage ?? ""}' " +
-                    $"hasProps={body.HasRoomProperties} bodyLen={payload.Length - bodyOffset}");
 
                 if (body.IsSuccess)
                 {
                     _joinSucceeded = true;
                     _localActorNr = body.ActorNr;
+                    _decode.SetLocalActor(body.ActorNr);
+                    if (body.ActorNr is { } self)
+                        _decode.NoteActor(self, _rosterRoom ?? "probe");
                     Console.WriteLine(
-                        "[match-net] JoinRoom Found — staying connected; logging ALL further " +
-                        "match RX/TX (ActorJoined=50, CreateWorldObject=200, WorldObjectRpc=203, …). " +
-                        "WorldObjectState rate-limited (first " + NoisyLogFirst +
-                        $" then every {NoisyLogEveryK}th / summary). " +
-                        "Probe will TX SetProperty team=Spectator (cux=3) after host bootstrap " +
-                        $"(C2=10) or {SpectatorFallbackDelay.TotalSeconds:0.#}s fallback — " +
-                        "phone OBT UI may hide Spectator; wire still has it. " +
-                        $"localActor={body.ActorNr?.ToString() ?? "(missing)"}");
-                    ScheduleSpectatorFallback(peer);
+                        "[match-net] JoinRoom Found — decode tags: MATCH=room/C2/Time/Score, " +
+                        "PLAYER=actor props + pawn State/Rpc, SCENE=managers. " +
+                        $"WorldObjectState rate-limited (first {NoisyLogFirst} + every {NoisyLogEveryK}th). " +
+                        $"probeTeam={_probeTeam} localActor={body.ActorNr?.ToString() ?? "(missing)"}");
+                    Console.WriteLine(_decode.FormatRoster());
+                    if (_probeTeam is MatchTeam.Ct or MatchTeam.Tr)
+                        Console.WriteLine(
+                            $"[probe] waiting for peer {_probeTeam}… (will self-assign team + spawn a " +
+                            $"'{MatchCodec.PawnTypeNameForTeam(_probeTeam)}' pawn AT the first real peer " +
+                            "fighter's position — no blind bootstrap-timer spawn)");
+                    else
+                        // Spectator has no pawn/visibility concern — assign team once bootstrap is ready.
+                        ScheduleSpectatorTeamAssign(peer);
                     break;
                 }
 
@@ -567,20 +632,15 @@ public sealed class GameMatchClient : IDisposable
             {
                 if (_joinSucceeded)
                     Interlocked.Increment(ref _postJoinRx);
-                TryNoteBootstrapFromSetProperties(payload, bodyOffset, flags);
-                if (logDetail)
-                    LogPostFoundOpcode(opcode, flags, payload, bodyOffset);
-                TrySendSpectator(peer, "after SetProperties");
+                TryNoteRoomPropsFromSetProperties(peer, payload, bodyOffset, flags);
+                TrySendSpectatorTeam(peer, "after SetProperties");
                 break;
             }
             case MatchOpcode.SetProperty:
             {
                 if (_joinSucceeded)
                     Interlocked.Increment(ref _postJoinRx);
-                if (logDetail)
-                    LogPostFoundOpcode(opcode, flags, payload, bodyOffset);
-                // Money often lands just before team assign in phone-host capture.
-                TrySendSpectator(peer, "after SetProperty");
+                TrySendSpectatorTeam(peer, "after SetProperty");
                 break;
             }
             case MatchOpcode.CreateWorldObject:
@@ -588,53 +648,58 @@ public sealed class GameMatchClient : IDisposable
                 if (_joinSucceeded)
                     Interlocked.Increment(ref _postJoinRx);
                 _sceneManagersSeen++;
-                // Phone-host bootstrap: 8 scene managers then C2=10. Count alone is a hint.
                 if (_sceneManagersSeen >= MatchSceneManagers.Bootstrap.Length)
                     MarkBootstrapReady("scene managers");
-                if (logDetail)
-                    LogPostFoundOpcode(opcode, flags, payload, bodyOffset);
-                TrySendSpectator(peer, "after CreateWorldObject");
+                // Fighter probe: detect a REAL peer pawn on our team + copy its spawn pose.
+                TryDetectPeerFighterFromCwo(peer, payload);
+                TrySendSpectatorTeam(peer, "after CreateWorldObject");
+                break;
+            }
+            case MatchOpcode.WorldObjectState:
+            {
+                if (_joinSucceeded)
+                    Interlocked.Increment(ref _postJoinRx);
+                // Fallback pose source when a peer fighter's CWO trailing had no parseable pose.
+                TryDetectPeerPositionFromState(peer, payload);
+                break;
+            }
+            case MatchOpcode.DestroyWorldObject:
+            {
+                if (_joinSucceeded)
+                    Interlocked.Increment(ref _postJoinRx);
+                TryHandlePeerPawnDestroy(peer, payload);
+                break;
+            }
+            case MatchOpcode.ActorJoinedEvent:
+            case MatchOpcode.ActorLeftEvent:
+            case MatchOpcode.WorldObjectRpc:
+            case MatchOpcode.SetInternalProperty:
+            case MatchOpcode.FetchServerTimeRequest:
+            case MatchOpcode.FetchServerTimeResponse:
+            {
+                if (_joinSucceeded)
+                    Interlocked.Increment(ref _postJoinRx);
                 break;
             }
             default:
             {
                 if (_joinSucceeded)
                     Interlocked.Increment(ref _postJoinRx);
-                if (!logDetail)
-                    break;
-                LogPostFoundOpcode(opcode, flags, payload, bodyOffset);
+                if (logDetail)
+                {
+                    // Unknown ops: FormatPacket already noted undecoded; keep short hex tail.
+                    var dumpLen = Math.Min(payload.Length, 64);
+                    Console.WriteLine(
+                        $"[match-net]   hex={Convert.ToHexString(payload.AsSpan(0, dumpLen))}" +
+                        (payload.Length > dumpLen ? "…" : ""));
+                }
                 break;
             }
         }
     }
 
-    private void LogPostFoundOpcode(
-        MatchOpcode opcode,
-        MatchFrameFlags flags,
-        byte[] payload,
-        int bodyOffset)
-    {
-        var bodyLen = payload.Length - bodyOffset;
-        var known = Enum.IsDefined(typeof(MatchOpcode), opcode)
-            && !string.Equals(MatchCodec.OpcodeName(opcode), $"op{(byte)opcode}", StringComparison.Ordinal);
-        var kind = MatchCodec.IsPostJoinTraffic(opcode)
-            ? "POST-FOUND"
-            : (known ? "known-op" : "UNKNOWN-op");
-        var dumpLen = Math.Min(payload.Length, 96);
-        var hex = Convert.ToHexString(payload.AsSpan(0, dumpLen));
-        Console.WriteLine(
-            $"[match-net] {kind} op={MatchCodec.OpcodeName(opcode)} ({(byte)opcode}) " +
-            $"flags={flags} bodyLen={bodyLen} " +
-            (bodyLen > 0
-                ? $"hex={hex}{(payload.Length > dumpLen ? "…" : "")}"
-                : "(header only)"));
-        if (!known)
-            Console.WriteLine(
-                "[match-net] opcode not in fuo DiffableCs map — keep bin capture; " +
-                "do not invent decode");
-    }
-
-    private void TryNoteBootstrapFromSetProperties(
+    private void TryNoteRoomPropsFromSetProperties(
+        NetPeer peer,
         byte[] payload,
         int bodyOffset,
         MatchFrameFlags flags)
@@ -650,19 +715,146 @@ public sealed class GameMatchClient : IDisposable
                 return;
             foreach (var (key, value) in props)
             {
-                if (key == MatchRoomPropKeys.C2
-                    && value.Kind == LobbyVariantKind.Byte
-                    && value.Byte == MatchHostActor.C2AfterManagers)
-                {
+                if (key != MatchRoomPropKeys.C2 || value.Kind != LobbyVariantKind.Byte)
+                    continue;
+                if (value.Byte == MatchHostActor.C2AfterManagers)
                     MarkBootstrapReady($"room C2={value.Byte}");
-                    return;
-                }
+                TryHandleProbeRoomC2(peer, value.Byte);
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[match-net] SetProperties bootstrap parse: {ex.Message}");
+            Console.WriteLine($"[match-net] SetProperties room parse: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Phase-aware probe respawn. Gold TDM: freeforall pawn must not survive into WarmUp/Live —
+    /// real clients Destroy+Create (385→386→387) while a stale probe id=257 stayed orphaned
+    /// ("alive" on team, no model/radar).
+    /// <list type="bullet">
+    /// <item>WarmUp(21): peers often keep the same pawn id — force Destroy+Create with a fresh
+    /// view id at the last peer pose.</item>
+    /// <item>Live(30): peers Destroy+recreate — do <b>not</b> Destroy here (races when peer Create
+    /// already arrived before this C2 bag). Follow <see cref="TryHandlePeerPawnDestroy"/> +
+    /// <see cref="TryDetectPeerFighterFromCwo"/> only.</item>
+    /// </list>
+    /// </summary>
+    private void TryHandleProbeRoomC2(NetPeer peer, byte newC2)
+    {
+        if (_probeTeam is not (MatchTeam.Ct or MatchTeam.Tr))
+            return;
+        if (newC2 == _roomC2)
+            return;
+
+        var prev = _roomC2;
+        _roomC2 = newC2;
+
+        if (newC2 != MatchC2States.WarmUp && newC2 != MatchC2States.DeathMatchLive)
+            return;
+
+        if (newC2 == MatchC2States.DeathMatchLive)
+        {
+            // Peer Destroy+Create owns Live respawn. Setting pending+Destroy here orphaned the probe
+            // when peer Create raced ahead of the C2=30 SetProperties bag.
+            Console.WriteLine(
+                $"[probe] phase C2 {prev}→{newC2} — await peer pawn Destroy+Create " +
+                $"(probe id={(_probeSpawned ? _probePawnObjectId.ToString() : "none")}, " +
+                $"peer id={_activePeerPawnId})");
+            return;
+        }
+
+        // WarmUp: force a fresh view id even when the peer keeps the same object id.
+        if (!_probeSpawned)
+        {
+            _probeRespawnPending = true;
+            Console.WriteLine(
+                $"[probe] phase C2 {prev}→{newC2} — not spawned yet, will spawn on peer CWO");
+            return;
+        }
+
+        Console.WriteLine(
+            $"[probe] phase C2 {prev}→{newC2} — destroying pawn id={_probePawnObjectId} for WarmUp respawn");
+        DestroyProbePawn(peer, $"phase C2={newC2}");
+        _probeRespawnPending = true;
+
+        if (_probeSpawnPosKnown)
+        {
+            SpawnOrRespawnProbeAtPeer(
+                peer,
+                null,
+                _probeSpawnPos.X, _probeSpawnPos.Y, _probeSpawnPos.Z,
+                _probeSpawnQuat.X, _probeSpawnQuat.Y, _probeSpawnQuat.Z, _probeSpawnQuat.W,
+                _lastPeerCwoTrailing,
+                $"phase C2={newC2} at last peer pose (peer id={_activePeerPawnId})");
+        }
+    }
+
+    /// <summary>
+    /// When a peer same-team fighter pawn is destroyed (phase respawn or combat death on host),
+    /// destroy our probe pawn too so the next peer CreateWorldObject triggers a fresh spawn.
+    /// </summary>
+    private void TryHandlePeerPawnDestroy(NetPeer peer, byte[] payload)
+    {
+        if (_probeTeam is not (MatchTeam.Ct or MatchTeam.Tr) || !_joinSucceeded)
+            return;
+        try
+        {
+            if (!MatchCodec.TryOpenBody(payload, out _, out var opcode, out _, out var body)
+                || opcode != MatchOpcode.DestroyWorldObject)
+                return;
+            var id = MatchCodec.ParseDestroyWorldObjectBody(new LobbyReader(body));
+            if (id != _activePeerPawnId && !_peerFighterPawnIds.Contains(id))
+                return;
+
+            Console.WriteLine(
+                $"[probe] peer pawn Destroy id={id} — destroying probe for respawn " +
+                $"(active peer id={_activePeerPawnId})");
+            _peerFighterPawnIds.Remove(id);
+            if (id == _activePeerPawnId)
+                _activePeerPawnId = 0;
+
+            if (_probeSpawned)
+                DestroyProbePawn(peer, $"peer pawn Destroy id={id}");
+            _probeRespawnPending = true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[probe] peer Destroy parse: {ex.Message}");
+        }
+    }
+
+    private void StopProbeStateLoop()
+    {
+        _probeStateCts?.Cancel();
+        _probeStateCts?.Dispose();
+        _probeStateCts = null;
+    }
+
+    private void DestroyProbePawn(NetPeer peer, string reason)
+    {
+        if (_probePawnObjectId == 0)
+            return;
+        if (peer.ConnectionState != ConnectionState.Connected)
+            return;
+
+        var id = _probePawnObjectId;
+        StopProbeStateLoop();
+        var destroy = MatchCodec.BuildClientDestroyWorldObject(id);
+        peer.Send(destroy, DeliveryMethod.ReliableOrdered);
+        var n = Interlocked.Increment(ref _txLogged);
+        Console.WriteLine($"[probe] DestroyWorldObject id={id} (reason={reason})");
+        DumpCapture($"match_tx{n:D3}_DestroyWorldObject_probe_{id}", destroy, MatchOpcode.DestroyWorldObject);
+
+        _probePawnObjectId = 0;
+        _probeSpawned = false;
+        _probeStateSeq = 0;
+    }
+
+    private short AllocateProbeViewId(byte actor)
+    {
+        _probePawnViewSeq++;
+        return (short)((actor << 7) | _probePawnViewSeq);
     }
 
     private void MarkBootstrapReady(string reason)
@@ -670,16 +862,16 @@ public sealed class GameMatchClient : IDisposable
         if (_bootstrapReady)
             return;
         _bootstrapReady = true;
-        Console.WriteLine($"[match-net] bootstrap ready ({reason}) — probe may TX team=Spectator");
+        Console.WriteLine($"[match-net] bootstrap ready ({reason}) — probe may TX team={_probeTeam}");
     }
 
-    private void ScheduleSpectatorFallback(NetPeer peer)
+    private void ScheduleSpectatorTeamAssign(NetPeer peer)
     {
         _ = Task.Run(async () =>
         {
             try
             {
-                await Task.Delay(SpectatorFallbackDelay, _cts.Token);
+                await Task.Delay(TeamAssignFallbackDelay, _cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -687,42 +879,332 @@ public sealed class GameMatchClient : IDisposable
             }
 
             if (!_bootstrapReady)
-                MarkBootstrapReady($"fallback {SpectatorFallbackDelay.TotalSeconds:0.#}s after Found");
-            TrySendSpectator(peer, "fallback timer");
+                MarkBootstrapReady($"fallback {TeamAssignFallbackDelay.TotalSeconds:0.#}s after Found");
+            TrySendSpectatorTeam(peer, "fallback timer");
         });
     }
 
     /// <summary>
-    /// ConnectAsClient is not a UI client — after Found + bootstrap, self-assign
-    /// <c>team=Spectator (3)</c> via client SetProperty (key <c>team</c>, fzq.Byte <c>FF03</c>).
-    /// OBT phone UI may hide Spectator; wire/protocol still has it (cux).
+    /// Spectator-only self-assign: after Found + bootstrap, TX <c>team=Spectator</c>. Spectators
+    /// have no pawn/model, so there is nothing to spawn and no peer to wait for. Fighting teams
+    /// go through <see cref="TryDetectPeerFighterFromCwo"/> → <see cref="SpawnOrRespawnProbeAtPeer"/> instead.
     /// </summary>
-    private void TrySendSpectator(NetPeer peer, string reason)
+    private void TrySendSpectatorTeam(NetPeer peer, string reason)
     {
-        if (_spectatorSent || !_joinSucceeded || !_bootstrapReady)
+        if (_probeTeam is MatchTeam.Ct or MatchTeam.Tr)
+            return; // fighters spawn only when a real peer pawn appears
+        if (_probeTeamSent || !_joinSucceeded || !_bootstrapReady)
             return;
         if (_localActorNr is not { } actor)
         {
-            Console.WriteLine(
-                "[match-net] probe → Spectator deferred: Found had no actorNr");
+            Console.WriteLine("[match-net] probe → Spectator deferred: Found had no actorNr");
             return;
         }
-
         if (peer.ConnectionState != ConnectionState.Connected)
             return;
 
-        _spectatorSent = true;
-        var payload = MatchCodec.BuildClientSetProperty(
+        _probeTeamSent = true;
+        SendProbeIdentityAndTeam(peer, actor, reason);
+        Console.WriteLine("[probe] team=Spectator is non-fighting — no pawn/State");
+    }
+
+    /// <summary>
+    /// Fighter probe trigger: when a REAL peer's fighting pawn (<c>Ct_Ct</c>/<c>Tr_Tr</c>) for the
+    /// team we want appears via <c>CreateWorldObject</c>, copy its spawn pose from the CWO trailing
+    /// and spawn the probe's pawn AT that position. Without a live peer fighter to anchor on, no
+    /// model/radar blip ever appeared (blind bootstrap-timer spawn used the wrong-map Sandstone
+    /// pose and fired before any team pawn existed). Pose comes from the peer's own CWO — not invented.
+    /// </summary>
+    private void TryDetectPeerFighterFromCwo(NetPeer peer, byte[] payload)
+    {
+        if (!_joinSucceeded)
+            return;
+        if (_probeTeam is not (MatchTeam.Ct or MatchTeam.Tr))
+            return;
+        try
+        {
+            if (!MatchCodec.TryOpenBody(payload, out _, out var opcode, out _, out var body)
+                || opcode != MatchOpcode.CreateWorldObject)
+                return;
+            var r = new LobbyReader(body);
+            var cwo = MatchCodec.ParseCreateWorldObjectBody(r);
+            var wantType = MatchCodec.PawnTypeNameForTeam(_probeTeam);
+            if (!string.Equals(cwo.TypeName, wantType, StringComparison.Ordinal))
+                return;
+            // Ignore our own future pawn (owner == our actor); accept any other owner.
+            if (cwo.OwnerActorNr is { } owner && _localActorNr is { } self && owner == self)
+                return;
+
+            var isNewPeerPawn = cwo.ObjectId != _activePeerPawnId;
+            var newPeer = _peerFighterPawnIds.Add(cwo.ObjectId);
+            if (isNewPeerPawn)
+            {
+                _activePeerPawnId = cwo.ObjectId;
+                _lastPeerCwoTrailing = cwo.Trailing.Length > 0 ? cwo.Trailing.ToArray() : null;
+            }
+            if (newPeer)
+                Console.WriteLine(
+                    $"[probe] peer {_probeTeam} pawn CWO id={cwo.ObjectId} owner=" +
+                    $"{cwo.OwnerActorNr?.ToString() ?? "-"} trail={cwo.Trailing.Length}B");
+
+            // Respawn when: first spawn, WarmUp pending, or peer Destroy+recreate (new object id).
+            var needSpawn = !_probeSpawned || _probeRespawnPending || isNewPeerPawn;
+            if (!needSpawn)
+                return;
+
+            if (isNewPeerPawn && _probeSpawned)
+                Console.WriteLine(
+                    $"[probe] peer pawn recreated id={cwo.ObjectId} — Destroy+re-Create probe " +
+                    $"(was id={_probePawnObjectId})");
+
+            if (MatchCodec.TryParsePawnSpawnTrailing(
+                    cwo.Trailing,
+                    out var x, out var y, out var z,
+                    out var qx, out var qy, out var qz, out var qw))
+            {
+                SpawnOrRespawnProbeAtPeer(
+                    peer, cwo.OwnerActorNr, x, y, z, qx, qy, qz, qw,
+                    cwo.Trailing.Length > 0 ? cwo.Trailing.ToArray() : null,
+                    $"peer CWO id={cwo.ObjectId} type={cwo.TypeName}");
+            }
+            else if (newPeer || _probeRespawnPending)
+            {
+                Console.WriteLine(
+                    $"[probe] peer pawn id={cwo.ObjectId} trailing had no parseable pose — " +
+                    "waiting for its WorldObjectState position");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[probe] peer CWO parse: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Fallback pose source: if a peer fighter's CWO trailing had no pose, use the position from
+    /// its first <c>WorldObjectState</c> tick. Only fires for object ids we already tagged as peer
+    /// fighters on our team (see <see cref="TryDetectPeerFighterFromCwo"/>).
+    /// </summary>
+    private void TryDetectPeerPositionFromState(NetPeer peer, byte[] payload)
+    {
+        if (!_joinSucceeded)
+            return;
+        if (_probeTeam is not (MatchTeam.Ct or MatchTeam.Tr))
+            return;
+        if (_peerFighterPawnIds.Count == 0)
+            return;
+        if (!_probeRespawnPending && _probeSpawned)
+            return;
+        try
+        {
+            if (!MatchCodec.TryOpenBody(payload, out _, out var opcode, out _, out var body)
+                || opcode != MatchOpcode.WorldObjectState)
+                return;
+            var r = new LobbyReader(body);
+            if (r.Remaining < 2 + 4 + 4 + 4 + 4 + 12)
+                return;
+            var id = r.ReadInt16();
+            if (!_peerFighterPawnIds.Contains(id))
+                return;
+            _ = r.ReadInt32(); // pad
+            _ = r.ReadInt32(); // seq
+            _ = r.ReadFloat(); // tick
+            _ = r.ReadInt32(); // pad
+            var x = r.ReadFloat();
+            var y = r.ReadFloat();
+            var z = r.ReadFloat();
+            // Skip an all-zero (uninitialised) pose — wait for a real position tick.
+            if (x == 0f && y == 0f && z == 0f)
+                return;
+            // No orientation in the standing-State header we decode — face the team default.
+            var q = _probeTeam == MatchTeam.Ct
+                ? MatchSceneManagers.PawnSpawn.SandstoneQuatCt
+                : MatchSceneManagers.PawnSpawn.SandstoneQuatTr;
+            SpawnOrRespawnProbeAtPeer(
+                peer, null, x, y, z, q.X, q.Y, q.Z, q.W,
+                _lastPeerCwoTrailing,
+                $"peer State id={id}");
+        }
+        catch { /* ignore — State layout is partially opaque */ }
+    }
+
+    /// <summary>
+    /// Fighter spawn/respawn anchored to a real peer's pose: SetProperty team (first spawn only),
+    /// then owner-encoded CreateWorldObject (<c>id=(actor&lt;&lt;7)|k</c>, k increments per Create),
+    /// then spawn RPC (<c>rpc=localActor</c>) + State loop. Phase transitions and peer pawn
+    /// Destroy+recreate must bump k — reusing id=257 across Live left an orphaned invisible pawn.
+    /// </summary>
+    private void SpawnOrRespawnProbeAtPeer(
+        NetPeer peer,
+        byte? peerActor,
+        float px, float py, float pz,
+        float qx, float qy, float qz, float qw,
+        byte[]? peerTrailing,
+        string source)
+    {
+        if (!_joinSucceeded)
+            return;
+        if (_probeTeam is not (MatchTeam.Ct or MatchTeam.Tr))
+            return;
+        if (_localActorNr is not { } actor)
+        {
+            Console.WriteLine("[probe] peer fighter seen but Found had no actorNr — cannot spawn");
+            return;
+        }
+        if (peer.ConnectionState != ConnectionState.Connected)
+            return;
+
+        var firstSpawn = !_probeTeamSent;
+        if (_probeSpawned)
+            DestroyProbePawn(peer, $"respawn before Create ({source})");
+
+        _probeSpawned = true;
+        _probeTeamSent = true;
+        _probeRespawnPending = false;
+        _probeSpawnPos = (px, py, pz);
+        _probeSpawnQuat = (qx, qy, qz, qw);
+        _probeSpawnPosKnown = true;
+
+        Console.WriteLine(
+            $"[probe] peer seen actor={peerActor?.ToString() ?? "?"} " +
+            $"pos=({px:0.##},{py:0.##},{pz:0.##}) — spawning here " +
+            $"(team={_probeTeam}, source={source})");
+
+        if (firstSpawn)
+            SendProbeIdentityAndTeam(peer, actor, source);
+
+        _probePawnObjectId = AllocateProbeViewId(actor);
+        var typeName = MatchCodec.PawnTypeNameForTeam(_probeTeam);
+        byte[] trailing;
+        if (peerTrailing is { Length: > 0 } pt
+            && MatchCodec.TryParsePawnSpawnTrailing(
+                pt, out _, out _, out _, out _, out _, out _, out _))
+        {
+            trailing = pt;
+            var tagNote = MatchCodec.TryReadPawnLoadoutTag(pt, out var tag) && tag.Length > 0
+                ? $" loadout='{tag}'"
+                : "";
+            Console.WriteLine(
+                $"[probe] using peer CWO trailing verbatim ({trailing.Length}B{tagNote})");
+        }
+        else
+        {
+            trailing = MatchCodec.BuildPawnSpawnPayload(px, py, pz, qx, qy, qz, qw);
+        }
+
+        var cwo = MatchCodec.BuildClientCreateWorldObject(
+            WorldObjectKind.Entity,
+            _probePawnObjectId,
+            typeName,
+            MatchSceneManagers.PlayerPawnFusTag,
+            ownerActorNr: actor,
+            trailingPayload: trailing);
+        peer.Send(cwo, DeliveryMethod.ReliableOrdered);
+        var n = Interlocked.Increment(ref _txLogged);
+        _decode.NoteObject(_probePawnObjectId, actor, typeName, WorldObjectKind.Entity);
+        Console.WriteLine(
+            $"[probe] CreateWorldObject id={_probePawnObjectId} (=(actor<<7)|{_probePawnViewSeq}, owner-encoded) " +
+            $"type='{typeName}' owner=actor={actor} pos=({px:0.##},{py:0.##},{pz:0.##}) " +
+            $"trail={trailing.Length}B head={Convert.ToHexString(cwo.AsSpan(0, Math.Min(cwo.Length, 32)))}");
+        DumpCapture($"match_tx{n:D3}_CreateWorldObject_{typeName}", cwo, MatchOpcode.CreateWorldObject);
+
+        var tickTime = Environment.TickCount / 1000.0;
+        var spawnRpc = MatchCodec.BuildClientWorldObjectRpc(
+            _probePawnObjectId,
+            rpcId: actor,
+            gaaTarget: 4,
+            field: 2,
+            timeValue: tickTime,
+            payload: MatchCodec.BuildPawnRpcSpawnTailPayload());
+        peer.Send(spawnRpc, DeliveryMethod.ReliableOrdered);
+        n = Interlocked.Increment(ref _txLogged);
+        Console.WriteLine(
+            $"[probe] WorldObjectRpc rpc={actor} id={_probePawnObjectId} owner=actor={actor} " +
+            "gaa=4 field=2 (post-create spawn RPC — rpc matches localActor like gold peers)");
+        DumpCapture($"match_tx{n:D3}_WorldObjectRpc_rpc{actor}", spawnRpc, MatchOpcode.WorldObjectRpc);
+
+        StartFightingStateLoop(peer);
+    }
+
+    /// <summary>
+    /// Identity subset a real joiner authors before its pawn CWO (gold "фейк влал" RX#165–167:
+    /// uid, badgeId, from_lobby) plus the <c>team</c> SetProperty. Shared by the spectator path and
+    /// the fighter spawn so the host + peers register the probe as a full player, not a bare actor.
+    /// </summary>
+    private void SendProbeIdentityAndTeam(NetPeer peer, byte actor, string reason)
+    {
+        SendProbeProp(peer, actor, MatchRoomPropKeys.Uid,
+            LobbyVariant.FromString(MatchHostActor.BootstrapUid), "uid");
+        SendProbeProp(peer, actor, MatchRoomPropKeys.BadgeId, LobbyVariant.FromInt(0), "badgeId");
+        SendProbeProp(peer, actor, MatchRoomPropKeys.FromLobby, LobbyVariant.FromBool(false), "from_lobby");
+
+        var teamPkt = MatchCodec.BuildClientSetProperty(
             actor,
             MatchRoomPropKeys.Team,
-            LobbyVariant.FromByte((byte)MatchTeam.Spectator));
-        peer.Send(payload, DeliveryMethod.ReliableOrdered);
+            LobbyVariant.FromByte((byte)_probeTeam));
+        peer.Send(teamPkt, DeliveryMethod.ReliableOrdered);
         var n = Interlocked.Increment(ref _txLogged);
+        _decode.NoteActor(actor, _rosterRoom ?? "probe", _probeTeam);
         Console.WriteLine(
-            $"[match-net] probe → Spectator (cux=3) actor={actor} via SetProperty team FF03 " +
-            $"(reason={reason}) TX#{n} len={payload.Length} " +
-            $"hex={Convert.ToHexString(payload)}");
-        DumpCapture($"match_tx{n:D3}_SetProperty_team_Spectator", payload, MatchOpcode.SetProperty);
+            $"[probe] team → {_probeTeam} actor={actor} ({_rosterRoom ?? "probe"}) " +
+            $"(reason={reason}) — SetProperty team len={teamPkt.Length}");
+        DumpCapture($"match_tx{n:D3}_SetProperty_team_{_probeTeam}", teamPkt, MatchOpcode.SetProperty);
+    }
+
+    /// <summary>
+    /// Client→host SetProperty (op101, flags=None) for a single actor prop, with a <c>[probe]</c>
+    /// log + capture. Used for the identity props a real joiner authors before its pawn CWO.
+    /// </summary>
+    private void SendProbeProp(NetPeer peer, byte actor, string key, LobbyVariant value, string label)
+    {
+        var pkt = MatchCodec.BuildClientSetProperty(actor, key, value);
+        peer.Send(pkt, DeliveryMethod.ReliableOrdered);
+        var n = Interlocked.Increment(ref _txLogged);
+        Console.WriteLine($"[probe] SetProperty {label} actor={actor} len={pkt.Length}");
+        DumpCapture($"match_tx{n:D3}_SetProperty_{label}", pkt, MatchOpcode.SetProperty);
+    }
+
+    private void StartFightingStateLoop(NetPeer peer)
+    {
+        StopProbeStateLoop();
+        _probeStateCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        var loopCts = _probeStateCts;
+        var objectId = _probePawnObjectId;
+        // Peer-anchored position (copied from the real teammate we spawned next to). Falls back to
+        // the Sandstone pose only if, somehow, we spawned without a known pose.
+        var pos = _probeSpawnPosKnown
+            ? _probeSpawnPos
+            : (_probeTeam == MatchTeam.Ct
+                ? MatchSceneManagers.PawnSpawn.SandstonePosCt
+                : MatchSceneManagers.PawnSpawn.SandstonePosTr);
+        _ = Task.Run(async () =>
+        {
+            Console.WriteLine(
+                $"[probe] State loop START id={objectId} pos=({pos.X:0.##},{pos.Y:0.##},{pos.Z:0.##}) " +
+                $"interval={FightingStateInterval.TotalMilliseconds:0}ms " +
+                "(thin standing pose at the peer's coords — the fat avatar/aim State layout is still " +
+                "opaque, so radar tracking may lag; the pawn appears at the peer-anchored spawn)");
+            while (!loopCts.Token.IsCancellationRequested
+                   && peer.ConnectionState == ConnectionState.Connected
+                   && _joinSucceeded
+                   && _probePawnObjectId == objectId)
+            {
+                try
+                {
+                    await Task.Delay(FightingStateInterval, loopCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                _probeStateSeq++;
+                var tickTime = (Environment.TickCount & int.MaxValue) / 1000f;
+                var state = MatchCodec.BuildWorldObjectStateStanding(
+                    objectId, _probeStateSeq, tickTime, pos.X, pos.Y, pos.Z);
+                peer.Send(state, DeliveryMethod.Unreliable);
+            }
+        });
     }
 
     /// <summary>
@@ -741,8 +1223,9 @@ public sealed class GameMatchClient : IDisposable
             _lastWosSummaryUtc = now;
             var suppressed = Interlocked.Exchange(ref _wosSuppressed, 0);
             Console.WriteLine(
-                $"[match-net] WorldObjectState summary: seen={n} suppressed≈{suppressed} " +
-                $"(logging first {NoisyLogFirst} + every {NoisyLogEveryK}th)");
+                $"[match-net] PLAYER WorldObjectState flood: seen={n} suppressed≈{suppressed} " +
+                $"(logging first {NoisyLogFirst} + every {NoisyLogEveryK}th — " +
+                "each State line shows owner actor/name; type roster|status)");
         }
         return false;
     }
@@ -776,6 +1259,7 @@ public sealed class GameMatchClient : IDisposable
 
     public void Dispose()
     {
+        StopProbeStateLoop();
         _cts.Cancel();
         try { Task.WhenAll(_tasks).Wait(800); } catch { /* ignore */ }
         _manager.Stop();

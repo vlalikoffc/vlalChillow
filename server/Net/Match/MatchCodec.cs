@@ -4,7 +4,32 @@ using StandChillow.LanServer.Net.Lobby;
 
 namespace StandChillow.LanServer.Net.Match;
 
-/// <summary>Chillow.Netcode match opcodes (<c>fuo</c>) — DiffableCs enum.</summary>
+/// <summary>
+/// Chillow.Netcode match opcodes (<c>fuo</c>) — DiffableCs enum.
+/// <para>
+/// The opcode is only the envelope tag; the per-op <b>parameters</b> live in the typed value codec
+/// (<see cref="LobbyWriter.WriteFzp"/> / <see cref="LobbyReader.ReadFzp"/>) — the <c>fzp/fzq</c>
+/// variant: <c>Bool=6, Int=1, Short=2, Double=5, Byte=255, Reference=10→{String=13, StringArray=14,
+/// PropertiesRecord=10, ByteArray=4, Null=255}</c>. That is why the ops below look like "shells":
+/// the keys (<c>death</c>, <c>kills</c>, <c>CtScore</c>, <c>C2</c>, <c>Time</c>, <c>FinalWinTeam</c>,
+/// …) are just strings, and every value flows through the one variant codec.
+/// </para>
+/// <para>
+/// Builder coverage (verified byte-identical to phone gold captures where noted):
+/// <list type="bullet">
+/// <item><c>101 SetProperty</c> / <c>100 SetProperties</c> — full. Death sequence
+///   <c>death</c>/<c>kills</c>/<c>fair_kills</c>/<c>score</c>/<c>CtScore</c>/<c>TrScore</c> are all
+///   <c>fzq.Int</c>; C2 bag = <c>int16 count + Time:Double(05) + C2:Byte(ff)</c> — both match gold.</item>
+/// <item><c>50 ActorJoinedEvent</c> / <c>51 ActorLeftEvent</c> / <c>102 SetInternalProperty</c> (nick) — full.</item>
+/// <item><c>200 CreateWorldObject</c> / <c>201 DestroyWorldObject</c> / <c>203 WorldObjectRpc</c>
+///   (incl. <see cref="BuildRadarManagerDeathRefreshRpc"/>) / <c>204 WorldObjectState</c> — full for the pawn/death path.</item>
+/// </list>
+/// Remaining stubs (NOT death-HUD related, intentionally not faked): <c>FinalWinTeam.FinalPlayers</c>
+/// inner ByteArray layout (match-end scoreboard, omitted) and <c>202 ReCreateSceneManager</c> 2B body
+/// (undecoded; only seen at phase transitions, never in a kill). No <c>205 CustomEvent</c> is seen on
+/// the wire, and the dedicated host logged <b>zero</b> unhandled opcodes across the death sessions.
+/// </para>
+/// </summary>
 public enum MatchOpcode : byte
 {
     HandshakeRequest = 0,
@@ -501,6 +526,38 @@ public static class MatchCodec
         w.WriteByte((byte)MatchFrameFlags.HasServerTime);
         w.WriteByte((byte)MatchOpcode.CreateWorldObject);
         w.WriteInt32(serverTime);
+        WriteCreateWorldObjectBody(w, kind, objectId, typeName, fusTag, ownerActorNr, trailingPayload);
+        return w.ToArray();
+    }
+
+    /// <summary>
+    /// Client→host CreateWorldObject: flags=<c>None</c>, no server time
+    /// (live joiner <c>*_CreateWorldObject_len59.bin</c>).
+    /// </summary>
+    public static byte[] BuildClientCreateWorldObject(
+        WorldObjectKind kind,
+        short objectId,
+        string typeName,
+        byte fusTag,
+        byte? ownerActorNr = null,
+        byte[]? trailingPayload = null)
+    {
+        var w = new LobbyWriter();
+        w.WriteByte((byte)MatchFrameFlags.None);
+        w.WriteByte((byte)MatchOpcode.CreateWorldObject);
+        WriteCreateWorldObjectBody(w, kind, objectId, typeName, fusTag, ownerActorNr, trailingPayload);
+        return w.ToArray();
+    }
+
+    private static void WriteCreateWorldObjectBody(
+        LobbyWriter w,
+        WorldObjectKind kind,
+        short objectId,
+        string typeName,
+        byte fusTag,
+        byte? ownerActorNr,
+        byte[]? trailingPayload)
+    {
         w.WriteByte((byte)kind);
         if (ownerActorNr is { } owner)
         {
@@ -514,7 +571,6 @@ public static class MatchCodec
         w.WriteByte(fusTag);
         if (trailingPayload is { Length: > 0 } payload)
             w.WriteBytes(payload);
-        return w.ToArray();
     }
 
     /// <summary>Build WeaponDropManager / GrenadeManager trailing catalog: int32 count + id bytes.</summary>
@@ -533,7 +589,8 @@ public static class MatchCodec
         float posX, float posY, float posZ,
         float quatX, float quatY, float quatZ, float quatW,
         byte flags = MatchSceneManagers.PawnSpawn.Flags,
-        byte rotFlags = MatchSceneManagers.PawnSpawn.RotFlags)
+        byte rotFlags = MatchSceneManagers.PawnSpawn.RotFlags,
+        string loadoutTag = "")
     {
         var w = new LobbyWriter();
         w.WriteByte(flags);
@@ -549,15 +606,24 @@ public static class MatchCodec
         w.WriteBytes(new byte[8]); // eight zero bytes observed after u8=100
         w.WriteByte(MatchSceneManagers.PawnSpawn.TrailingU8B);
         w.WriteFloat(MatchSceneManagers.PawnSpawn.TrailingFloat);
-        w.WriteByte(MatchSceneManagers.PawnSpawn.TrailingU8C);
+        // Final field = length-prefixed loadout tag = COSMETICS ONLY (the agent/skins the player
+        // has equipped in their locker — a look). It is NOT a spawn/mesh-activation signal and NOT
+        // the TDM buy-menu weapon pick: gold player_1547 spawns fully visible + killable with an
+        // EMPTY tag, so visibility/radar/damage never depend on it. Empty ("") writes a single 0x00
+        // (varint 0) — byte-identical to the old default 45B trailing (TrailingU8C=0). A gold tag
+        // (AgentCTLincoln / AgentTMarco) only changes the equipped look.
+        w.WriteString(loadoutTag);
         return w.ToArray();
     }
 
     /// <summary>
     /// Sandstone spawn trailing from phone-host capture (codec-built).
-    /// Uses Tr or Ct live spawn pose; defaults to Tr for back-compat.
+    /// Uses Tr or Ct live spawn pose; defaults to Tr for back-compat. Optional
+    /// <paramref name="loadoutTag"/> is the agent/cosmetic display tag (see
+    /// <see cref="BuildPawnSpawnPayload"/>): empty = default character; a gold tag gives a
+    /// visible, collidable model.
     /// </summary>
-    public static byte[] BuildSandstonePawnSpawnPayload(MatchTeam team = MatchTeam.Tr)
+    public static byte[] BuildSandstonePawnSpawnPayload(MatchTeam team = MatchTeam.Tr, string loadoutTag = "")
     {
         var p = team == MatchTeam.Ct
             ? MatchSceneManagers.PawnSpawn.SandstonePosCt
@@ -565,7 +631,7 @@ public static class MatchCodec
         var q = team == MatchTeam.Ct
             ? MatchSceneManagers.PawnSpawn.SandstoneQuatCt
             : MatchSceneManagers.PawnSpawn.SandstoneQuatTr;
-        return BuildPawnSpawnPayload(p.X, p.Y, p.Z, q.X, q.Y, q.Z, q.W);
+        return BuildPawnSpawnPayload(p.X, p.Y, p.Z, q.X, q.Y, q.Z, q.W, loadoutTag: loadoutTag);
     }
 
     /// <summary>Wire prefab name for a fighting team (Tr_Tr / Ct_Ct).</summary>
@@ -574,6 +640,21 @@ public static class MatchCodec
         MatchTeam.Ct => MatchSceneManagers.PlayerPawnNameCt,
         MatchTeam.Tr => MatchSceneManagers.PlayerPawnNameTr,
         _ => throw new ArgumentOutOfRangeException(nameof(team), team, "No fighting pawn for team"),
+    };
+
+    /// <summary>
+    /// Gold <b>cosmetics-only</b> tag for a fighting team — the length-prefixed string appended
+    /// after the pawn spawn pose. It is just the agent/skins equipped in the player's locker (a
+    /// look); it is <b>NOT</b> a spawn/visibility signal and <b>NOT</b> the TDM buy-menu weapon
+    /// pick. An empty tag still spawns a fully visible, killable pawn (gold <c>player_1547</c>), so
+    /// this is optional. Values are gold-observed (Ct <c>AgentCTLincoln</c>, Tr <c>AgentTMarco</c>)
+    /// — re-built via the codec, not a capture replay.
+    /// </summary>
+    public static string PawnAgentTagForTeam(MatchTeam team) => team switch
+    {
+        MatchTeam.Ct => MatchSceneManagers.PawnAgentTagCt,
+        MatchTeam.Tr => MatchSceneManagers.PawnAgentTagTr,
+        _ => "",
     };
 
     /// <summary>
@@ -594,6 +675,38 @@ public static class MatchCodec
         w.WriteByte((byte)MatchFrameFlags.HasServerTime);
         w.WriteByte((byte)MatchOpcode.WorldObjectRpc);
         w.WriteInt32(serverTime);
+        WriteWorldObjectRpcBody(w, objectId, rpcId, gaaTarget, field, timeValue, payload);
+        return w.ToArray();
+    }
+
+    /// <summary>
+    /// Client→host WorldObjectRpc: flags=<c>None</c>, no server time
+    /// (live <c>*_WorldObjectRpc_len30.bin</c>).
+    /// </summary>
+    public static byte[] BuildClientWorldObjectRpc(
+        short objectId,
+        byte rpcId,
+        byte gaaTarget,
+        short field,
+        double timeValue,
+        byte[]? payload = null)
+    {
+        var w = new LobbyWriter();
+        w.WriteByte((byte)MatchFrameFlags.None);
+        w.WriteByte((byte)MatchOpcode.WorldObjectRpc);
+        WriteWorldObjectRpcBody(w, objectId, rpcId, gaaTarget, field, timeValue, payload);
+        return w.ToArray();
+    }
+
+    private static void WriteWorldObjectRpcBody(
+        LobbyWriter w,
+        short objectId,
+        byte rpcId,
+        byte gaaTarget,
+        short field,
+        double timeValue,
+        byte[]? payload)
+    {
         w.WriteInt16(objectId);
         w.WriteByte(rpcId);
         w.WriteByte(gaaTarget);
@@ -601,6 +714,115 @@ public static class MatchCodec
         w.WriteDouble(timeValue);
         if (payload is { Length: > 0 } p)
             w.WriteBytes(p);
+    }
+
+    /// <summary>
+    /// Master combat-death <b>RadarManager</b> refresh — <c>WorldObjectRpc</c> on the RadarManager
+    /// scene object, <c>Rpc(7)</c> = <c>oet(dwa)</c> (0-payload full radar/occlusion rebuild).
+    /// Phone gold <c>/tmp/tdm-probe.log</c>: every kill brackets the victim <c>Destroy</c>+<c>death</c>
+    /// with two of these (RX#3786/3793, RX#4266/4269 — <c>gaa=3</c>, <c>field=7</c>, no payload).
+    /// The master authors this (scene object is <c>owner=no-owner</c>); the dedicated host omitting it
+    /// left the victim's pawn destroyed but the death/respawn view never engaging. The <c>rpc</c> byte
+    /// is a per-call value the client tolerates (gold used 1/2, our relayed client RPCs use 3); we send
+    /// the host's <c>rpc=1</c> convention. Same wire layout as any WorldObjectRpc — not a capture replay.
+    /// </summary>
+    public static byte[] BuildRadarManagerDeathRefreshRpc(int serverTime) =>
+        BuildWorldObjectRpc(
+            serverTime,
+            objectId: MatchSceneManagers.RadarManagerObjectId,
+            rpcId: 1,
+            gaaTarget: 3,
+            field: 7,
+            timeValue: serverTime / 1000.0,
+            payload: null);
+
+    /// <summary>
+    /// BombManager plant pose payload — evidenced from dedicated-host RX
+    /// <c>20260723_023555_189</c> (id=8 rpc=2 field=1 payloadLen=28):
+    /// <c>i16</c> planter pawn object id + two typed Vector3 (<c>0x11</c> + 3×float LE each) =
+    /// position then up (0,0,1). Rebuilt via codec — not a capture replay.
+    /// BombManager <c>nyo</c>/<c>nyu</c> Rpc(1)/Rpc(2) args are <c>(short, Vector3, Vector3)</c>.
+    /// </summary>
+    public const byte BombPlantVector3TypeCode = 0x11;
+
+    public static byte[] BuildBombManagerPlantPosePayload(
+        short planterPawnObjectId,
+        float posX, float posY, float posZ,
+        float upX = 0f, float upY = 0f, float upZ = 1f)
+    {
+        var w = new LobbyWriter();
+        w.WriteInt16(planterPawnObjectId);
+        w.WriteByte(BombPlantVector3TypeCode);
+        w.WriteFloat(posX);
+        w.WriteFloat(posY);
+        w.WriteFloat(posZ);
+        w.WriteByte(BombPlantVector3TypeCode);
+        w.WriteFloat(upX);
+        w.WriteFloat(upY);
+        w.WriteFloat(upZ);
+        return w.ToArray();
+    }
+
+    /// <summary>
+    /// Host-authored BombManager plant rpc-token=2 / <c>field=1</c> — same method clients use
+    /// for plant pose (Escalation <c>cme</c> → <c>BombManager.nyy</c> → CallRpc). Wire method
+    /// id is <c>field</c> (= DiffableCs <c>[Rpc(1)] nyo</c>); <c>rpc</c> byte is a sender token.
+    /// <c>gaa=2</c> (Others) matches live plant captures; host broadcasts to all INIT-ready peers.
+    /// </summary>
+    public static byte[] BuildBombManagerPlantPoseRpc(
+        int serverTime,
+        short planterPawnObjectId,
+        float posX, float posY, float posZ) =>
+        BuildWorldObjectRpc(
+            serverTime,
+            objectId: MatchFlowTestParams.BombManagerObjectId,
+            rpcId: 2,
+            gaaTarget: 2,
+            field: 1,
+            timeValue: serverTime / 1000.0,
+            payload: BuildBombManagerPlantPosePayload(planterPawnObjectId, posX, posY, posZ));
+
+    /// <summary>
+    /// Escalation host auto-plant — <c>BombManager</c> field=3 (gold
+    /// <c>MATCH_ESCALATION_PROBE.md</c>): <c>i32(-2)</c> planter sentinel + typed Vector3 +
+    /// float 0. Rebuilt via codec — not a capture replay. <c>rpc=1 gaa=2</c> matches gold RX.
+    /// </summary>
+    public static byte[] BuildBombManagerEscalationAutoPlantPayload(
+        float posX, float posY, float posZ)
+    {
+        var w = new LobbyWriter();
+        w.WriteInt32(EscalationFlowParams.AutoPlantPlanterSentinel);
+        w.WriteByte(BombPlantVector3TypeCode);
+        w.WriteFloat(posX);
+        w.WriteFloat(posY);
+        w.WriteFloat(posZ);
+        w.WriteFloat(0f);
+        return w.ToArray();
+    }
+
+    public static byte[] BuildBombManagerEscalationAutoPlantRpc(
+        int serverTime,
+        float posX, float posY, float posZ) =>
+        BuildWorldObjectRpc(
+            serverTime,
+            objectId: MatchFlowTestParams.BombManagerObjectId,
+            rpcId: 1,
+            gaaTarget: 2,
+            field: MatchFlowTestParams.BombManagerFieldEscalationAutoPlant,
+            timeValue: serverTime / 1000.0,
+            payload: BuildBombManagerEscalationAutoPlantPayload(posX, posY, posZ));
+
+    /// <summary>
+    /// ReCreateSceneManager (<c>fuo=202</c>) — flags + opcode + stime + ushort objectId.
+    /// Gold Escalation PreStart: ids 4/5/6/8 (<c>MATCH_ESCALATION_PROBE.md</c>).
+    /// </summary>
+    public static byte[] BuildReCreateSceneManager(int serverTime, short objectId)
+    {
+        var w = new LobbyWriter();
+        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
+        w.WriteByte((byte)MatchOpcode.ReCreateSceneManager);
+        w.WriteInt32(serverTime);
+        w.WriteInt16(objectId);
         return w.ToArray();
     }
 
@@ -704,6 +926,19 @@ public static class MatchCodec
     public static short ParseDestroyWorldObjectBody(LobbyReader r) => r.ReadInt16();
 
     /// <summary>
+    /// Client→host DestroyWorldObject: flags=<c>None</c>, no server time
+    /// (live <c>20260722_011733_155_match_op201_len4.bin</c>: <c>00 C9 81 01</c> = id=385).
+    /// </summary>
+    public static byte[] BuildClientDestroyWorldObject(short objectId)
+    {
+        var w = new LobbyWriter();
+        w.WriteByte((byte)MatchFrameFlags.None);
+        w.WriteByte((byte)MatchOpcode.DestroyWorldObject);
+        w.WriteInt16(objectId);
+        return w.ToArray();
+    }
+
+    /// <summary>
     /// Decode pawn CreateWorldObject trailing (45B) into pose — same layout as
     /// <see cref="BuildPawnSpawnPayload"/>.
     /// </summary>
@@ -726,6 +961,32 @@ public static class MatchCodec
         quatZ = r.ReadFloat();
         quatW = r.ReadFloat();
         return true;
+    }
+
+    /// <summary>
+    /// Read the client-authored loadout/character tag appended after the 44B pawn spawn pose
+    /// block (length-prefixed string; empty on a default 45B trailing, e.g. <c>"AgentCTLincoln"</c>
+    /// on a 59B Ct trailing). Diagnostics only — the trailing is relayed <b>verbatim</b>, never
+    /// rebuilt from this. Returns false if the trailing is too short or the tag can't be read.
+    /// </summary>
+    public static bool TryReadPawnLoadoutTag(ReadOnlySpan<byte> trailing, out string tag)
+    {
+        tag = "";
+        // Pose block is 44B; the loadout string's length prefix sits at offset 44 (the last byte
+        // of the canonical 45B block is the 0-length prefix of an empty tag).
+        const int poseLen = 44;
+        if (trailing.Length < poseLen + 1)
+            return false;
+        try
+        {
+            var r = new LobbyReader(trailing.Slice(poseLen).ToArray());
+            tag = r.ReadString();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public readonly record struct ParsedCreateWorldObject(

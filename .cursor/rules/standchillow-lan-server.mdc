@@ -1,0 +1,73 @@
+---
+description: влалChillow LAN C# server + authorized client reverse for protocol
+alwaysApply: true
+---
+
+# StandChillow — LAN server + client reverse
+
+Own game **StandChillow** (Unity IL2CPP ~2022). Chillow authorized reverse of the client so we can build a real **LAN dedicated server** in C# (client currently has LAN multiplayer, no proper dedicated server).
+
+Team: **влал** = reverse + C# server; **chillow** = game owner / client.
+
+## Goals
+
+- C# server in `server/` — phones auto-discover it on **local LAN**
+- Chat commands to change modes / control match (expand later)
+- Client reverse dumps in a **separate folder** (e.g. `decompiled/` / `original/`) — protocol, discovery, RPCs
+
+## Protocol fidelity (critical)
+
+- **Do not invent** protocol fields, opcodes, auth strings, envelope layout, or discovery packets for the dedicated server.
+- Everything the host/server sends or accepts must come from **decompile** and/or **observed real client↔host traffic**.
+- If a field/op is unknown: leave it unimplemented or log/capture it — do **not** guess wire formats.
+
+## ConnectAsClient (learning mode)
+
+- Optional **ConnectAsClient** mode (`--client` / `connectasclient`) is OK: connect to a **real** phone host/lobby to learn the protocol.
+- Client mode should **auto-discover** rooms via the real Bonjour V2 / sosalbolt482 probe on UDP **5056**, list lobbies, then join via LiteNetLib.
+- When sniffing/observing as client: treat captured packets as **examples of what to implement**.
+- **NEVER** embed, copy, or replay captured payloads into the dedicated server’s reply path (that is replay / fake fidelity). Re-implement correctly from understood structure (codec builders that match the reverse).
+
+## LAN discovery (critical)
+
+- Advertise/listen on the **real local network**, not the VPN default route
+- If VPN is on and hijacks routing: still bind/enumerate **Wi‑Fi/Ethernet** interfaces (skip tun/tap/wg/vpn)
+- Client must see the server via its existing auto-detect (match real discovery packets once known from reverse)
+
+## Decompilation (required)
+
+Obfuscation is mostly **method renames** (not everything renamed) + IL2CPP. Do **not** stop at plain Il2CppDumper alone — weak output on this build.
+
+Prefer free serious tools:
+
+- **Cpp2IL** (+ Il2CppInspectorNG / modern forks) for metadata, methods, recoverable IL
+- **apktool** / unzip for assets & native libs (`libil2cpp.so`, `global-metadata.dat`)
+- IDA/Ghidra/Binary Ninja on `libil2cpp.so` when offsets matter
+
+Output usable dumps: types, methods, RVAs — not only dummy DLLs. If a tool fails, switch tools.
+
+## Scope
+
+**Allowed:** reverse our APK, protocol/discovery recon, C# LAN server in this repo, ConnectAsClient learning against a real phone host, mode/chat control for self-host.
+
+**Not allowed:** other games, public third-party servers, shipping abuse tools outside this private work, inventing protocol, replaying captured blobs as canned host replies.
+
+## Discovery protocol (known)
+
+See `decompiled/LAN_DISCOVERY_PROTOCOL.md`. Short form:
+
+- **UDP 5056** = Bonjour V2 / sosalbolt482 **discovery probe + reply only** (not the match channel). Hosting phone/dedicated host listens (`gpe.bqkg`); searching phones only probe (`bqkb`) and do not answer.
+- Reply = serialized **`LanDiscoveryInfo`** (proto byte **4**, advertised join port **7778**).
+- **UDP 7778** = LiteNetLib lobby join after discovery. Do not swap 5056↔7778 unless new decompile evidence says otherwise.
+- Not mDNS — “Bonjour” is the probe name only. Bind real LAN NICs when VPN is on.
+- Live: searching phone found our dedicated host via Bonjour V2 on 5056; join then hit 7778.
+
+## When helping
+
+1. Authorized self-host / reverse unless user says otherwise
+2. Prefer binding to LAN NICs explicitly when VPN would hide the server
+3. Keep server code in `server/`; dumps in the decompile folder — do not mix
+4. Use proper decomp pipeline — no “Il2CppDumper and done”
+5. Prefer Cpp2IL **2022.1.0-pre-release.21+** (metadata v31); old 2022.0.7 fails
+6. Never invent wire protocol; never paste capture bytes into host replies — decode → understand → re-implement
+7. ConnectAsClient is for learning against a real phone lobby, not a fake loopback self-test

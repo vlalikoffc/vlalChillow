@@ -16,9 +16,17 @@ public sealed partial class GameMatchHost
         if (actorNr == 0 || actorNr == MatchHostActor.ActorNr)
             return;
 
+        // Remember fighting team for mid-match reconnect restore (new actorNr after rejoin).
+        MatchTeam remembered = MatchTeam.None;
         List<short> pawnIds;
         lock (_roomGate)
         {
+            if (room.ActorProps.TryGetValue((actorNr, MatchRoomPropKeys.Team), out var teamVar)
+                && teamVar.Kind == LobbyVariantKind.Byte)
+            {
+                remembered = (MatchTeam)teamVar.Byte;
+            }
+
             if (userId is { } uid)
                 room.UserIds.Remove(uid);
             room.Actors.RemoveAll(a => a.Nr == actorNr);
@@ -35,6 +43,16 @@ public sealed partial class GameMatchHost
                 .ToList();
             foreach (var id in pawnIds)
                 room.LivingPawns.Remove(id);
+        }
+
+        if (userId is { } reconnectUid
+            && remembered is MatchTeam.Tr or MatchTeam.Ct)
+        {
+            lock (_roomGate)
+                _reconnectTeams[reconnectUid] = remembered;
+            Console.WriteLine(
+                $"[match-host] reconnect-remember: userId='{reconnectUid}' team={remembered} " +
+                $"(actor={actorNr} left reason={reason})");
         }
 
         foreach (var id in pawnIds)

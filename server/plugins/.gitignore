@@ -1,0 +1,6 @@
+*
+!.gitignore
+!README.md
+!Telegram/
+!Telegram/config.example.json
+Telegram/config.json

@@ -36,24 +36,49 @@ public sealed partial class GameMatchHost
                 return;
             var room = st.Room;
 
-            if (parsed.Kind != WorldObjectKind.Entity
-                || parsed.TypeName is not (
-                    MatchSceneManagers.PlayerPawnNameTr or MatchSceneManagers.PlayerPawnNameCt))
+            // Scene managers are host-authored only (bootstrap catalog ids 1–8).
+            if (parsed.Kind == WorldObjectKind.SceneManager
+                || IsBootstrapSceneManagerName(parsed.TypeName))
             {
                 Console.WriteLine(
-                    $"[match-host] ignore non-pawn CreateWorldObject name='{parsed.TypeName}' " +
+                    $"[match-host] ignore CreateWorldObject name='{parsed.TypeName}' " +
                     "(scene managers are host-authored)");
                 return;
             }
 
-            // Rebuild trailing from decoded pose (or fall back to Sandstone for team).
+            // Non-pawn Entity (weapon drops / planted bomb / etc.): relay + track for round cleanup.
+            if (parsed.Kind != WorldObjectKind.Entity
+                || parsed.TypeName is not (
+                    MatchSceneManagers.PlayerPawnNameTr or MatchSceneManagers.PlayerPawnNameCt))
+            {
+                HandleTrackedRoundEntityCreate(peer, room, parsed);
+                return;
+            }
+
+            // Pawn CWO trailing = client-authored spawn pose (44B) + a length-prefixed loadout tag
+            // (character/skin — e.g. "AgentCTLincoln" in a 59B Ct trailing; empty string for a
+            // default 45B trailing). The OWNER authors its own pawn, so we RELAY the trailing
+            // VERBATIM. The old code rebuilt a canonical 45B pose via BuildPawnSpawnPayload, which
+            // silently dropped everything past the pose block — so any buy-menu weapon / character
+            // pick was lost and the pawn spawned with the host's default ("random") loadout
+            // (TDM free-buy bug). Only synthesize a Sandstone pose when the client trailing is too
+            // short to even read a pose (never observed for a real pawn spawn).
             byte[] trailing;
             float px, py, pz;
             if (MatchCodec.TryParsePawnSpawnTrailing(
                     parsed.Trailing, out px, out py, out pz,
-                    out var qx, out var qy, out var qz, out var qw))
+                    out _, out _, out _, out _))
             {
-                trailing = MatchCodec.BuildPawnSpawnPayload(px, py, pz, qx, qy, qz, qw);
+                trailing = parsed.Trailing; // verbatim — preserves buy/loadout/character tag
+                var loadoutTag = MatchCodec.TryReadPawnLoadoutTag(parsed.Trailing, out var tag)
+                    ? tag
+                    : null;
+                Console.WriteLine(
+                    $"[tdm-buy] pawn CWO owner={parsed.OwnerActorNr?.ToString() ?? "-"} " +
+                    $"name='{parsed.TypeName}' trailLen={parsed.Trailing.Length} " +
+                    (string.IsNullOrEmpty(loadoutTag)
+                        ? "loadout=default (no tag) — relayed verbatim (was rebuilt→dropped before)"
+                        : $"loadout='{loadoutTag}' — relayed verbatim (client buy/character honored)"));
             }
             else
             {
@@ -68,12 +93,13 @@ public sealed partial class GameMatchHost
                 py = p.Y;
                 pz = p.Z;
                 Console.WriteLine(
-                    $"[match-host] pawn trailing len={parsed.Trailing.Length} not 45 — " +
-                    "using Sandstone pose");
+                    $"[match-host] pawn trailing len={parsed.Trailing.Length} < 45 — " +
+                    "using Sandstone pose (cannot preserve loadout tag)");
             }
 
             var owner = parsed.OwnerActorNr ?? st.ActorNr;
             List<short> staleIds;
+            var clearedDead = false;
             lock (_roomGate)
             {
                 // Respawn without Destroy (or race): prior living pawns for this owner become
@@ -86,11 +112,16 @@ public sealed partial class GameMatchHost
                     room.LivingPawns.Remove(oldId);
 
                 room.SpawnedPawns.Add(owner);
-                // Respawn (prep / between-round pawn): cancel combat-death grace and clear any
-                // stale dead flag so the fighter counts as alive for wipe / bomber picks.
+                // OBSERVE before relay: respawn cancels combat-death grace and clears DeadActors
+                // so the fighter counts alive for wipe / bomber picks (authority, not invent).
                 room.Flow.PendingCombatDestroy.Remove(owner);
-                room.Flow.DeadActors.Remove(owner);
-                if (room.ActorProps.TryGetValue((owner, MatchRoomPropKeys.Death), out var deadProp)
+                clearedDead = room.Flow.DeadActors.Remove(owner);
+                // Ranked/Allies: death is a per-round alive flag → reset to 0 on respawn so the
+                // fighter counts alive. DeathMatch/TDM: death is a CUMULATIVE deaths counter
+                // (phone gold increments 1,2,3… and never resets on respawn) — leave it so the
+                // next master-authored death produces a real change the client can detect.
+                if (!IsDeathMatchRoom(room)
+                    && room.ActorProps.TryGetValue((owner, MatchRoomPropKeys.Death), out var deadProp)
                     && !(deadProp.Kind == LobbyVariantKind.Int && deadProp.Int == 0))
                 {
                     room.ActorProps[(owner, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(0);
@@ -106,6 +137,13 @@ public sealed partial class GameMatchHost
                     PosY = py,
                     PosZ = pz,
                 };
+            }
+
+            if (clearedDead)
+            {
+                Console.WriteLine(
+                    $"[observe] pawn CWO respawn owner={owner} id={parsed.ObjectId} " +
+                    "(DeadActors cleared — alive for wipe)");
             }
 
             // Heal peers before new CWO: TX Destroy for stale ids (phone order Destroy→Create).
@@ -185,10 +223,113 @@ public sealed partial class GameMatchHost
             if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
                 return;
 
+            // ChatManager mid-match text: length-prefixed UTF-8 payload (captures
+            // 20260723_030750_1117 / 20260723_030756_1126). Lobby OpChat never sees these —
+            // execute slash commands (/set start, …) via host callback when present.
+            if (parsed.ObjectId == MatchSceneManagers.ChatManagerObjectId
+                && TryDecodeChatManagerText(parsed.Payload, out var chatText))
+            {
+                Console.WriteLine(
+                    $"[match-host] ChatManager text actor={st.ActorNr}: {chatText}");
+                if (chatText.StartsWith('/') && peer.Address is { } chatIp)
+                {
+                    try { OnMatchChatSlashCommand?.Invoke(chatIp, chatText); }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[match-host] ChatManager slash handler failed: {ex.Message}");
+                    }
+                }
+            }
+
+            // Observe-then-forward (MATCH_ARCHITECTURE): sync decode + authority update BEFORE
+            // relay. Never Task.Delay; never relay-only blind for bomb/combat. Peer↔peer
+            // exceptSender still updates DeadActors / fuse / wipe same tick. [observe] logs
+            // only on decisive events (plant/defuse/explode) — damage attribution logs inside
+            // NoteDeathMatchDamage on accept/ignore, not every hit here.
+            var dropRelay = false;
+            if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
+                && parsed.Field is MatchFlowTestParams.BombManagerFieldPlantNyo
+                    or MatchFlowTestParams.BombManagerFieldPlantNyu)
+            {
+                MatchFlowPhase plantPhase;
+                bool alreadyPlanted;
+                lock (_roomGate)
+                {
+                    plantPhase = st.Room.Flow.Phase;
+                    alreadyPlanted = st.Room.Flow.BombPlanted
+                        || st.Room.Flow.PendingBombPlant
+                        || st.Room.Flow.Phase == MatchFlowPhase.BombPlanted
+                        || st.Room.Flow.Phase is MatchFlowPhase.RoundEndPause
+                            or MatchFlowPhase.MatchOver;
+                }
+                if (alreadyPlanted)
+                {
+                    Console.WriteLine(
+                        $"[observe] BombManager plant field={parsed.Field} " +
+                        "IGNORED — already planted this round (one bomb/round; no relay)");
+                    dropRelay = true;
+                }
+                else if (plantPhase != MatchFlowPhase.RoundLive)
+                {
+                    // PreStart/Prep/WarmUp plant Rpc must not invent C2=40 or paint peers.
+                    Console.WriteLine(
+                        $"[observe] BombManager plant field={parsed.Field} " +
+                        $"from actor={st.ActorNr} IGNORED — phase={plantPhase} " +
+                        "(RoundLive only; no relay — no invent)");
+                    dropRelay = true;
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"[observe] BombManager plant field={parsed.Field} " +
+                        $"from actor={st.ActorNr} (apply fuse before relay)");
+                    TryEnterBombPlanted(st.Room, sourceField: (byte)parsed.Field);
+                    // If TryEnter ignored (pending end etc.), still drop if not planted.
+                    lock (_roomGate)
+                    {
+                        if (!st.Room.Flow.BombPlanted
+                            || st.Room.Flow.BombPlantedUtc == DateTime.MinValue)
+                            dropRelay = true;
+                    }
+                }
+            }
+            else if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
+                     && parsed.Field == MatchFlowTestParams.BombManagerFieldNzu)
+            {
+                Console.WriteLine(
+                    $"[observe] BombManager field=6 nzu from actor={st.ActorNr} " +
+                    $"payloadLen={parsed.Payload.Length} (defuse/explode — apply before relay)");
+                HandleBombManagerNzu(st.Room, parsed.Payload);
+            }
+            else if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
+                     && parsed.Field == MatchFlowTestParams.BombManagerFieldNzg)
+            {
+                Console.WriteLine(
+                    $"[observe] BombManager field=5 nzg from actor={st.ActorNr} " +
+                    $"(logged only, payloadLen={parsed.Payload.Length})");
+            }
+            else if (parsed.Field == DeathMatchFlowParams.PawnDamageRpcField
+                     && parsed.ObjectId != MatchFlowTestParams.BombManagerObjectId)
+            {
+                // Attribution only for living fighter pawns — exclude WeaponDropManager (id=4)
+                // and other scene managers that also use field=5.
+                bool isLivingPawn;
+                lock (_roomGate)
+                    isLivingPawn = st.Room.LivingPawns.ContainsKey(parsed.ObjectId);
+                if (isLivingPawn)
+                    NoteDeathMatchDamage(st.Room, attackerActorNr: st.ActorNr, victimPawnId: parsed.ObjectId);
+            }
+
+            if (dropRelay)
+                return;
+
             // Echo with HasServerTime (client TX is flags=None).
             // gaa AllCached(2) / Others(1) / All(0): client already executeImmediate — do NOT
             // echo back to sender (WeaponDropManager field 4/5 ping-pong flood,
             // run-20260722_102505). gaa *ViaServer(3/4): client waits for host — include sender.
+            // ChatManager (id=7): always fan-out to every other INIT-ready peer (never drop a
+            // team side). ViaServer includes sender; Others excludes only the speaker.
             var stime = NextServerTime();
             var echo = MatchCodec.BuildWorldObjectRpc(
                 stime,
@@ -206,28 +347,6 @@ public sealed partial class GameMatchHost
                 Console.WriteLine(
                     $"[match-host] TX relay WorldObjectRpc id={parsed.ObjectId} rpc={parsed.RpcId} " +
                     $"→ peers={n} exceptSender={(exceptSender is null ? "no(ViaServer)" : "yes")}");
-            }
-
-            // BombManager (scene id=8): Rpc(1)/Rpc(2) = plant pose (nyo/nyu). Host drives C2=40.
-            if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
-                && parsed.RpcId is 1 or 2)
-            {
-                TryEnterBombPlanted(st.Room, sourceRpc: parsed.RpcId);
-            }
-            // Rpc(6)=nzu(bool,byte,float): bool true → PlantedBombController.vxr (defuse FX);
-            // false → vxq (explode FX). End round immediately — do not wait fuse timeout.
-            else if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
-                     && parsed.RpcId == 6)
-            {
-                HandleBombManagerNzu(st.Room, parsed.Payload);
-            }
-            else if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
-                     && parsed.RpcId == 5)
-            {
-                // Rpc(5)=nzg — defuse-related helper; do not invent round-end from it alone.
-                Console.WriteLine(
-                    $"[match-host] match-flow: BombManager rpc=5 " +
-                    $"(nzg — logged only, payloadLen={parsed.Payload.Length})");
             }
         }
         catch (Exception ex)
@@ -257,7 +376,9 @@ public sealed partial class GameMatchHost
                 return;
             var room = st.Room;
 
+            // OBSERVE first: drop LivingPawns / track combat-death grace, then relay promptly.
             var removed = false;
+            var removedTracked = false;
             byte? ownerNr = null;
             lock (_roomGate)
             {
@@ -266,16 +387,23 @@ public sealed partial class GameMatchHost
                     ownerNr = pawn.OwnerActorNr;
                     removed = room.LivingPawns.Remove(objectId);
                 }
+                removedTracked = room.TrackedRoundEntities.Remove(objectId);
+            }
+
+            if (ownerNr is { } owner)
+            {
+                Console.WriteLine(
+                    $"[observe] DestroyWorldObject id={objectId} owner={owner} " +
+                    "(LivingPawn remove → combat-death grace before relay)");
+                NotePawnDestroyed(room, owner);
             }
 
             var echo = MatchCodec.BuildDestroyWorldObject(NextServerTime(), objectId);
             var n = BroadcastInitReadyExcept(room, peer, echo, tag: "match_tx_DestroyWorldObject");
+            var unreg = removed ? "LivingPawn" : removedTracked ? "TrackedRoundEntity" : "none";
             Console.WriteLine(
                 $"[match-host] TX relay DestroyWorldObject id={objectId} → peers={n} " +
-                $"unregistered={(removed ? "LivingPawn" : "none")}");
-
-            if (ownerNr is { } owner)
-                NotePawnDestroyed(room, owner);
+                $"unregistered={unreg}");
         }
         catch (Exception ex)
         {
@@ -317,6 +445,8 @@ public sealed partial class GameMatchHost
     {
         // Owner fat State after CWO — relay as-is (flags=None) to other INIT-ready peers.
         // Prefer this over host-invented thin standing ticks (phone does relay, not invent).
+        // Pose/State is not combat authority: alive/HP lethality comes from death/kills props
+        // + LivingPawns (see observe-then-forward). Mark OwnerSendsState only — no invent HP.
         if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
             return;
 
@@ -380,6 +510,111 @@ public sealed partial class GameMatchHost
                     $"seq={pawn.Seq} len={pkt.Length} → peers={n} " +
                     "(host standing — no owner State yet)");
             }
+        }
+    }
+
+    private static bool IsBootstrapSceneManagerName(string typeName)
+    {
+        foreach (var e in MatchSceneManagers.Bootstrap)
+        {
+            if (string.Equals(e.Name, typeName, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Relay + track a non-pawn Entity CreateWorldObject (drops / planted bomb entities).
+    /// Destroyed on RoundEnd / PreStart via <see cref="DestroyTrackedRoundEntities"/>.
+    /// </summary>
+    private void HandleTrackedRoundEntityCreate(
+        NetPeer peer, MatchRoom room, MatchCodec.ParsedCreateWorldObject parsed)
+    {
+        lock (_roomGate)
+            room.TrackedRoundEntities[parsed.ObjectId] = parsed.TypeName;
+
+        var echo = MatchCodec.BuildCreateWorldObject(
+            NextServerTime(),
+            parsed.Kind,
+            parsed.ObjectId,
+            parsed.TypeName,
+            parsed.FusTag,
+            ownerActorNr: parsed.OwnerActorNr,
+            trailingPayload: parsed.Trailing);
+        var n = BroadcastInitReadyExcept(room, peer, echo, tag: "match_tx_CreateWorldObject");
+        Console.WriteLine(
+            $"[match-host] TX relay CreateWorldObject id={parsed.ObjectId} " +
+            $"entity='{parsed.TypeName}' (tracked round) → peers={n} len={echo.Length}");
+    }
+
+    /// <summary>
+    /// Phone-host clears leftover drops / planted entities between rounds. Dedicated host
+    /// DestroyWorldObject's every tracked non-scene Entity id (not LivingPawns, not scene
+    /// managers). BombManager scene id=8 is never destroyed — BombPlanted=false +
+    /// BombPlantedUtc cleared + PendingBombPlant=false + fresh bomberId on PreStart;
+    /// plant Rpc is evidence-only during RoundLive (no deferred invent). PlantedBombController is local
+    /// (cleared by relayed field=6 nzu / client phase respawn) — no evidenced BombManager
+    /// reset Rpc to invent.
+    /// </summary>
+    private void DestroyTrackedRoundEntities(MatchRoom room, string reason)
+    {
+        List<(short Id, string Name)> toDestroy;
+        lock (_roomGate)
+        {
+            toDestroy = room.TrackedRoundEntities
+                .Select(kv => (kv.Key, kv.Value))
+                .ToList();
+            room.TrackedRoundEntities.Clear();
+        }
+
+        if (toDestroy.Count == 0)
+        {
+            Console.WriteLine(
+                $"[match-flow] bomb/round cleanup — no tracked entities reason={reason}");
+            return;
+        }
+
+        var destroyed = 0;
+        foreach (var (id, name) in toDestroy)
+        {
+            // Never Destroy bootstrap scene managers if somehow tracked.
+            if (id >= 1 && id <= 8)
+                continue;
+            var destroyPkt = MatchCodec.BuildDestroyWorldObject(NextServerTime(), id);
+            var n = BroadcastInitReady(room, destroyPkt, tag: "match_tx_DestroyWorldObject");
+            destroyed++;
+            Console.WriteLine(
+                $"[match-flow] round cleanup destroy id={id} name='{name}' " +
+                $"→ peers={n} reason={reason}");
+        }
+        Console.WriteLine(
+            $"[match-flow] bomb/round cleanup done destroyed={destroyed}/{toDestroy.Count} " +
+            $"reason={reason}");
+    }
+
+    /// <summary>
+    /// ChatManager Rpc payload: single length byte + UTF-8 text (live Dedik captures
+    /// <c>payloadLen=9</c> «херь», <c>payloadLen=10</c> «ну да»). Returns false if layout
+    /// does not match — never invents a chat string from opaque bytes.
+    /// </summary>
+    private static bool TryDecodeChatManagerText(ReadOnlySpan<byte> payload, out string text)
+    {
+        text = "";
+        if (payload.Length < 2)
+            return false;
+        var n = payload[0];
+        if (n == 0 || n > payload.Length - 1)
+            return false;
+        if (n != payload.Length - 1)
+            return false;
+        try
+        {
+            text = System.Text.Encoding.UTF8.GetString(payload.Slice(1, n));
+            return text.Length > 0;
+        }
+        catch
+        {
+            return false;
         }
     }
 

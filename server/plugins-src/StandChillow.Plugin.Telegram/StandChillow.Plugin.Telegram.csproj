@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>StandChillow.Plugin.Telegram</RootNamespace>
+    <AssemblyName>StandChillow.Plugin.Telegram</AssemblyName>
+    <Product>влалChillow</Product>
+    <AssemblyTitle>влалChillow Telegram Plugin</AssemblyTitle>
+    <!-- Drop next to LanServer exe plugins/ folder on build. -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Plugins\StandChillow.Server.Plugins\StandChillow.Server.Plugins.csproj">
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="config.example.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- Copy plugin DLL (+ example config) into LanServer output plugins/ when that project is built first,
+       or into a local plugins-out for manual install. -->
+  <Target Name="CopyToLanServerPlugins" AfterTargets="Build">
+    <PropertyGroup>
+      <_LanPlugins>$(MSBuildThisFileDirectory)..\..\bin\$(Configuration)\net8.0\plugins</_LanPlugins>
+    </PropertyGroup>
+    <MakeDir Directories="$(_LanPlugins);$(_LanPlugins)\Telegram" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(_LanPlugins)" SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="$(MSBuildThisFileDirectory)config.example.json"
+      DestinationFiles="$(_LanPlugins)\Telegram\config.example.json"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

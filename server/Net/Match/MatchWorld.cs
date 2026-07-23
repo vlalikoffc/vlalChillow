@@ -37,8 +37,34 @@ public static class MatchRoomPropKeys
     public const string CtCoLosses = "CtCoLosses";
     public const string WinTeam = "WinTeam";
     public const string FinalWinTeam = "FinalWinTeam";
+    /// <summary>
+    /// DeathMatch match-end MVP actor nr — room prop <c>MvpPlayer</c> (Byte), phone TDM gold
+    /// (<c>/tmp/tdm-probe.log</c> RX#18692). Distinct from nested Ranked <c>WinTeam.mvpPlayer</c>.
+    /// </summary>
+    public const string MvpPlayer = "MvpPlayer";
+    /// <summary>
+    /// DeathMatch match-end <c>FinalPlayers</c> — phone TDM gold serialized as a <b>ByteArray</b>
+    /// (len 3 in the 3-actor probe). Inner structure not decoded (per-player summary bytes?), so
+    /// the dedicated host <b>omits</b> it rather than fake a layout. See DeathMatch/README.md.
+    /// </summary>
+    public const string FinalPlayers = "FinalPlayers";
     /// <summary>Room bomber actor nr (<c>bcb.cadb</c> / <c>opg</c>) — Int.</summary>
     public const string BomberId = "bomberId";
+    /// <summary>
+    /// Active plant site byte — Escalation gold <c>run-20260723_140524</c> on C2=22 bag
+    /// (<c>BombSite</c> key, values 0/1 on Prison). Allies/Ranked omit this key.
+    /// </summary>
+    public const string BombSite = "BombSite";
+    /// <summary>
+    /// CT roster size at round start — phone-host Prep bag (<c>run-20260722_100157</c> len≈90).
+    /// Wire key <c>Ct_RoundStartPlayersCount</c> (team prefix + <c>_RoundStartPlayersCount</c>).
+    /// </summary>
+    public const string CtRoundStartPlayersCount = "Ct_RoundStartPlayersCount";
+    /// <summary>
+    /// T roster size at round start — phone-host Prep bag (same gold as
+    /// <see cref="CtRoundStartPlayersCount"/>).
+    /// </summary>
+    public const string TrRoundStartPlayersCount = "Tr_RoundStartPlayersCount";
 
     // bbo — actor props on SetProperty / SetProperties
     public const string Team = "team"; // <c>bbo.caav</c> / <c>cux</c> byte
@@ -56,6 +82,12 @@ public static class MatchRoomPropKeys
     public const string RoundKills = "round_kills";
     /// <summary>Match eliminations (<c>bbo.caay</c>) — Int; fallback when round_kills missing.</summary>
     public const string Kills = "kills";
+    /// <summary>DeathMatch per-player assists — client-owned Int (phone TDM gold RX#2196).</summary>
+    public const string Assists = "assists";
+    /// <summary>DeathMatch per-player fair kills — client-owned Int (phone TDM gold RX#3790).</summary>
+    public const string FairKills = "fair_kills";
+    /// <summary>DeathMatch per-player score — client-owned Int (phone TDM gold RX#3791).</summary>
+    public const string Score2 = "score";
     public const string GlovesIdCt = "glovesId_Ct";
     public const string GlovesIdTr = "glovesId_Tr";
 }
@@ -93,6 +125,20 @@ public static class MatchWinTeamKeys
 }
 
 /// <summary>
+/// Nested <c>FinalWinTeam</c> PropertiesRecord keys — DeathMatch / TDM match-end bag,
+/// phone gold <c>/tmp/tdm-probe.log</c> RX#18692 (<c>{ isDraw, isGiveUp, team }</c>).
+/// Wire types: <c>isDraw</c>/<c>isGiveUp</c> = Bool, <c>team</c> = Byte (<see cref="MatchTeam"/>,
+/// gold <c>team=1</c> = Tr, the side with more kills). Outer room key
+/// <see cref="MatchRoomPropKeys.FinalWinTeam"/>. Distinct from Ranked <c>WinTeam</c> round bag.
+/// </summary>
+public static class MatchFinalWinTeamKeys
+{
+    public const string IsDraw = "isDraw";
+    public const string IsGiveUp = "isGiveUp";
+    public const string Team = "team";
+}
+
+/// <summary>
 /// In-match team (<c>cux</c>) written as fzq.Byte on actor prop <c>team</c>.
 /// DiffableCs <c>Client/cux.cs</c>; live capture used <c>Tr=1</c> for fighting host.
 /// </summary>
@@ -114,8 +160,9 @@ public static class MatchC2States
     /// <summary>Confirmed: InitWaiting unlock + WaitingPlayers banner.</summary>
     public const byte WaitingPlayers = 10;
     /// <summary>
-    /// WarmUp (<c>GameState/WarmUp</c>) — movable разминка before first round.
-    /// Must <b>not</b> be conflated with freeze countdown (that is C2=22).
+    /// WarmUp (<c>GameState/WarmUp</c>) — C2=21. DeathMatch: <c>_startingDuration</c> (~3s gold).
+    /// Defuse: <c>_startingTime</c> (~10s probe). Must <b>not</b> be conflated with freeze
+    /// countdown (that is C2=22 / <c>_roundStartingTime</c>).
     /// </summary>
     public const byte WarmUp = 21;
     /// <summary>
@@ -134,6 +181,22 @@ public static class MatchC2States
     /// </summary>
     public const byte MatchStarted = 101;
     /// <summary>
+    /// DeathMatch early wait+Time after first fighter spawn (phone probe
+    /// <c>run-20260723_050240</c> / tdm-probe). Freeforall before official WarmUp;
+    /// dedicated TDM skips this and goes WaitingPlayers→WarmUp when both teams ready.
+    /// </summary>
+    public const byte DeathMatchPreWarmup = 11;
+    /// <summary>
+    /// DeathMatch / TDM live after WarmUp — phone gold C2=<c>30</c> + <c>Time</c> deadline
+    /// (<c>/tmp/tdm-probe.log</c>). Team scores via room <c>TrScore</c>/<c>CtScore</c> per kill.
+    /// </summary>
+    public const byte DeathMatchLive = 30;
+    /// <summary>
+    /// DeathMatch match-end bag: <c>FinalWinTeam</c> + <c>MvpPlayer</c> (+ optional
+    /// <c>FinalPlayers</c>) then C2=<c>200</c> — phone gold before FinalHud.
+    /// </summary>
+    public const byte DeathMatchEnded = 200;
+    /// <summary>
     /// RankedDefuse registry id (<c>ckq.xvv=111</c>). Allies phone-host round end does
     /// <b>not</b> use this — gold captures keep C2=<see cref="MatchStarted"/>. Do not TX 111
     /// for Allies; do <b>not</b> use 201 (<c>FinalHud</c>) for round end either.
@@ -142,43 +205,158 @@ public static class MatchC2States
     /// <summary>
     /// FinalHud / match-итоги state (<c>cjf.xvv=201</c>). Reads <c>FinalWinTeam</c>, not round UI.
     /// Publishing C2=201 mid-match shows green match WIN + empty scores — never use for round end.
+    /// DeathMatch phone gold: C2=200 end bag → then C2=201 FinalHud.
     /// </summary>
     public const byte FinalHud = 201;
     /// <summary>Match results / итоги всей катки (after all rounds) — <c>ckc.xvv=205</c>.</summary>
     public const byte MatchResults = 205;
+    /// <summary>
+    /// Post-FinalHud teardown (phone TDM gold C2=<c>255</c> then disconnect).
+    /// </summary>
+    public const byte MatchTeardown = 255;
 }
 
 /// <summary>
-/// Allies test timings (user): warmup 10s (movable) → 3s pre-start countdown →
-/// prep 10s every round → live 90s → silent round-end pause 5s × 3 rounds.
+/// Allies / bomb-family timings: WarmUp C2=21 ≈3s → PreStart C2=22 ≈3s
+/// (<c>_roundStartingTime</c> / MATCH_PHASES_TIMERS; every round including post-RoundEnd) →
+/// Prep C2=31 ≈10s → live → RoundEnd C2=101+WinTeam → silent ≈6s → C2=22 again.
+/// Do <b>not</b> skip C2=22 between rounds (client never enters next Prep).
 /// </summary>
 public static class MatchFlowTestParams
 {
-    /// <summary>Movable WarmUp — C2=21.</summary>
-    public static readonly TimeSpan Warmup = TimeSpan.FromSeconds(10);
-    /// <summary>WarmupWillFinish freeze countdown — C2=22 («MATCH WILL START IN»).</summary>
-    public static readonly TimeSpan WarmupWillFinish = TimeSpan.FromSeconds(3);
-    /// <summary>Visible «подготовка к раунду» — C2=31, every round including first.</summary>
-    public static readonly TimeSpan PurchasePhase = TimeSpan.FromSeconds(10);
-    public static readonly TimeSpan RoundDuration = TimeSpan.FromSeconds(90);
-    /// <summary>Silent pause after round end UI (победа/поражение) — no Time deadline.</summary>
-    public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(5);
-    /// <summary>Bomb planted fuse (<c>cnl(float)</c>) — ~40s.</summary>
-    public static readonly TimeSpan BombFuse = TimeSpan.FromSeconds(40);
+    /// <summary>
+    /// WarmUp C2=21 — ≈3s. Overridable via <see cref="MatchHostSettings.WarmupSeconds"/>.
+    /// </summary>
+    public static TimeSpan Warmup => MatchHostSettings.Warmup;
+    /// <summary>
+    /// WarmupWillFinish / PreStart C2=22 — ≈3s freeze (<c>_roundStartingTime</c>).
+    /// Overridable via settings. Not Prep's 10s.
+    /// </summary>
+    public static TimeSpan WarmupWillFinish => MatchHostSettings.PreStart;
+    /// <summary>PurchasePhase C2=31 — overridable via <see cref="MatchHostSettings.PrepSeconds"/>.</summary>
+    public static TimeSpan PurchasePhase => MatchHostSettings.Prep;
+    public static TimeSpan RoundDuration => MatchHostSettings.RoundDuration;
+    /// <summary>Silent pause after RoundEnd — gold ≈6s. Overridable.</summary>
+    public static TimeSpan RoundEndPause => MatchHostSettings.RoundEndPause;
+    /// <summary>Bomb planted fuse — ~40s default. Overridable.</summary>
+    public static TimeSpan BombFuse => MatchHostSettings.BombFuse;
     /// <summary>
     /// Grace after a Live/BombPlanted pawn Destroy with no respawn before it is counted as a
     /// combat elimination. Real kills usually also SetProperty <c>death=1</c>
-    /// (<c>run-20260722_105939</c> line 896) which resolves immediately; this is the fallback
-    /// for a missing death prop. Kept short so a genuine wipe still ends the round promptly,
-    /// but long enough that a same-frame Destroy→Create respawn is never mis-read as a kill.
+    /// (<c>run-20260722_105939</c> line 896) which resolves immediately on the same tick;
+    /// this is the fallback for a missing death prop. 250ms — short enough that wipe after
+    /// Destroy is near-immediate at 128 Hz, long enough that same-frame Destroy→Create
+    /// respawn is never mis-read as a kill (not the older 1.5s doc figure).
     /// </summary>
-    public static readonly TimeSpan DestroyDeathGrace = TimeSpan.FromMilliseconds(1500);
-    public const int TotalRounds = 3;
-    /// <summary>Money on match/round start — bootstrap still uses 10000 like phone.</summary>
-    public const int RoundStartMoney = 800;
+    public static readonly TimeSpan DestroyDeathGrace = TimeSpan.FromMilliseconds(250);
+    /// <summary>MR-N series length — default 8 via <see cref="MatchHostSettings.TotalRounds"/>.</summary>
+    public static int TotalRounds => MatchHostSettings.TotalRounds;
+    /// <summary>First to this many round wins ends the match early.</summary>
+    public static int WinsNeeded => MatchHostSettings.WinsNeeded;
+    /// <summary>Default money constant (settings bootstrap / docs).</summary>
+    public const int DefaultRoundStartMoney = 800;
+    /// <summary>Money on match/round start — overridable via <c>/set money</c>.</summary>
+    public static int RoundStartMoney => MatchHostSettings.RoundStartMoney;
     public const int BootstrapMoney = 10000;
     /// <summary>BombManager scene object id (bootstrap catalog id=8).</summary>
     public const short BombManagerObjectId = 8;
+    /// <summary>
+    /// Wire <c>WorldObjectRpc.field</c> = DiffableCs <c>[Rpc(N)]</c> method index on
+    /// <c>BombManager</c>. The separate <c>rpc</c> body byte is a per-call sender token
+    /// (often actor nr) — never use it as the method id (latest.log: CT nzu was
+    /// <c>rpc=3 field=6</c>; host wrongly keyed off <c>rpc</c>).
+    /// </summary>
+    public const short BombManagerFieldPlantNyo = 1;
+    public const short BombManagerFieldPlantNyu = 2;
+    /// <summary>
+    /// Escalation host auto-plant — phone gold field=3 every round ~8.1s after C2=22
+    /// (<c>MATCH_ESCALATION_PROBE.md</c>). Not Ranked carry plant field=1/2.
+    /// </summary>
+    public const short BombManagerFieldEscalationAutoPlant = 3;
+    /// <summary>Escalation/Ranked defuse pose progress — observe+relay (gold field=4).</summary>
+    public const short BombManagerFieldDefusePose = 4;
+    public const short BombManagerFieldNzg = 5;
+    public const short BombManagerFieldNzu = 6;
+}
+
+/// <summary>
+/// Escalation phone-host timings — <c>MATCH_ESCALATION_PROBE.md</c> stime deltas
+/// (Prison ConnectAsClient 2026-07-23). Distinct from Ranked Prep→Live.
+/// </summary>
+public static class EscalationFlowParams
+{
+    /// <summary>C2=22 → auto-plant C2=40 — gold ≈8.1s every round.</summary>
+    public static readonly TimeSpan PreStart = TimeSpan.FromSeconds(8);
+    /// <summary>C2=40 → C2=31 combat — gold ≈3.1s.</summary>
+    public static readonly TimeSpan PostPlantAnnounce = TimeSpan.FromSeconds(3);
+    /// <summary>Bomb fuse after auto-plant — gold family default ≈40s. Round ends earlier via defuse/wipe.</summary>
+    public static TimeSpan BombFuse => MatchHostSettings.BombFuse;
+    /// <summary>
+    /// Scene manager ids recreated on every Escalation PreStart (gold ReCreateSceneManager
+    /// ×4: WeaponDrop=4, Grenade=5, Radar=6, Bomb=8).
+    /// </summary>
+    public static readonly short[] RecreateSceneManagerIds = [4, 5, 6, 8];
+    /// <summary>Auto-plant payload planter sentinel — gold i32=-2 (no pawn planter).</summary>
+    public const int AutoPlantPlanterSentinel = -2;
+    /// <summary>Prison BombSite=0 plant point (gold field=3 decode).</summary>
+    public static readonly (float X, float Y, float Z) PrisonBombSite0 =
+        (-31.96489f, 0.558f, 10.419069f);
+    /// <summary>Prison BombSite=1 plant point (gold field=3 decode).</summary>
+    public static readonly (float X, float Y, float Z) PrisonBombSite1 =
+        (26.324486f, -0.41500017f, 21.995567f);
+}
+
+/// <summary>
+/// DeathMatch / TDM timings — phone gold <c>/tmp/tdm-probe.log</c> +
+/// <c>MATCH_PHASES_TIMERS.md</c> (DeathmatchController: <c>_warmupDuration</c>→C2=11,
+/// <c>_startingDuration</c>→C2=21, <c>_deathMatchDuration</c>→C2=30). No C2=22 / prep /
+/// multi-round on TDM (those are Defuse). Dedicated skips phone C2=11 PreWarmup freeforall.
+/// </summary>
+public static class DeathMatchFlowParams
+{
+    /// <summary>
+    /// WarmUp C2=21 = DeathmatchController <c>_startingDuration</c>. Phone gold wall-clock
+    /// RX#2192→RX#2383 ≈3.1s (stime 346782658→346785782). <b>Not</b> 30s — that was a
+    /// mislabel of PreWarmup / lobby WarmUpTime onto C2=21 (MATCH_PHASES_TIMERS callout).
+    /// TDM has no C2=22; this short window is the pre-live lock on DeathMatch.
+    /// </summary>
+    public static readonly TimeSpan Warmup = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// Live C2=30 = <c>_deathMatchDuration</c>. Phone gold RX#2383→RX#18692 ≈300s.
+    /// </summary>
+    public static readonly TimeSpan MatchDuration = TimeSpan.FromMinutes(5);
+    /// <summary>
+    /// Hold on the C2=200 end bag (FinalWinTeam+MvpPlayer) before FinalHud C2=201.
+    /// Phone TDM gold: 200 → 201 ≈3s (RX#18692→RX#18879).
+    /// </summary>
+    public static readonly TimeSpan EndBagHold = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// Brief FinalHud (C2=201) before teardown C2=255. Phone TDM gold: 201 → 255 ≈6s
+    /// (RX#18879→RX#18889).
+    /// </summary>
+    public static readonly TimeSpan FinalHudPause = TimeSpan.FromSeconds(6);
+
+    /// <summary>
+    /// WorldObjectRpc <c>field</c> for a pawn damage/hit RPC (large 77/78B payload) — phone gold
+    /// <c>/tmp/tdm-probe.log</c> RX#3782 (the attacker fires <c>field=5</c> on the <b>victim's</b>
+    /// pawn) confirmed on the dedicated host (<c>latest.log</c>: RX from the killer's peer, pawn
+    /// owner = victim). Multiple hits precede one kill (non-lethal per hit) — used only to record
+    /// attacker→victim attribution, never as a kill by itself.
+    /// </summary>
+    public const byte PawnDamageRpcField = 5;
+
+    /// <summary>
+    /// How recently the killer must have damaged an enemy (<c>field=5</c>) for a <c>kills</c>++
+    /// to attribute the death to that victim. Kill immediately follows the lethal hit in gold.
+    /// </summary>
+    public static readonly TimeSpan KillAttributionWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Suppress a second master-authored death for the same victim within this window (the
+    /// <c>kills</c>++ signal and the no-respawn Destroy fallback can both fire for one kill).
+    /// A victim cannot legitimately die twice this fast (respawn takes ≈2.5s in gold).
+    /// </summary>
+    public static readonly TimeSpan DeathDedupWindow = TimeSpan.FromSeconds(1.5);
 }
 
 /// <summary>
@@ -283,6 +461,16 @@ public static class MatchSceneManagers
     public readonly record struct Entry(short Id, string Name, byte FusTag, byte[]? CatalogIds = null);
 
     /// <summary>
+    /// RadarManager scene-object id in <b>this host's</b> bootstrap catalog (see <see cref="Bootstrap"/>).
+    /// The phone host used id=4; ours assigns id=6 — clients learn the id from the bootstrap /
+    /// ReCreateSceneManager, so authoring on our own id is correct (live: clients TX radar RPCs on id=6).
+    /// The master fires <c>Rpc(7)</c> (<c>oet(dwa)</c>, 0-payload full radar/occlusion refresh) as part of
+    /// every combat death — gold <c>/tmp/tdm-probe.log</c> RX#3786/3793 and RX#4266/4269 bracket the
+    /// victim <c>Destroy</c> + <c>death</c> with two radar refreshes.
+    /// </summary>
+    public const short RadarManagerObjectId = 6;
+
+    /// <summary>
     /// Weapon/grenade drop catalogs (byte item ids) observed on phone host WeaponDropManager / GrenadeManager.
     /// Rebuilt as int32 count + id bytes — same structure, not a memcpy of the packet.
     /// </summary>
@@ -300,10 +488,13 @@ public static class MatchSceneManagers
         new(3, "WaitForNextGameRpcHelper", 0xFA),
         new(4, "WeaponDropManager", 0xFC, DropCatalogIds),
         new(5, "GrenadeManager", 0xFD, DropCatalogIds),
-        new(6, "RadarManager", 0xF7),
-        new(7, "ChatManager", 0xFF),
+        new(RadarManagerObjectId, "RadarManager", 0xF7),
+        new(ChatManagerObjectId, "ChatManager", 0xFF),
         new(8, "BombManager", 0xFB),
     ];
+
+    /// <summary>Dedicated bootstrap ChatManager scene id (phone gold Create uses id=5; Dedik TX id=7).</summary>
+    public const short ChatManagerObjectId = 7;
 
     /// <summary>
     /// Wire type name for T-side pawn CreateWorldObject — length-prefixed <c>Tr_Tr</c>
@@ -321,6 +512,24 @@ public static class MatchSceneManagers
 
     /// <summary>Obsolete alias — prefer <see cref="PlayerPawnNameTr"/>.</summary>
     public const string PlayerPawnName = PlayerPawnNameTr;
+
+    /// <summary>
+    /// Gold-observed <b>cosmetics-only</b> tag appended (length-prefixed) after the pawn spawn pose
+    /// in a <c>Ct_Ct</c> CreateWorldObject trailing (capture <c>rx223</c> — 59B Ct trailing). It is
+    /// just the agent/skins the player has equipped in their <b>locker/inventory</b> — a look, not
+    /// a spawn or mesh-activation signal. An <b>empty</b> tag spawns a fully visible, killable pawn
+    /// (gold <c>player_1547</c> uses a 45B empty-tag trailing), so this is <b>never</b> required for
+    /// visibility/radar/damage. It is also <b>NOT</b> the TDM buy-menu weapon pick (separate,
+    /// still-unreversed wire). Kept only so the probe can optionally mimic an equipped-locker look.
+    /// </summary>
+    public const string PawnAgentTagCt = "AgentCTLincoln";
+
+    /// <summary>
+    /// Gold-observed T-side cosmetics-only tag (capture <c>20260722_023514</c> — 70B <c>Tr_Tr</c>
+    /// trailing). Same locker-cosmetics semantics as <see cref="PawnAgentTagCt"/>; optional and
+    /// irrelevant to whether the pawn is visible/on-radar/damageable.
+    /// </summary>
+    public const string PawnAgentTagTr = "AgentTMarco";
 
     /// <summary>Phone-host player object id for first fighting pawn (<c>fus.cwgd</c>=129).</summary>
     public const short PlayerPawnId = 129;
