@@ -270,14 +270,11 @@ public sealed partial class GameMatchHost
                         "IGNORED — already planted this round (one bomb/round; no relay)");
                     dropRelay = true;
                 }
-                else if (plantPhase != MatchFlowPhase.RoundLive)
+                else if (!IsAlliesPlantablePhase(st.Room, plantPhase))
                 {
-                    // Buy/PreStart field=1 is bomber equip noise — accepting it made C2=40
-                    // from round start (latest.log WarmupWillFinish → BombPlanted). RoundLive only.
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
-                        $"from actor={st.ActorNr} IGNORED — phase={plantPhase} " +
-                        "(RoundLive only; buy-phase field=1 is not a plant)");
+                        $"from actor={st.ActorNr} IGNORED — phase={plantPhase}");
                     dropRelay = true;
                 }
                 else
@@ -285,7 +282,7 @@ public sealed partial class GameMatchHost
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
                         $"from actor={st.ActorNr} phase={plantPhase} " +
-                        "(apply fuse + host fan-out before relay)");
+                        "(apply fuse + host fan-out + relay)");
                     var payloadCopy = parsed.Payload.Length > 0
                         ? (byte[])parsed.Payload.Clone()
                         : null;
@@ -297,9 +294,6 @@ public sealed partial class GameMatchHost
                         rpcId: parsed.RpcId,
                         gaaTarget: parsed.GaaTarget,
                         planterActorNr: st.ActorNr);
-                    // Allies: host FanOutAlliesBombPlantRpc covers peers; drop relay on full
-                    // fan-out. If fan-out missed peers (peers=0 / incomplete), fall through to
-                    // exceptSender echo so CT still sees the bomb mesh.
                     lock (_roomGate)
                     {
                         if (!st.Room.Flow.BombPlanted
@@ -309,19 +303,13 @@ public sealed partial class GameMatchHost
                         }
                         else if (IsAlliesRoom(st.Room))
                         {
+                            // Always exceptSender-relay in addition to fan-out — peers often
+                            // miss host-rebuilt Rpc; planter already applied locally.
                             var nReady = CountInitReadyPeers(st.Room);
-                            if (fanOutPeers > 0 && fanOutPeers >= nReady)
-                            {
-                                dropRelay = true;
-                            }
-                            else
-                            {
-                                Console.WriteLine(
-                                    $"[observe] Allies plant fan-out incomplete " +
-                                    $"peers={fanOutPeers} initReady={nReady} — " +
-                                    "fallback exceptSender relay");
-                                dropRelay = false;
-                            }
+                            Console.WriteLine(
+                                $"[observe] Allies plant fan-out peers={fanOutPeers} " +
+                                $"initReady={nReady} — keep exceptSender relay");
+                            dropRelay = false;
                         }
                     }
                 }

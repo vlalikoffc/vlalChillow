@@ -583,7 +583,7 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Plant authority. Allies and Ranked: <b>RoundLive only</b> (buy field=1 is equip noise).
+    /// Plant authority. Allies: buy/Live after equip grace; Ranked: RoundLive only.
     /// Returns Allies fan-out peer count (0 if no payload / non-Allies; -1 if rejected).
     /// </summary>
     private int TryEnterBombPlanted(

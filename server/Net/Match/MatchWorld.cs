@@ -340,18 +340,17 @@ public static class AlliesFlowParams
     /// <summary>C2=21 WarmUp (first round only) — gold RX 407472265→407475405 ≈3.1s.</summary>
     public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
     /// <summary>
-    /// C2=22 buy — host wait + wire <c>Time</c> deadline. Default 5s via
-    /// <see cref="MatchHostSettings.Prep"/> (<c>/set prep</c> overrides C2=22 and C2=31).
+    /// C2=22 buy — host wait + wire <c>Time</c> deadline. Fixed <b>10s</b> (not Prep settings —
+    /// `/set prep` no longer shrinks the visible buy window to 5s).
     /// </summary>
-    public static TimeSpan BuyPhase => MatchHostSettings.Prep;
+    public static readonly TimeSpan BuyPhase = TimeSpan.FromSeconds(10);
     /// <summary>Alias — C2=22 buy.</summary>
     public static TimeSpan PreStart => BuyPhase;
     /// <summary>
-    /// C2=31 post-buy — host wait + <b>fresh</b> wire <c>Time</c> deadline (replaces C2=22
-    /// countdown; same <see cref="MatchHostSettings.Prep"/> default 5s).
+    /// C2=31 background bag only — <b>1ms</b>, anchor <c>Time</c>, no visible countdown; then Live.
     /// </summary>
-    public static TimeSpan PostBuyPhase => MatchHostSettings.Prep;
-    /// <summary>Alias — C2=31 post-buy.</summary>
+    public static readonly TimeSpan PostBuyPhase = TimeSpan.FromMilliseconds(1);
+    /// <summary>Alias — C2=31 flash.</summary>
     public static TimeSpan Prep => PostBuyPhase;
     /// <summary>Silent pause after C2=101 round-end WinTeam bag — gold RX 101→22 ≈6.0s.</summary>
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);
