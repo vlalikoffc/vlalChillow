@@ -152,7 +152,6 @@ public sealed partial class GameMatchHost
         var dur = AlliesFlowParams.PreWarmup;
         var ends = DateTime.UtcNow + dur;
         var nowSec = ServerTimeSeconds();
-        var deadline = nowSec + dur.TotalSeconds;
         lock (_roomGate)
         {
             room.Flow.Phase = MatchFlowPhase.AlliesPreWarmup;
@@ -166,11 +165,12 @@ public sealed partial class GameMatchHost
         }
         ClearBombAuthority(room, "Allies PreWarmup C2=11");
         MatchHostSettings.MatchStartArmed = false;
+        // Gold: Time = phase-start anchor (bfqt sec), not a visible countdown deadline.
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.DeathMatchPreWarmup)),
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
-        ], reason: "Allies PreWarmup C2=11", phaseDeadlineSec: deadline);
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+        ], reason: "Allies PreWarmup C2=11");
         Console.WriteLine(
             $"[match-host] allies: PreWarmup C2={MatchC2States.DeathMatchPreWarmup} " +
             $"dur={dur.TotalSeconds:0}s (gold RX 10→11 ≈8s)");
@@ -183,7 +183,6 @@ public sealed partial class GameMatchHost
         var dur = AlliesFlowParams.WarmUp;
         var ends = DateTime.UtcNow + dur;
         var nowSec = ServerTimeSeconds();
-        var deadline = nowSec + dur.TotalSeconds;
         lock (_roomGate)
         {
             room.Flow.Phase = MatchFlowPhase.Warmup;
@@ -196,9 +195,8 @@ public sealed partial class GameMatchHost
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmUp)),
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
-            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
-        ], reason: "Allies WarmUp C2=21", phaseDeadlineSec: deadline);
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+        ], reason: "Allies WarmUp C2=21");
         Console.WriteLine(
             $"[match-host] allies: WarmUp C2={MatchC2States.WarmUp} dur={dur.TotalSeconds:0}s " +
             "(first round only; gold RX 21→22 ≈3s)");
@@ -238,15 +236,15 @@ public sealed partial class GameMatchHost
         ClearBombAuthority(room, $"Allies PreStart C2=22 round={round} bomberId={bomberId}");
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
-        var deadline = nowSec + dur.TotalSeconds;
+        // Gold C2=22: Time == RoundStartTime == nowSec; ~10s host wait before Prep (no wire countdown).
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
             (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmupWillFinish)),
-        ], reason: $"Allies PreStart round={round}", phaseDeadlineSec: deadline);
+        ], reason: $"Allies PreStart round={round}");
         SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
         ClearFighterDeathFlags(room);
         DestroyTrackedRoundEntities(room, reason: "Allies PreStart");
@@ -305,7 +303,8 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Live C2=101 — gold phone TX after Prep (~10s). Round ends via combat events only (no round clock).
+    /// Live — gold: no room bag after Prep C2=31; combat starts when Prep <c>Time</c> deadline
+    /// expires. C2=101 is round-end only (WinTeam bag). No round clock in Live.
     /// </summary>
     private void EnterAlliesLive(MatchRoom room)
     {
@@ -353,17 +352,9 @@ public sealed partial class GameMatchHost
             ], reason: $"Allies Live bomberId-fix={bomberId}");
         }
 
-        var nowSec = ServerTimeSeconds();
-        BroadcastRoomProps(room,
-        [
-            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchStarted)),
-            (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
-            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
-        ], reason: $"Allies Live round={round}");
         Console.WriteLine(
-            $"[match-host] allies: Live C2={MatchC2States.MatchStarted} round={round} " +
-            $"bomberId={bomberId} (no round timeout — wipe/plant/defuse/explode only)");
+            $"[match-host] allies: Live round={round} bomberId={bomberId} " +
+            "(silent — no C2/Time TX; gold Prep deadline→combat; C2=101 is round-end only)");
         PostServerDebugChat($"Live · раунд {round}");
     }
 

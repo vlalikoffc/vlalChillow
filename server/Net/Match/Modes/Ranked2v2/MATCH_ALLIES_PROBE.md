@@ -31,11 +31,12 @@ Deltas from decoded `SetProperties` room bags (`match_rx*` captures).
 | 407472265 | 40045 | **21** | WarmUp | first round only; Δ includes phone lobby wait |
 | 407475405 | 3140 | **22** | PreStart R1 | bomberId, ReCreate 4/5/6/8, money=800 |
 | 407485574 | 10169 | **31** | Prep | Ct/Tr_RoundStartPlayersCount — ~**10s** after C2=22 |
-| 407499898 | 14324 | **40** | BombPlanted | manual plant field=1/2 (not Escalation field=3) |
+| *(no bag)* | ~14324 | *(Live)* | Combat | gold: Prep `Time` deadline expires → live (no C2 TX) |
+| 407499898 | — | **40** | BombPlanted | manual plant field=1/2 (not Escalation field=3); bag has **no Time** |
 | 407522337 | 22439 | **101** | Round end | WinTeam + TrScore/CtScore + CoLosses |
 | 407528375 | 6038 | **22** | PreStart R2 | skip WarmUp — ~**6s** after round-end bag |
 | 407538367 | 9992 | **31** | Prep | 22→31 ≈**10s** every round |
-| … | … | **22→31→Live→101** | Rounds 2–6 | same loop; no fixed round clock |
+| … | … | **22→31→(silent Live)→101** | Rounds 2–6 | same loop; no fixed round clock |
 | 407884809 | — | **101** | R7 end | score 4:3 Tr leading |
 | 407890833 | 6024 | **111** | Half-time intro | ~**5s** (111→112 stime) |
 | 407895913 | 5080 | **112** | swapped_team | server SetProperty team flip + score perspective |
@@ -51,7 +52,7 @@ Deltas from decoded `SetProperties` room bags (`match_rx*` captures).
 | PreWarmup C2=11 | 8 | RX 10→11 ≈8044 ms |
 | WarmUp C2=21 | 3 | RX 21→22 ≈3140 ms |
 | PreStart C2=22 | **10** | RX 22→31 ≈10.0 s (NOT generic 3s PreStart) |
-| Prep C2=31 | 10 | phone TX 31→Live 101 ≈10 s |
+| Prep C2=31 | 10 | RX 22→31 stime ≈10 s; only phase with wire countdown `Time` |
 | RoundEndPause | 6 | RX 101→22 ≈6.0 s |
 | HalfTimeIntro 111 | 5 | RX 111→112 ≈5080 ms |
 | HalfTimeSwap 112 | 1 | RX 112→113 ≈1086 ms |
@@ -60,11 +61,35 @@ Deltas from decoded `SetProperties` room bags (`match_rx*` captures).
 
 **No fixed Live round clock** — round ends on wipe / manual plant / defuse / explode only.
 
+## `Time` field semantics (decoded gold RX bags)
+
+Units: **bfqt seconds** (`Environment.TickCount / 1000.0`), same as dedicated `ServerTimeSeconds()`.
+
+| Phase | C2 | `Time` on wire | `RoundStartTime` | Client-visible countdown? |
+|-------|-----|----------------|------------------|---------------------------|
+| PreWarmup | 11 | **anchor** = nowSec | — | no (host waits ~8s internally) |
+| WarmUp | 21 | **anchor** = nowSec | — | no (~3s internal, R1 only) |
+| PreStart | 22 | **anchor** = nowSec | **same as Time** | no (~10s internal before Prep) |
+| Prep | 31 | **deadline** = nowSec + ~10s | — | **yes** — buy/spawn countdown |
+| Live | — | *(no bag)* | — | no round clock |
+| BombPlanted | 40 | *(no Time key)* | — | fuse from plant Rpc / client |
+| Round end | 101 | **anchor** = nowSec | — | round-end UI (WinTeam bag) |
+| Half-time | 111/112/113 | **anchor** = nowSec each | — | no (host waits 5s/1s/7s) |
+
+Gold examples (R1):
+
+- C2=22 @ stime 407475405: `Time=407475.376`, `RoundStartTime=407475.376` (equal anchors)
+- C2=31 @ stime 407485574: `Time=407485.565` (= PreStart anchor + **10.189s** deadline)
+- Next combat: **no** SetProperties until plant C2=40 or round-end C2=101
+
+Dedicated bug (fixed): sending PreStart/WarmUp `Time` as deadline + a fake Live C2=101 bag stacked
+“starting match” UI on top of the Prep countdown (`RoundStartTime` from PreStart minus Live `Time` ≈ 20s phantom timer).
+
 ## Phase sequence (dedicated host)
 
 ```
-C2=10 → C2=11 (~8s) → C2=21 (~3s, R1 only) → C2=22 (~10s) → C2=31 (~10s) →
-C2=101 Live → (manual plant C2=40?) → C2=101 round end + WinTeam (~6s pause) → C2=22 …
+C2=10 → C2=11 (~8s) → C2=21 (~3s, R1 only) → C2=22 (~10s) → C2=31 (~10s prep countdown) →
+(silent Live) → (manual plant C2=40?) → C2=101 round end + WinTeam (~6s pause) → C2=22 …
 After R7: C2=101 → C2=111 (~5s) → team flip → C2=112 (~1s) → C2=113 (~7s) → C2=22 R8 …
 ```
 
@@ -99,8 +124,8 @@ Server-authoritative:
 | FSM file | `GameMatchHost.Allies.cs` | `GameMatchHost.Escalation.cs` |
 | PreStart C2=22 | ~10s + bomberId | ~8s, no bomberId, BombSite |
 | Plant | Manual carry field=1/2 during Live | Auto-plant field=3 |
-| Live | C2=101 after Prep; no round clock | C2=31 combat after auto-plant |
-| Round end | C2=101 + WinTeam | C2=101 + WinTeam |
+| Live | silent after Prep deadline; no round clock | C2=31 combat after auto-plant |
+| Round end | C2=101 + WinTeam (only C2=101 use) | C2=101 + WinTeam |
 | Half-time | 111→112→113 after R7 | (not in Escalation probe) |
 | Win condition | First to 8 | MR-N via `/set round` |
 

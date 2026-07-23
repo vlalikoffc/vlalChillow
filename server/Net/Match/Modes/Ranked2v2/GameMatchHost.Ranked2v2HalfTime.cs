@@ -32,12 +32,11 @@ public sealed partial class GameMatchHost
         }
 
         var nowSec = ServerTimeSeconds();
-        var deadline = nowSec + dur.TotalSeconds;
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.RoundEnd)),
-        ], reason: "HalfTime intro C2=111", phaseDeadlineSec: deadline);
+        ], reason: "HalfTime intro C2=111");
         Console.WriteLine(
             $"[match-host] match-flow: HalfTime intro C2={MatchC2States.RoundEnd} " +
             $"dur={dur.TotalSeconds:0}s after round={AlliesFlowParams.HalfTimeAfterRound} " +
@@ -72,17 +71,16 @@ public sealed partial class GameMatchHost
         }
 
         var nowSec = ServerTimeSeconds();
-        var deadline = nowSec + AlliesFlowParams.HalfTimeSwapHold.TotalSeconds;
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.CtScore, LobbyVariant.FromInt(scoreCt)),
             (MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)),
             (MatchRoomPropKeys.SwappedTeam, LobbyVariant.FromBool(true)),
             (MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(0)),
             (MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(0)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.HalfTimeSwap)),
-        ], reason: "HalfTime swap C2=112", phaseDeadlineSec: deadline);
+        ], reason: "HalfTime swap C2=112");
         BroadcastMatchScoresToAllPeers(room, scoreTr, scoreCt);
         Console.WriteLine(
             $"[match-host] match-flow: HalfTime swap C2={MatchC2States.HalfTimeSwap} " +
@@ -101,12 +99,11 @@ public sealed partial class GameMatchHost
         }
 
         var nowSec = ServerTimeSeconds();
-        var deadline = nowSec + dur.TotalSeconds;
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.HalfTimeTransition)),
-        ], reason: "HalfTime transition C2=113", phaseDeadlineSec: deadline);
+        ], reason: "HalfTime transition C2=113");
         Console.WriteLine(
             $"[match-host] match-flow: HalfTime transition C2={MatchC2States.HalfTimeTransition} " +
             $"dur={dur.TotalSeconds:0}s → PreStart round={AlliesFlowParams.HalfTimeAfterRound + 1}");
