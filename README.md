@@ -106,6 +106,14 @@ Reverse-engineering notes and Ghidra dumps stay **local** (`decompiled/`) and ar
 
 Everything the server sends is derived from client reverse-engineering and observed LAN traffic. Unknown fields are logged or left unimplemented — not guessed. Discovery auth strings, LiteNetLib keys, opcodes, and game mode IDs match what the mobile client expects.
 
-## License / scope
+## License
 
-Private research and self-host tooling for StandChillow LAN play with authorization from the game side. Use only on networks and instances you control.
+This project is licensed under the [GNU General Public License v3.0](LICENSE) (GPL-3.0).
+
+You are free to use, modify, and distribute this code. If you build on it or ship a derivative work, that work must also be open source under GPL-3.0 (copyleft).
+
+Copyright (C) 2026 влал (vlalikoffc).
+
+## Scope
+
+Unofficial self-host tooling for StandChillow LAN play, with reverse-engineering authorized by the game owner. Use only on networks and instances you control.
