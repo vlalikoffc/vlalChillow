@@ -283,13 +283,22 @@ public sealed partial class GameMatchHost
                 {
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
-                        $"from actor={st.ActorNr} (apply fuse before relay)");
-                    TryEnterBombPlanted(st.Room, sourceField: (byte)parsed.Field);
-                    // If TryEnter ignored (pending end etc.), still drop if not planted.
+                        $"from actor={st.ActorNr} (apply fuse + host fan-out before relay)");
+                    var payloadCopy = parsed.Payload.Length > 0
+                        ? (byte[])parsed.Payload.Clone()
+                        : null;
+                    TryEnterBombPlanted(
+                        st.Room,
+                        sourceField: (byte)parsed.Field,
+                        plantPayload: payloadCopy,
+                        plantTimeValue: parsed.TimeValue);
+                    // Host fan-out covers all peers for Allies; relay would duplicate.
                     lock (_roomGate)
                     {
                         if (!st.Room.Flow.BombPlanted
                             || st.Room.Flow.BombPlantedUtc == DateTime.MinValue)
+                            dropRelay = true;
+                        else if (IsAlliesRoom(st.Room))
                             dropRelay = true;
                     }
                 }

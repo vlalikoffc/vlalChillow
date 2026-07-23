@@ -6,7 +6,7 @@ namespace StandChillow.LanServer.Net;
 
 public sealed partial class GameMatchHost
 {
-    // Allies half-time after round 7: C2=111 → team swap + C2=112 → C2=113 → PreStart C2=22.
+    // Allies half-time after round 7: C2=111 → team swap + C2=112 → C2=113 → Prep C2=22.
     // Gold: allies-probe run-20260723_215727 (Sandstone 2x2 / Ranked2v2).
 
     private bool NeedsAlliesHalfTime(MatchRoom room, int roundIndex)
@@ -106,7 +106,7 @@ public sealed partial class GameMatchHost
         ], reason: "HalfTime transition C2=113");
         Console.WriteLine(
             $"[match-host] match-flow: HalfTime transition C2={MatchC2States.HalfTimeTransition} " +
-            $"dur={dur.TotalSeconds:0}s → PreStart round={AlliesFlowParams.HalfTimeAfterRound + 1}");
+            $"dur={dur.TotalSeconds:0}s → Prep C2=22 round={AlliesFlowParams.HalfTimeAfterRound + 1}");
     }
 
     /// <summary>

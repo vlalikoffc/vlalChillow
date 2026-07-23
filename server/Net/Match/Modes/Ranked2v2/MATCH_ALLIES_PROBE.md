@@ -5,6 +5,11 @@
 **Captures:** `server/bin/Release/net8.0/captures/20260723_2157*` / `2206*`  
 **Decode tool:** `server/tools/decode_allies_probe.py` (SetProperties C2 + stime deltas)
 
+**Live client correction (2.06 OBT F1):** phone gold split C2=22 (anchor) + C2=31 (buy deadline),
+but the dedicated client treats **C2=22 as the buy/purchase phase** with a visible countdown.
+Dedicated host merges buy onto **C2=22 only** (no C2=31), skips C2=11 freeforall, and sends
+**C2=101 Live + Time** for a **90s** round clock.
+
 ## Lobby / match selection
 
 | Key | Value |
@@ -20,129 +25,101 @@
 - Default dedicated: `WinsNeeded=8` (`/set wins N`).
 - Half-time after **round 7** — match continues until first-to-8.
 
-## Gold C2 + stime timeline (RX `407424176+`)
+## Gold C2 + stime timeline (RX `407424176+`) — phone host
 
 Deltas from decoded `SetProperties` room bags (`match_rx*` captures).
 
 | stime | Δ ms | C2 | Phase | Notes |
 |-------|------|-----|-------|-------|
 | 407424176 | — | **10** | WaitingPlayers | both teams joined |
-| 407432220 | 8044 | **11** | PreWarmup / freeforall | ~**8s** |
-| 407472265 | 40045 | **21** | WarmUp | first round only; Δ includes phone lobby wait |
+| 407432220 | 8044 | **11** | PreWarmup / freeforall | ~**8s** — **skipped on dedicated** |
+| 407472265 | 40045 | **21** | WarmUp | first round only |
 | 407475405 | 3140 | **22** | PreStart R1 | bomberId, ReCreate 4/5/6/8, money=800 |
-| 407485574 | 10169 | **31** | Prep | Ct/Tr_RoundStartPlayersCount — ~**10s** after C2=22 |
-| *(no bag)* | ~14324 | *(Live)* | Combat | gold: Prep `Time` deadline expires → live (no C2 TX) |
-| 407499898 | — | **40** | BombPlanted | manual plant field=1/2 (not Escalation field=3); bag has **no Time** |
-| 407522337 | 22439 | **101** | Round end | WinTeam + TrScore/CtScore + CoLosses |
-| 407528375 | 6038 | **22** | PreStart R2 | skip WarmUp — ~**6s** after round-end bag |
-| 407538367 | 9992 | **31** | Prep | 22→31 ≈**10s** every round |
-| … | … | **22→31→(silent Live)→101** | Rounds 2–6 | same loop; no fixed round clock |
+| 407485574 | 10169 | **31** | Prep | Ct/Tr_RoundStartPlayersCount — **not used on dedicated** |
+| *(no bag)* | ~14324 | *(Live)* | Combat | phone: silent Live after C2=31 deadline |
+| 407499898 | — | **40** | BombPlanted | manual plant field=1/2 |
+| 407522337 | 22439 | **101** | Round end | WinTeam + scores |
+| … | … | **22→(31)→101** | Rounds 2–6 | phone loop |
 | 407884809 | — | **101** | R7 end | score 4:3 Tr leading |
-| 407890833 | 6024 | **111** | Half-time intro | ~**5s** (111→112 stime) |
-| 407895913 | 5080 | **112** | swapped_team | server SetProperty team flip + score perspective |
-| 407896999 | 1086 | **113** | Half-time transition | ~**1s** |
-| 407904034 | 7035 | **22** | PreStart R8 | new T-side bomberId — ~**7s** after 113 |
-| 407914208 | 10174 | **31** | Prep | Ct=2 Tr=1 after swap |
-| … | … | **101** | R8+ | until first-to-8 |
+| 407890833 | 6024 | **111** | Half-time intro | |
+| 407895913 | 5080 | **112** | swapped_team | team flip + score perspective |
+| 407896999 | 1086 | **113** | Half-time transition | |
+| 407904034 | 7035 | **22** | PreStart R8 | new T-side bomberId |
+
+### Dedicated phase map (corrected for live client)
+
+| Step | Wire C2 | Host phase | Time on wire | Client UI |
+|------|---------|------------|--------------|-----------|
+| `/set start` (R1) | **21** | Warmup | anchor | warm-up ~3s |
+| Every round buy | **22** | PurchasePhase | **deadline** = now + prep | buy/spawn countdown |
+| Live | **101** | RoundLive | **deadline** = now + 90s | 1:30 round clock |
+| Manual plant | **40** | BombPlanted | fuse deadline | bomb + fuse all peers |
+| Round end | **101** | RoundEndPause | anchor + WinTeam | round-end UI |
+| After R7 | **111→112→113** | HalfTime* | anchor each | side swap |
+
+**Not sent:** C2=11 (freeforall), C2=31 (phone split prep — client uses C2=22 for buy).
 
 ### Dedicated timer constants (`AlliesFlowParams`)
 
-| Constant | Seconds | Evidence |
-|----------|---------|----------|
-| PreWarmup C2=11 | 8 | RX 10→11 ≈8044 ms |
-| WarmUp C2=21 | 3 | RX 21→22 ≈3140 ms |
-| PreStart C2=22 | **10** | RX 22→31 ≈10.0 s (NOT generic 3s PreStart) |
-| Prep C2=31 | 10 | RX 22→31 stime ≈10 s; only phase with wire countdown `Time` |
-| RoundEndPause | 6 | RX 101→22 ≈6.0 s |
-| HalfTimeIntro 111 | 5 | RX 111→112 ≈5080 ms |
-| HalfTimeSwap 112 | 1 | RX 112→113 ≈1086 ms |
-| HalfTimeTransition 113 | 7 | RX 113→22 ≈7035 ms |
-| BombFuse | 40 | family default after C2=40 |
+| Constant | Seconds | Evidence / setting |
+|----------|---------|-------------------|
+| WarmUp C2=21 | 3 | gold RX 21→22 ≈3140 ms; R1 only |
+| Prep C2=22 | 10 | `/set prep`; buy countdown on C2=22 |
+| RoundDuration Live | **90** | `/set roundtime`; C2=101 + Time deadline |
+| RoundEndPause | 6 | gold RX 101→22 ≈6.0 s |
+| HalfTimeIntro 111 | 5 | gold RX 111→112 ≈5080 ms |
+| HalfTimeSwap 112 | 1 | gold RX 112→113 ≈1086 ms |
+| HalfTimeTransition 113 | 7 | gold RX 113→22 ≈7035 ms |
+| BombFuse | 40 | C2=40 + Time fuse deadline; BombManager Rpc fan-out |
 
-**No fixed Live round clock** — round ends on wipe / manual plant / defuse / explode only.
+## `Time` field semantics (dedicated host)
 
-## `Time` field semantics (decoded gold RX bags)
+Units: **bfqt seconds** (`Environment.TickCount / 1000.0`).
 
-Units: **bfqt seconds** (`Environment.TickCount / 1000.0`), same as dedicated `ServerTimeSeconds()`.
+| Phase | C2 | `Time` on wire | Client-visible countdown? |
+|-------|-----|----------------|----------------------------|
+| WarmUp | 21 | anchor = nowSec | no (~3s internal, R1 only) |
+| Prep/buy | 22 | **deadline** = nowSec + prep | **yes** — buy timer |
+| Live | 101 | **deadline** = nowSec + 90s | **yes** — 1:30 round clock |
+| BombPlanted | 40 | **deadline** = nowSec + fuse | fuse for all peers |
+| Round end | 101 | anchor = nowSec | round-end UI (WinTeam bag) |
+| Half-time | 111/112/113 | anchor = nowSec each | no |
 
-| Phase | C2 | `Time` on wire | `RoundStartTime` | Client-visible countdown? |
-|-------|-----|----------------|------------------|---------------------------|
-| PreWarmup | 11 | **anchor** = nowSec | — | no (host waits ~8s internally) |
-| WarmUp | 21 | **anchor** = nowSec | — | no (~3s internal, R1 only) |
-| PreStart | 22 | **anchor** = nowSec | **same as Time** | no (~10s internal before Prep) |
-| Prep | 31 | **deadline** = nowSec + ~10s | — | **yes** — buy/spawn countdown |
-| Live | — | *(no bag)* | — | no round clock |
-| BombPlanted | 40 | *(no Time key)* | — | fuse from plant Rpc / client |
-| Round end | 101 | **anchor** = nowSec | — | round-end UI (WinTeam bag) |
-| Half-time | 111/112/113 | **anchor** = nowSec each | — | no (host waits 5s/1s/7s) |
-
-Gold examples (R1):
-
-- C2=22 @ stime 407475405: `Time=407475.376`, `RoundStartTime=407475.376` (equal anchors)
-- C2=31 @ stime 407485574: `Time=407485.565` (= PreStart anchor + **10.189s** deadline)
-- Next combat: **no** SetProperties until plant C2=40 or round-end C2=101
-
-Dedicated bug (fixed): sending PreStart/WarmUp `Time` as deadline + a fake Live C2=101 bag stacked
-“starting match” UI on top of the Prep countdown (`RoundStartTime` from PreStart minus Live `Time` ≈ 20s phantom timer).
-
-## Phase map (phone gold ↔ dedicated host ↔ UI)
-
-Every inter-round loop (R2+): **C2=22 → C2=31 → silent Live → C2=101** — never skip C2=22.
-R1 only adds C2=11 (~8s) and C2=21 (~3s) before the first C2=22.
-
-| Phone C2 | Dedicated `MatchFlowPhase` | Wire `Time` | Server CLI / console | Client UI (2.06 OBT F1) |
-|----------|---------------------------|-------------|----------------------|-------------------------|
-| 10 | WaitingPlayers | — | WAITING PLAYERS | lobby / waiting |
-| 11 | AlliesPreWarmup | anchor | FREE-FOR-ALL · C2=11 | free-for-all (R1 only) |
-| 21 | Warmup | anchor | WARM-UP · Round 1 | warm-up (R1 only) |
-| **22** | WarmupWillFinish | anchor = `RoundStartTime` | **PRE-START · Round N · C2=22** (~10s host wait) | «раунд начинается» / round-start freeze — **every round**, not once-per-match |
-| 31 | PurchasePhase | **deadline** (+~10s) | PREP · Round N · C2=31 | buy/spawn countdown (only visible wire timer) |
-| *(none)* | RoundLive | *(unchanged — last Prep deadline passed)* | LIVE · Round N **(no round clock)** | combat; **no** fixed round timer on phone gold |
-| 40 | BombPlanted | *(no Time)* | BOMB PLANTED | fuse from plant Rpc |
-| 101 | RoundEndPause | anchor | ROUND END · Round N | round-end + WinTeam bag |
-| 111–113 | HalfTime* | anchor each | HALF-TIME · … | side swap after R7 |
-
-**Operator note:** CLI used to label C2=22 as «MATCH STARTING» — that was misleading.
-Gold sends C2=22 before **every** round’s prep; it is per-round PreStart, not a match-open banner.
-
-### In-round 2:00 → freeze (dedicated bug history)
-
-| Cause | Evidence | Fix |
-|-------|----------|-----|
-| Ranked `EnterRoundLive` TX **C2=101 + `Time`=now+RoundDuration** | Generic Ranked path; client shows mode round clock (~90–120s) | Allies hard-branched: `EnterAlliesLive` — **no** room bag |
-| PreStart/WarmUp **`Time`=deadline** stacked on Prep | Phantom «starting match» + prep timers | Allies: anchor `Time` on C2=11/21/22; **only** C2=31 sends deadline |
-| Stale Prep `Time` used as Live round clock in CLI | Dashboard `TimeDeadline` fallback on RoundLive | CLI: no clock on Allies RoundLive; use `PhaseEndsUtc` only |
-
-If client still flashes ~2:00 then stalls: client Ranked2v2 mode config may default ~120s locally when prep
-`Time` expires while wire C2=31 — server sends **no** Live Time updates (gold-faithful), so local countdown
-freezes. Phone host behaves the same on wire; dedicated must not re-add C2=101 Live bags to «fix» it.
+Gold phone host used C2=22 anchor + separate C2=31 deadline — live client 2.06 maps buy to C2=22
+with countdown; prior dedicated doc mislabeled C2=22 as «PreStart» and C2=31 as buy.
 
 ## Phase sequence (dedicated host)
 
 ```
-C2=10 → C2=11 (~8s) → C2=21 (~3s, R1 only) → C2=22 (~10s) → C2=31 (~10s prep countdown) →
-(silent Live) → (manual plant C2=40?) → C2=101 round end + WinTeam (~6s pause) → C2=22 …
-After R7: C2=101 → C2=111 (~5s) → team flip → C2=112 (~1s) → C2=113 (~7s) → C2=22 R8 …
+C2=10 → C2=21 (~3s, R1 only) → C2=22 (~10s buy) → C2=101 Live (90s) →
+(manual plant C2=40 + BombManager Rpc?) → C2=101 round end (~6s pause) → C2=22 …
+After R7: C2=101 → C2=111 → team flip → C2=112 → C2=113 → C2=22 R8 …
 ```
-
-Dedicated host must rebuild these bags with codecs — **never replay capture blobs**.
 
 | C2 | len≈ | Key order (room SetProperties) | Side TX |
 |----|------|----------------------------------|---------|
 | 10 | 14 | `C2` | bootstrap |
-| 11 | 28 | `Time`, `C2` | anchor Time |
-| 21 | 28 | `Time`, `C2` | anchor Time; R1 only |
-| 22 | 77 | `Time`, `Round`, `RoundStartTime`, `bomberId`, `C2` | ReCreate 4/5/6/8 + actor money=800 before bag |
-| 31 | 90 | `Time`, `Ct_RoundStartPlayersCount`, `Tr_RoundStartPlayersCount`, `C2` | **only** deadline Time |
-| 40 | 14 | `C2` | manual plant; no Time |
-| 101 | 151 | `Time`, `{winner}Score`, `{loser}CoLosses`, `{winner}CoLosses`, `WinTeam`, `C2` | MVP SetProperty first; then bag |
-| 111 | 28 | `Time`, `C2` | half-time intro |
-| 112 | 101 | `Time`, `CtScore`, `TrScore`, `swapped_team`, `CtCoLosses`, `TrCoLosses`, `C2` | after forced team SetProperty |
-| 113 | 28 | `Time`, `C2` | half-time transition |
+| 21 | 28 | `Time`, `C2` | anchor; R1 only |
+| 22 | 90+ | `Time`, `Round`, `RoundStartTime`, `bomberId`, `Ct/Tr_RoundStartPlayersCount`, `C2` | ReCreate 4/5/6/8 + money=800 |
+| 101 | — | `Time`, `Round`, `RoundStartTime`, `RoundCount`, `C2` | Live 90s round clock |
+| 40 | 28+ | `C2`, `Time`, `RoundStartTime` | manual plant + fuse; host BombManager Rpc fan-out |
+| 101 | 151 | `Time`, scores, `WinTeam`, `C2` | round end (WinTeam bag) |
+| 111–113 | … | half-time bags | side swap after R7 |
 
-**Live:** no room bag — Prep deadline expiry → `RoundLive` internally.
+**Ranked poison (must not inherit blindly):** generic Ranked C2=31 prep-only path, C2=11 freeforall,
+PreStart anchor on C2=22 without buy deadline, silent Live without round clock. Allies uses
+`GameMatchHost.Allies.cs` only.
 
-**Ranked poison (must not inherit):** generic `EnterRoundLive` C2=101 + 90s clock, PreStart `Time=deadline`, bomb plant `Time` fuse on C2=40, `ContinueAfterRoundEnd` → `EnterWarmupWillFinish` (3s PreStart). Allies uses `GameMatchHost.Allies.cs` only.
+## Bomb plant sync
+
+Manual carry plant (field=1/2 during Live):
+
+1. Host accepts plant Rpc during RoundLive only.
+2. Host TX **C2=40 + Time fuse deadline + RoundStartTime** to all peers.
+3. Host **fan-out BombManager plant Rpc** (`BroadcastInitReady`) with planter payload — peers
+   need the Rpc for bomb mesh/fuse, not only C2=40 (planter had local apply; others did not).
+
+Escalation auto-plant (field=3) uses the same fan-out pattern; Allies reuses it for manual plants.
 
 ## Round end bag (C2=101)
 
@@ -166,24 +143,12 @@ Server-authoritative:
 1. C2=111 pause (~5s)
 2. **Force SetProperty `team`** on every Tr/Ct actor (Tr↔Ct) + money=800
 3. C2=112: `swapped_team=true`, flip `TrScore`↔`CtScore`, reset CoLosses
-4. C2=113 (~7s) → PreStart round 8
-
-## Escalation divergence
-
-| | Allies / Ranked2v2 | Escalation |
-|--|-------------------|------------|
-| FSM file | `GameMatchHost.Allies.cs` | `GameMatchHost.Escalation.cs` |
-| PreStart C2=22 | ~10s + bomberId | ~8s, no bomberId, BombSite |
-| Plant | Manual carry field=1/2 during Live | Auto-plant field=3 |
-| Live | silent after Prep deadline; no round clock | C2=31 combat after auto-plant |
-| Round end | C2=101 + WinTeam (only C2=101 use) | C2=101 + WinTeam |
-| Half-time | 111→112→113 after R7 | (not in Escalation probe) |
-| Win condition | First to 8 | MR-N via `/set round` |
+4. C2=113 (~7s) → Prep C2=22 round 8
 
 ## Implementation
 
-- `GameMatchHost.Allies.cs` — **sole** Allies FSM: all phase enters, bomb plant C2=40, round-end bag builder, prep spawn-extend
-- `GameMatchHost.Ranked2v2HalfTime.cs` — half-time 111/112/113 + forced team swap (Allies-only callers)
-- `GameMatchHost.Ranked2v2RoundEnd.cs` — shared `EnterRoundEndPause` delegates bag shape to `BuildAlliesRoundEndRoomProps`; `ContinueAfterRoundEnd` redirects Allies → `ContinueAfterRoundEndAllies`
-- `GameMatchHost.Ranked2v2Phases.cs` — `TryEnterBombPlanted` redirects Allies → `TryEnterAlliesBombPlanted`; generic Ranked path never runs for `Ranked2v2` C0
-- `AlliesFlowParams` in `MatchWorld.cs` — probe-verified host timers (wire vs internal)
+- `GameMatchHost.Allies.cs` — sole Allies FSM: WarmUp→Prep C2=22→Live C2=101→plant→round-end
+- `GameMatchHost.Ranked2v2HalfTime.cs` — half-time 111/112/113 + forced team swap
+- `GameMatchHost.Ranked2v2RoundEnd.cs` — shared round-end; Allies bag via `BuildAlliesRoundEndRoomProps`
+- `GameMatchHost.WorldObjects.cs` — plant observe + host BombManager fan-out (no peer-only relay)
+- `AlliesFlowParams` in `MatchWorld.cs` — WarmUp/Prep/RoundDuration/BombFuse timers

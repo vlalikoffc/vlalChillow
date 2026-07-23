@@ -338,8 +338,8 @@ public sealed partial class GameMatchHost
         {
             Console.WriteLine(
                 "[match-host] match-flow: EnterWarmupWillFinish BLOCKED for Allies — " +
-                "use EnterAlliesPreStart (anchor Time, ~10s PreStart)");
-            EnterAlliesPreStart(room);
+                "use EnterAlliesPrep (C2=22 buy deadline)");
+            EnterAlliesPrep(room);
             return;
         }
 
@@ -485,7 +485,7 @@ public sealed partial class GameMatchHost
         {
             Console.WriteLine(
                 "[match-host] match-flow: EnterRoundLive BLOCKED for Allies — " +
-                "use EnterAlliesLive (no C2=101 / no round clock on wire)");
+                "use EnterAlliesLive (C2=101 + round clock)");
             EnterAlliesLive(room);
             return;
         }
@@ -576,11 +576,15 @@ public sealed partial class GameMatchHost
     /// PreStart/Prep plant Rpc is ignored (latest.log: WarmupWillFinish field=1 → invented
     /// C2=40 + free T round). No deferred PendingBombPlant. No host plant TX invent.
     /// </summary>
-    private void TryEnterBombPlanted(MatchRoom room, byte sourceField)
+    private void TryEnterBombPlanted(
+        MatchRoom room,
+        byte sourceField,
+        byte[]? plantPayload = null,
+        double plantTimeValue = 0)
     {
         if (IsAlliesRoom(room))
         {
-            TryEnterAlliesBombPlanted(room, sourceField);
+            TryEnterAlliesBombPlanted(room, sourceField, plantPayload, plantTimeValue);
             return;
         }
 
