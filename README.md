@@ -16,6 +16,15 @@ Console/chat commands (`/mode`, `/map`, `/set start`, `/play`, …) and the CLI 
 
 **Not ready:** Ranked 2v2, Defuse, DeathMatch, and other modes are registered in the catalog but stub or partial — no reliable playable match yet. See each mode's README under `server/Net/Match/Modes/`.
 
+## Screenshots
+
+Escalation on Prison over LAN — from lobby ready-up through round outcomes on the dedicated host.
+
+| Waiting for players | After bomb defuse |
+|:-:|:-:|
+| ![Escalation on Prison — waiting for players](docs/screenshots/waiting-for-players.png) | ![Round outcome after bomb defuse](docs/screenshots/bomb-defused-mvp.png) |
+| CT/T roster ready in lobby | MVP awarded on successful defuse |
+
 ## Requirements
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
