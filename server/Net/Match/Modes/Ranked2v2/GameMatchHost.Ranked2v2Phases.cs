@@ -560,6 +560,12 @@ public sealed partial class GameMatchHost
     /// </summary>
     private void TryEnterBombPlanted(MatchRoom room, byte sourceField)
     {
+        if (IsAlliesRoom(room))
+        {
+            TryEnterAlliesBombPlanted(room, sourceField);
+            return;
+        }
+
         MatchFlowPhase fromPhase;
         lock (_roomGate)
         {
@@ -592,17 +598,14 @@ public sealed partial class GameMatchHost
             room.Flow.BombPlanted = true;
             room.Flow.BombPlantedUtc = plantUtc;
             room.Flow.Phase = MatchFlowPhase.BombPlanted;
-            room.Flow.PhaseEndsUtc = plantUtc + (IsAlliesRoom(room)
-                ? AlliesFlowParams.BombFuse
-                : MatchFlowTestParams.BombFuse);
+            room.Flow.PhaseEndsUtc = plantUtc + MatchFlowTestParams.BombFuse;
         }
 
         DateTime plantedAt;
         lock (_roomGate)
             plantedAt = room.Flow.BombPlantedUtc;
         var nowSec = ServerTimeSeconds();
-        var fuse = IsAlliesRoom(room) ? AlliesFlowParams.BombFuse : MatchFlowTestParams.BombFuse;
-        var fuseSec = fuse.TotalSeconds;
+        var fuseSec = MatchFlowTestParams.BombFuse.TotalSeconds;
         var deadline = nowSec + fuseSec;
         BroadcastRoomProps(room,
         [

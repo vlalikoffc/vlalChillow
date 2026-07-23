@@ -119,8 +119,12 @@ public sealed partial class GameMatchHost
 
         var nowSec = ServerTimeSeconds();
         var winTeamProps = BuildWinTeamProps(winner, mvpNr, mvpCode);
-        var roomProps = BuildRoundEndRoomProps(
-            nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps);
+        var roomProps = IsAlliesRoom(room)
+            ? BuildAlliesRoundEndRoomProps(
+                nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps)
+            : BuildRoundEndRoomProps(
+                nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps);
+        var logTag = IsAlliesRoom(room) ? "allies" : "match-flow";
         // Gold bag (both scores + WinTeam + C2=101) to all room peers — no exceptSender.
         BroadcastRoomProps(room, roomProps, reason: $"RoundEnd {reason} round={round}");
         // Explicit TrScore+CtScore SetProperty to ALL connected match peers so stay-in
@@ -128,7 +132,7 @@ public sealed partial class GameMatchHost
         BroadcastMatchScoresToAllPeers(room, scoreTr, scoreCt);
         var pause = RoundEndPauseFor(room);
         Console.WriteLine(
-            $"[match-host] match-flow: RoundEnd C2={MatchC2States.MatchStarted} round={round} " +
+            $"[match-host] {logTag}: RoundEnd C2={MatchC2States.MatchStarted} round={round} " +
             $"winner={winner} reason={reason} " +
             $"TrScore={scoreTr} CtScore={scoreCt} " +
             $"TrCoLosses={coLossesTr} CtCoLosses={coLossesCt} " +
@@ -196,6 +200,12 @@ public sealed partial class GameMatchHost
 
     private void ContinueAfterRoundEnd(MatchRoom room)
     {
+        if (IsAlliesRoom(room))
+        {
+            ContinueAfterRoundEndAllies(room);
+            return;
+        }
+
         int round;
         lock (_roomGate)
             round = room.Flow.RoundIndex;
@@ -207,8 +217,7 @@ public sealed partial class GameMatchHost
             scoreCt = room.Flow.ScoreCt;
         }
 
-        // Allies: first to WinsNeeded (default 8). Half-time after round 7 — not match end.
-        if (MatchHostSettings.IsAlliesMatchOver(scoreTr, scoreCt))
+        if (MatchHostSettings.IsMatchSeriesOver(round, scoreTr, scoreCt))
         {
             lock (_roomGate)
             {
@@ -221,25 +230,14 @@ public sealed partial class GameMatchHost
             ], reason: $"MatchResults Tr={scoreTr} Ct={scoreCt}");
             Console.WriteLine(
                 $"[match-host] match-flow: MatchResults C2={MatchC2States.MatchResults} " +
-                $"Tr={scoreTr} Ct={scoreCt} after round={round} — " +
-                $"first-to-{MatchHostSettings.WinsNeeded}");
-            return;
-        }
-
-        if (NeedsAlliesHalfTime(room, round))
-        {
-            Console.WriteLine(
-                $"[match-host] match-flow: half-time after round {round} " +
-                $"(score {scoreTr}:{scoreCt}) — C2=111→112→113 then PreStart");
-            EnterHalfTimeIntro(room);
+                $"Tr={scoreTr} Ct={scoreCt} after round={round}");
             return;
         }
 
         Console.WriteLine(
             $"[match-host] match-flow: next-round after RoundEnd pause — " +
             $"enter PreStart C2={MatchC2States.WarmupWillFinish} " +
-            $"(round {round}→{round + 1}; first-to-{MatchHostSettings.WinsNeeded}; " +
-            "gold — never skip C2=22)");
+            $"(round {round}→{round + 1}; gold — never skip C2=22)");
         EnterWarmupWillFinish(room);
     }
 

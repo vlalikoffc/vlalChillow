@@ -137,7 +137,7 @@ public sealed partial class GameMatchHost
                 EnterAlliesPrep(room);
                 break;
             case MatchFlowPhase.PurchasePhase:
-                if (TryExtendPrepForAwaitingSpawn(room))
+                if (TryExtendAlliesPrepForAwaitingSpawn(room))
                     break;
                 EnterAlliesLive(room);
                 break;
@@ -165,11 +165,11 @@ public sealed partial class GameMatchHost
         }
         ClearBombAuthority(room, "Allies PreWarmup C2=11");
         MatchHostSettings.MatchStartArmed = false;
-        // Gold: Time = phase-start anchor (bfqt sec), not a visible countdown deadline.
+        // Gold len≈28: Time, C2 — anchor Time only (host waits ~8s internally).
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.DeathMatchPreWarmup)),
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.DeathMatchPreWarmup)),
         ], reason: "Allies PreWarmup C2=11");
         Console.WriteLine(
             $"[match-host] allies: PreWarmup C2={MatchC2States.DeathMatchPreWarmup} " +
@@ -192,10 +192,11 @@ public sealed partial class GameMatchHost
             room.Flow.PendingCombatDestroy.Clear();
         }
         ClearBombAuthority(room, "Allies WarmUp C2=21");
+        // Gold len≈28: Time, C2 — anchor; no RoundStartTime on WarmUp.
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmUp)),
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmUp)),
         ], reason: "Allies WarmUp C2=21");
         Console.WriteLine(
             $"[match-host] allies: WarmUp C2={MatchC2States.WarmUp} dur={dur.TotalSeconds:0}s " +
@@ -255,7 +256,7 @@ public sealed partial class GameMatchHost
         PostServerDebugChat($"Prep · раунд {round}");
     }
 
-    /// <summary>PurchasePhase C2=31 — Ct/Tr_RoundStartPlayersCount. Gold ≈10s before Live C2=101.</summary>
+    /// <summary>PurchasePhase C2=31 — gold len≈90; only phase with wire countdown Time deadline.</summary>
     private void EnterAlliesPrep(MatchRoom room)
     {
         lock (_roomGate)
@@ -399,5 +400,132 @@ public sealed partial class GameMatchHost
             $"[match-host] allies: next PreStart C2={MatchC2States.WarmupWillFinish} " +
             $"(round {round}→{round + 1}; skip WarmUp)");
         EnterAlliesPreStart(room);
+    }
+
+    /// <summary>
+    /// Allies manual plant — gold len≈14: C2=40 only (no Time / RoundStartTime on wire).
+    /// Host still tracks <see cref="MatchFlowState.BombPlantedUtc"/> for fuse authority.
+    /// </summary>
+    private void TryEnterAlliesBombPlanted(MatchRoom room, byte sourceField)
+    {
+        MatchFlowPhase fromPhase;
+        lock (_roomGate)
+        {
+            fromPhase = room.Flow.Phase;
+            if (room.Flow.BombPlanted || room.Flow.Phase == MatchFlowPhase.BombPlanted)
+            {
+                Console.WriteLine(
+                    $"[match-host] allies: BombManager plant field={sourceField} IGNORED — already planted");
+                return;
+            }
+            if (room.Flow.PendingEndReason is not null)
+            {
+                Console.WriteLine(
+                    $"[match-host] allies: BombManager plant field={sourceField} " +
+                    $"IGNORED — pendingEnd={room.Flow.PendingEndReason}");
+                return;
+            }
+            if (fromPhase is not MatchFlowPhase.RoundLive)
+            {
+                Console.WriteLine(
+                    $"[match-host] allies: BombManager plant field={sourceField} " +
+                    $"IGNORED — phase={fromPhase} (RoundLive only)");
+                return;
+            }
+
+            var plantUtc = DateTime.UtcNow;
+            room.Flow.PendingBombPlant = false;
+            room.Flow.BombPlanted = true;
+            room.Flow.BombPlantedUtc = plantUtc;
+            room.Flow.Phase = MatchFlowPhase.BombPlanted;
+            room.Flow.PhaseEndsUtc = plantUtc + AlliesFlowParams.BombFuse;
+        }
+
+        DateTime plantedAt;
+        lock (_roomGate)
+            plantedAt = room.Flow.BombPlantedUtc;
+        BroadcastRoomProps(room,
+        [
+            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),
+        ], reason: $"Allies BombPlanted field={sourceField} C2=40");
+        var fuseSec = AlliesFlowParams.BombFuse.TotalSeconds;
+        Console.WriteLine(
+            $"[match-host] allies: manual plant field={sourceField} → C2=40 only " +
+            $"(gold len≈14; plantUtc={plantedAt:O} host fuse={fuseSec:0}s)");
+        PostServerDebugChat($"бомба установлена (fuse {fuseSec:0}s)");
+    }
+
+    /// <summary>
+    /// Gold round-end bag len≈151: Time, winner score, loser CoLosses, winner CoLosses=0,
+    /// WinTeam, C2=101 — winner score key only (not both TrScore+CtScore in one bag).
+    /// </summary>
+    private static List<(string Key, LobbyVariant Value)> BuildAlliesRoundEndRoomProps(
+        double nowSec,
+        MatchTeam winner,
+        int scoreTr,
+        int scoreCt,
+        int coLossesTr,
+        int coLossesCt,
+        List<(string Key, LobbyVariant Value)> winTeamProps)
+    {
+        var props = new List<(string Key, LobbyVariant Value)>
+        {
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+        };
+        if (winner == MatchTeam.Tr)
+        {
+            props.Add((MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)));
+            props.Add((MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(coLossesCt)));
+            props.Add((MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(coLossesTr)));
+        }
+        else
+        {
+            props.Add((MatchRoomPropKeys.CtScore, LobbyVariant.FromInt(scoreCt)));
+            props.Add((MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(coLossesTr)));
+            props.Add((MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(coLossesCt)));
+        }
+
+        props.Add((MatchRoomPropKeys.WinTeam, LobbyVariant.FromProps(winTeamProps)));
+        props.Add((MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchStarted)));
+        return props;
+    }
+
+    /// <summary>Defer Live once if a fighter picked team but has not spawned — refresh Prep Time only.</summary>
+    private bool TryExtendAlliesPrepForAwaitingSpawn(MatchRoom room)
+    {
+        if (!FightersAwaitingSpawn(room))
+            return false;
+
+        double deadline;
+        int bomberId = 0;
+        lock (_roomGate)
+        {
+            if (room.Flow.Phase != MatchFlowPhase.PurchasePhase)
+                return false;
+            if (room.Flow.PrepSpawnExtensionUsed)
+                return false;
+            room.Flow.PrepSpawnExtensionUsed = true;
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            if (room.Flow.BomberActorNr <= 0)
+            {
+                var pick = PickBomberActorNr(room);
+                if (pick > 0)
+                    room.Flow.BomberActorNr = pick;
+            }
+            bomberId = room.Flow.BomberActorNr;
+        }
+
+        var nowSec = ServerTimeSeconds();
+        deadline = nowSec + 5.0;
+        var props = new List<(string Key, LobbyVariant Value)>
+        {
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+        };
+        if (bomberId > 0)
+            props.Add((MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)));
+        BroadcastRoomProps(room, props, reason: "Allies Prep spawn-extend 5s", phaseDeadlineSec: deadline);
+        Console.WriteLine(
+            "[match-host] allies: Prep extended 5s — spawn wait (Time deadline only; no RoundStartTime)");
+        return true;
     }
 }

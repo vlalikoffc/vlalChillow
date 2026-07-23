@@ -93,6 +93,25 @@ C2=10 → C2=11 (~8s) → C2=21 (~3s, R1 only) → C2=22 (~10s) → C2=31 (~10s 
 After R7: C2=101 → C2=111 (~5s) → team flip → C2=112 (~1s) → C2=113 (~7s) → C2=22 R8 …
 ```
 
+Dedicated host must rebuild these bags with codecs — **never replay capture blobs**.
+
+| C2 | len≈ | Key order (room SetProperties) | Side TX |
+|----|------|----------------------------------|---------|
+| 10 | 14 | `C2` | bootstrap |
+| 11 | 28 | `Time`, `C2` | anchor Time |
+| 21 | 28 | `Time`, `C2` | anchor Time; R1 only |
+| 22 | 77 | `Time`, `Round`, `RoundStartTime`, `bomberId`, `C2` | ReCreate 4/5/6/8 + actor money=800 before bag |
+| 31 | 90 | `Time`, `Ct_RoundStartPlayersCount`, `Tr_RoundStartPlayersCount`, `C2` | **only** deadline Time |
+| 40 | 14 | `C2` | manual plant; no Time |
+| 101 | 151 | `Time`, `{winner}Score`, `{loser}CoLosses`, `{winner}CoLosses`, `WinTeam`, `C2` | MVP SetProperty first; then bag |
+| 111 | 28 | `Time`, `C2` | half-time intro |
+| 112 | 101 | `Time`, `CtScore`, `TrScore`, `swapped_team`, `CtCoLosses`, `TrCoLosses`, `C2` | after forced team SetProperty |
+| 113 | 28 | `Time`, `C2` | half-time transition |
+
+**Live:** no room bag — Prep deadline expiry → `RoundLive` internally.
+
+**Ranked poison (must not inherit):** generic `EnterRoundLive` C2=101 + 90s clock, PreStart `Time=deadline`, bomb plant `Time` fuse on C2=40, `ContinueAfterRoundEnd` → `EnterWarmupWillFinish` (3s PreStart). Allies uses `GameMatchHost.Allies.cs` only.
+
 ## Round end bag (C2=101)
 
 Phone Allies round end uses **C2=101** + nested `WinTeam` — **not** C2=111.
@@ -131,6 +150,8 @@ Server-authoritative:
 
 ## Implementation
 
-- `GameMatchHost.Allies.cs` — dedicated FSM (Escalation-style branch)
-- `GameMatchHost.Ranked2v2HalfTime.cs` — half-time 111/112/113 + forced team swap
-- `AlliesFlowParams` in `MatchWorld.cs` — probe-verified timers
+- `GameMatchHost.Allies.cs` — **sole** Allies FSM: all phase enters, bomb plant C2=40, round-end bag builder, prep spawn-extend
+- `GameMatchHost.Ranked2v2HalfTime.cs` — half-time 111/112/113 + forced team swap (Allies-only callers)
+- `GameMatchHost.Ranked2v2RoundEnd.cs` — shared `EnterRoundEndPause` delegates bag shape to `BuildAlliesRoundEndRoomProps`; `ContinueAfterRoundEnd` redirects Allies → `ContinueAfterRoundEndAllies`
+- `GameMatchHost.Ranked2v2Phases.cs` — `TryEnterBombPlanted` redirects Allies → `TryEnterAlliesBombPlanted`; generic Ranked path never runs for `Ranked2v2` C0
+- `AlliesFlowParams` in `MatchWorld.cs` — probe-verified host timers (wire vs internal)
