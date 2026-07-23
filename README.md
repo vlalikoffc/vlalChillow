@@ -4,6 +4,8 @@ LAN multiplayer **dedicated server** for [**StandChillow**](https://t.me/chillow
 
 Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engineering authorized by the game owner. Not an official product and not affiliated with the game publisher.
 
+**Supported client version:** StandChillow **2.06 OBT F1**. Other builds are untested.
+
 ## What works
 
 - **Lobby** — LiteNetLib on UDP **7778** (join, roster, chat, mode/map selection)
