@@ -153,13 +153,21 @@ public sealed partial class GameMatchHost
                     return;
             }
             else if (phase == MatchFlowPhase.MatchOver)
-                return;
+            {
+                // Handled below after lock.
+            }
             else if (phase is MatchFlowPhase.HalfTimeIntro
                 or MatchFlowPhase.HalfTimeSwap
                 or MatchFlowPhase.HalfTimeTransition)
             {
                 // Half-time — no combat/wipe; timer drives 111→112→113→PreStart.
             }
+        }
+
+        if (phase == MatchFlowPhase.MatchOver)
+        {
+            TryFireMatchOverLobbyReturn(room, ends);
+            return;
         }
 
         // Event outcomes preempt phase timers: wipe / pending end every tick while combat

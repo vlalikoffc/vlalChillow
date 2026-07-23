@@ -81,6 +81,11 @@ public sealed partial class GameMatchHost : IDisposable
 
     private static readonly TimeSpan ReconnectRestoreSettle = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan ReconnectRestoreTimeout = TimeSpan.FromSeconds(5);
+    /// <summary>After MatchResults C2=205 — delay before tearing down 7777 and lobby idle.</summary>
+    private static readonly TimeSpan MatchOverReturnToLobbyDelay = TimeSpan.FromSeconds(5);
+
+    private readonly int _listenPort;
+    private volatile bool _acceptMatchConnections = true;
 
     /// <summary>
     /// Mid-match ChatManager text that looks like a lobby slash command (<c>/set start</c>, …).
@@ -88,6 +93,12 @@ public sealed partial class GameMatchHost : IDisposable
     /// Lobby OpChat cannot see these; wire this from <see cref="GameNetHost"/>.
     /// </summary>
     public Action<IPAddress, string>? OnMatchChatSlashCommand { get; set; }
+
+    /// <summary>
+    /// Fired once when MatchOver + LobbyReturnPending timer elapses (wins-needed / series over).
+    /// Lobby host should HardReset, stop 7777 advertise, restore idle lobby (keep mode/map).
+    /// </summary>
+    public Action? OnMatchOverReturnToLobby { get; set; }
 
     /// <summary>
     /// Host-originated debug chat (Server nick) when <see cref="MatchHostSettings.DebugMatchChat"/>
@@ -132,6 +143,7 @@ public sealed partial class GameMatchHost : IDisposable
     public GameMatchHost(string lobbyId, int port = DefaultMatchPort, IPAddress? advertiseHint = null)
     {
         _lobbyId = lobbyId;
+        _listenPort = port;
         _captureDir = Path.Combine(AppContext.BaseDirectory, "captures");
         Directory.CreateDirectory(_captureDir);
         _serverTimeSeed = Environment.TickCount;
@@ -147,6 +159,14 @@ public sealed partial class GameMatchHost : IDisposable
         _listener.ConnectionRequestEvent += request =>
         {
             var peek = request.Data.AvailableBytes;
+            if (!_acceptMatchConnections || !_manager.IsRunning)
+            {
+                request.Reject();
+                Console.WriteLine(
+                    $"[match-host] CONNECT reject {request.RemoteEndPoint} dataLen={peek} " +
+                    "(match host suspended / lobby idle)");
+                return;
+            }
             // fwv.OnConnectionRequest → AcceptIfKey(cwpw); empty key → ConnectionRejected.
             var accepted = request.AcceptIfKey(ConnectionKey);
             Console.WriteLine(
@@ -178,7 +198,7 @@ public sealed partial class GameMatchHost : IDisposable
         if (!_manager.Start(port))
             throw new InvalidOperationException(
                 $"Failed to bind match LiteNetLib on UDP {port} — " +
-                "7777 must be a process singleton (no second GameMatchHost / no re-Start)");
+                "7777 must be a process singleton (no second GameMatchHost while first is bound)");
 
         if (!_manager.IsRunning)
             throw new InvalidOperationException($"Match LiteNetLib reported not running after Start({port})");
@@ -186,16 +206,113 @@ public sealed partial class GameMatchHost : IDisposable
         var lan = advertiseHint ?? LanInterfacePicker.PickLanBindAddress();
         Console.WriteLine(
             $"[match-host] LiteNetLib listen *:{port} key='{ConnectionKey}' channels={ChannelsCount} " +
-            $"advertiseLAN={(lan?.ToString() ?? "?")} (SINGLETON — play/start must not rebind)");
+            $"advertiseLAN={(lan?.ToString() ?? "?")} (one bind; Stop after MatchOver, Start again on /play)");
         // Pre-create LAN room under password key Dedik so JoinOnly finds it as soon as op9 fires.
         EnsureLanRoom();
 
         _tasks.Add(Task.Run(PollLoop));
     }
 
-    public int Port => _manager.LocalPort;
-    /// <summary>True after the one-time UDP bind in the constructor — never Start() again.</summary>
+    public int Port => _manager.IsRunning ? _manager.LocalPort : _listenPort;
+    /// <summary>True while match LiteNetLib is bound (false after MatchOver Suspend).</summary>
     public bool IsListening => _manager.IsRunning;
+
+    /// <summary>
+    /// After series MatchResults + delay: disconnect peers / clear Dedik, then <c>Stop()</c> UDP
+    /// so 7777 is down until the next <see cref="EnsureMatchListening"/>.
+    /// </summary>
+    public void SuspendMatchListen(string reason)
+    {
+        _acceptMatchConnections = false;
+        HardResetMatchForNewStart(reason);
+        if (_manager.IsRunning)
+        {
+            try { _manager.Stop(); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[match-host] Stop UDP {_listenPort} failed: {ex.Message}");
+            }
+        }
+        Console.WriteLine(
+            $"[match-host] match listen SUSPENDED UDP {_listenPort} ({reason}) — " +
+            "lobby idle until /play");
+    }
+
+    /// <summary>
+    /// Ensure UDP match port is bound before Play/op9. Re-<c>Start</c>s after
+    /// <see cref="SuspendMatchListen"/>; no-op if already listening.
+    /// </summary>
+    public bool EnsureMatchListening()
+    {
+        if (_manager.IsRunning)
+        {
+            _acceptMatchConnections = true;
+            return true;
+        }
+
+        if (!_manager.Start(_listenPort))
+        {
+            Console.WriteLine(
+                $"[match-host] FATAL: failed to rebind UDP {_listenPort} after suspend");
+            return false;
+        }
+
+        _acceptMatchConnections = true;
+        EnsureLanRoom();
+        Console.WriteLine(
+            $"[match-host] LiteNetLib RESTARTED UDP {_listenPort} key='{ConnectionKey}'");
+        return true;
+    }
+
+    /// <summary>
+    /// MatchResults C2=205 + arm 5s lobby return (Allies first-to-N / Ranked-Escalation series over).
+    /// </summary>
+    private void EnterMatchResultsAndArmLobbyReturn(
+        MatchRoom room, int scoreTr, int scoreCt, string logTag, int round, string? extra = null)
+    {
+        lock (_roomGate)
+        {
+            room.Flow.Phase = MatchFlowPhase.MatchOver;
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchOverReturnToLobbyDelay;
+            room.Flow.LobbyReturnPending = true;
+        }
+        BroadcastRoomProps(room,
+        [
+            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchResults)),
+        ], reason: $"MatchResults Tr={scoreTr} Ct={scoreCt}");
+        Console.WriteLine(
+            $"[match-host] {logTag}: MatchResults C2={MatchC2States.MatchResults} " +
+            $"Tr={scoreTr} Ct={scoreCt} after round={round}" +
+            (extra is null ? "" : $" {extra}") +
+            $" — lobby return in {MatchOverReturnToLobbyDelay.TotalSeconds:0}s");
+    }
+
+    /// <summary>
+    /// Tick helper: when MatchOver + LobbyReturnPending and deadline elapsed, fire once.
+    /// </summary>
+    private bool TryFireMatchOverLobbyReturn(MatchRoom room, DateTime phaseEndsUtc)
+    {
+        bool fire;
+        lock (_roomGate)
+        {
+            fire = room.Flow.Phase == MatchFlowPhase.MatchOver
+                   && room.Flow.LobbyReturnPending
+                   && DateTime.UtcNow >= phaseEndsUtc;
+            if (fire)
+                room.Flow.LobbyReturnPending = false;
+        }
+        if (!fire)
+            return false;
+
+        Console.WriteLine(
+            "[match-host] match-over: 5s elapsed after MatchResults → return players to lobby");
+        try { OnMatchOverReturnToLobby?.Invoke(); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[match-host] OnMatchOverReturnToLobby: {ex.Message}");
+        }
+        return true;
+    }
     public int PeerCount => _manager.ConnectedPeersCount;
     public int RoomCount
     {
@@ -617,6 +734,7 @@ public sealed partial class GameMatchHost : IDisposable
         st.JoinerAvatarSeen = false;
         st.JoinerPingSeen = false;
         st.PendingReconnectTeam = null;
+        st.ReconnectSpectatorFallbackDone = false;
     }
 
     public void Dispose()

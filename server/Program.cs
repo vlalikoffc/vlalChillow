@@ -211,7 +211,7 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
     Console.WriteLine("Phone: LAN list → join → chat /mode /map /set · /play (launch) · /set start (WarmUp).");
     Console.WriteLine("Expect: op7 → SearchingStarted → op9 LAN:7777 → Handshake → JoinRoom Dedik.");
     Console.WriteLine("After both teams: /set start | set start | start | startmatch → WarmUp.");
-    Console.WriteLine("Rematch: /play only (teardown previous match then fresh start).");
+    Console.WriteLine("Rematch: after MatchResults wait 5s → lobby idle (7777 stopped); /play then /set start.");
     Console.WriteLine("Captures: server/bin/Release/net8.0/captures/");
     Console.WriteLine("Commands: play|start|set start|startmatch|mode|map|status|binds|roster|plugins|quit");
     Console.WriteLine($"  defaults: {MatchHostSettings.FormatStatusLine()}");

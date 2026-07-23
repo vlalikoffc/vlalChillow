@@ -54,13 +54,16 @@ public sealed class GameNetHost : IDisposable
             ?? lanEndpoints?.FirstOrDefault()?.Address
             ?? IPAddress.Loopback;
 
-        // SINGLETON match listen: construct+bind UDP 7777 exactly once for this lobby process.
-        // Never new GameMatchHost / never re-_manager.Start(7777) on play/start or late join.
+        // SINGLETON match host object: construct once. UDP 7777 may Stop after MatchOver
+        // and Start again on /play — never construct a second GameMatchHost.
         _match = new GameMatchHost(_session.LobbyId, GameMatchHost.DefaultMatchPort, _advertiseLanIp);
         // Mid-match phones chat via ChatManager WorldObjectRpc — wire slash cmds (/set start).
         _match.OnMatchChatSlashCommand = HandleMatchChatSlashCommand;
         // Decisive match reactions → Server OpChat when MatchHostSettings.DebugMatchChat.
         _match.OnServerDebugChat = BroadcastConsoleChat;
+        // Wins-needed / series MatchResults + 5s → stop 7777, idle lobby (keep mode/map).
+        _match.OnMatchOverReturnToLobby = () =>
+            _deferred.Enqueue(() => ReturnPlayersToLobbyIdle("match-over"));
 
         _listener = new EventBasedNetListener();
         _manager = new NetManager(_listener)
@@ -152,11 +155,12 @@ public sealed class GameNetHost : IDisposable
     }
 
     /// <summary>
-    /// First Play: emit op7 + SearchingStarted + op9 to existing singleton 7777 (never rebind).
-    /// Rematch (<c>/play</c> after clients returned to lobby): <b>tear down</b> previous Dedik room
-    /// (MatchOver / mid-round / stale actors) then start fresh — do not re-advertise into a
-    /// dead match (loading hang). Never call this for <c>/set start</c> / console <c>start</c>
-    /// while a match is already live — those arm WarmUp via <see cref="ArmMatchStart"/>.
+    /// First Play: emit op7 + SearchingStarted + op9 to existing match host (rebind 7777 if
+    /// suspended after MatchOver). Rematch (<c>/play</c> after clients returned to lobby):
+    /// <b>tear down</b> previous Dedik room (MatchOver / mid-round / stale actors) then start
+    /// fresh — do not re-advertise into a dead match (loading hang). Never call this for
+    /// <c>/set start</c> / console <c>start</c> while a match is already live — those arm
+    /// WarmUp via <see cref="ArmMatchStart"/>.
     /// </summary>
     public bool TryStartMatch(string reason = "manual")
     {
@@ -167,11 +171,13 @@ public sealed class GameNetHost : IDisposable
             _matchStarted = true;
         }
 
-        if (!_match.IsListening)
+        if (!_match.EnsureMatchListening())
         {
             Console.WriteLine(
                 "[lobby] FATAL: match LiteNetLib not listening — refusing Play " +
-                "(would be Address already in use if we tried a second bind)");
+                "(rebind UDP 7777 failed after MatchOver suspend)");
+            lock (_gate)
+                _matchStarted = false;
             return false;
         }
 
@@ -208,6 +214,34 @@ public sealed class GameNetHost : IDisposable
     }
 
     /// <summary>
+    /// After MatchResults + 5s: stop match listen (7777), clear Dedik, lobby idle with
+    /// mode/map preserved. Next <c>/play</c> + <c>/set start</c> launches cleanly.
+    /// </summary>
+    public void ReturnPlayersToLobbyIdle(string reason)
+    {
+        lock (_gate)
+            _matchStarted = false;
+
+        // Preserve GameModeId + SelectedLevels — only clear in-progress flags.
+        _session.Searching = false;
+        _session.GameInProgress = false;
+        MatchHostSettings.MatchStartArmed = false;
+
+        _match.SuspendMatchListen(reason);
+        PushIdleLobbySignals(broadcastAll: true);
+
+        Console.WriteLine(
+            $"[lobby] RETURN TO LOBBY ({reason}): mode={_session.GameModeId} " +
+            $"levels=[{string.Join(", ", _session.SelectedLevels)}] " +
+            "SearchingStarted=false hasHosting=0 match UDP stopped");
+        BroadcastServerChat(
+            $"матч окончен — лобби (режим {_session.GameModeId} / карта сохранена). /play затем /set start");
+
+        try { _onRosterChanged?.Invoke(); }
+        catch (Exception ex) { Console.WriteLine($"[lobby] onRosterChanged after return: {ex.Message}"); }
+    }
+
+    /// <summary>
     /// Lobby signals for game-in-progress (phone host after Play): mode/levels, SearchingStarted,
     /// op9 → existing 7777. Never touches match bind.
     /// </summary>
@@ -226,6 +260,24 @@ public sealed class GameNetHost : IDisposable
             Send(onlyPeer, hostingPkt);
             return;
         }
+
+        if (broadcastAll)
+        {
+            Broadcast(modePkt);
+            Broadcast(searchingPkt);
+            Broadcast(hostingPkt);
+        }
+    }
+
+    /// <summary>
+    /// Pre-match / post-MatchOver idle: keep mode+map, SearchingStarted=false, hasHosting=0.
+    /// </summary>
+    private void PushIdleLobbySignals(bool broadcastAll)
+    {
+        var modePkt = LobbyCodec.BuildCustomProperties(_session.BuildModeLevelProps());
+        var searchingPkt = LobbyCodec.BuildCustomProperty(
+            LobbyPropKeys.SearchingStarted, LobbyVariant.FromBool(false));
+        var hostingPkt = LobbyCodec.BuildGameHostingState(null, 0);
 
         if (broadcastAll)
         {

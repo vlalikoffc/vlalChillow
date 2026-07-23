@@ -234,7 +234,8 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// After INIT: host-force remembered fighting team (same SetProperty team path as join),
-    /// wait ~5s for LivingPawn; on failure force Spectator. Evidence: team prop + joiner CWO.
+    /// wait ~5s for a joiner CreateWorldObject (SpawnedPawns); on failure force Spectator once.
+    /// Evidence: team prop + joiner CWO. Does not re-force Spectator if already done for this peer.
     /// </summary>
     private void MaybeScheduleReconnectRestore(NetPeer peer, MatchRoom room, byte joinerActorNr)
     {
@@ -243,6 +244,14 @@ public sealed partial class GameMatchHost
         var team = st.PendingReconnectTeam;
         if (team is not (MatchTeam.Tr or MatchTeam.Ct))
             return;
+        if (st.ReconnectSpectatorFallbackDone)
+        {
+            st.PendingReconnectTeam = null;
+            Console.WriteLine(
+                $"[match-host] reconnect-restore: skip actor={joinerActorNr} — " +
+                "spectator fallback already done once this peer session");
+            return;
+        }
 
         st.PendingReconnectTeam = null;
         var userId = st.UserId;
@@ -277,7 +286,7 @@ public sealed partial class GameMatchHost
                 {
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: forced team={team} actor={actorNr} — " +
-                        "await joiner CreateWorldObject");
+                        "await joiner CreateWorldObject (respawn)");
                 }
 
                 await Task.Delay(ReconnectRestoreTimeout, _cts.Token).ConfigureAwait(false);
@@ -297,21 +306,37 @@ public sealed partial class GameMatchHost
                     return;
                 }
 
-                bool hasPawn;
+                // Already forced Spectator once this session — never again.
+                if (cur.ReconnectSpectatorFallbackDone)
+                {
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: skip Spectator actor={actorNr} — once only");
+                    if (userId is { } uidOnce)
+                    {
+                        lock (_roomGate)
+                            _reconnectTeams.Remove(uidOnce);
+                    }
+                    return;
+                }
+
+                bool hasRespawned;
                 MatchTeam liveTeam = MatchTeam.None;
                 lock (_roomGate)
                 {
-                    hasPawn = room.LivingPawns.Values.Any(p => p.OwnerActorNr == actorNr);
+                    // SpawnedPawns = ever CWO'd after reconnect (survives combat death).
+                    // LivingPawns alone would mis-spectate a player who spawned then died.
+                    hasRespawned = room.SpawnedPawns.Contains(actorNr)
+                        || room.LivingPawns.Values.Any(p => p.OwnerActorNr == actorNr);
                     if (room.ActorProps.TryGetValue((actorNr, MatchRoomPropKeys.Team), out var tv)
                         && tv.Kind == LobbyVariantKind.Byte)
                         liveTeam = (MatchTeam)tv.Byte;
                 }
 
-                if (hasPawn && liveTeam == team)
+                if (hasRespawned && liveTeam == team)
                 {
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: OK actor={actorNr} team={liveTeam} " +
-                        "pawn present");
+                        "respawned (CWO seen)");
                     if (userId is { } uidOk)
                     {
                         lock (_roomGate)
@@ -320,9 +345,24 @@ public sealed partial class GameMatchHost
                     return;
                 }
 
+                // If they already moved themselves to Spectator, count as done — do not re-force.
+                if (liveTeam == MatchTeam.Spectator)
+                {
+                    cur.ReconnectSpectatorFallbackDone = true;
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: actor={actorNr} already Spectator — once done");
+                    if (userId is { } uidSpec)
+                    {
+                        lock (_roomGate)
+                            _reconnectTeams.Remove(uidSpec);
+                    }
+                    return;
+                }
+
                 Console.WriteLine(
                     $"[match-host] reconnect-restore: FAILED actor={actorNr} " +
-                    $"team={liveTeam} hasPawn={hasPawn} → Spectator fallback");
+                    $"team={liveTeam} hasRespawned={hasRespawned} → Spectator fallback (once)");
+                cur.ReconnectSpectatorFallbackDone = true;
                 if (TryForceTeam(peer, MatchTeam.Spectator, out var specMsg))
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: Spectator forced actor={actorNr} ({specMsg})");

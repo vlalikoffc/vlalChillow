@@ -33,6 +33,11 @@ internal sealed class MatchPeerState
     /// </summary>
     public MatchTeam? PendingReconnectTeam { get; set; }
 
+    /// <summary>
+    /// Reconnect spectator fallback already ran for this peer session — never force Spectator again.
+    /// </summary>
+    public bool ReconnectSpectatorFallbackDone { get; set; }
+
     public bool IsJoinerIdentityReady =>
         JoinerUidSeen && JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen);
 }

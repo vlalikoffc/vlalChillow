@@ -286,11 +286,24 @@ Server-authoritative:
 
 ## Implementation
 
-- `GameMatchHost.Allies.cs` — **sole** Allies FSM: `/set start`→C2=21 (skip 11)→22 anchor→31 deadline→silent Live→40+Rpc→101 WinTeam
+- `GameMatchHost.Allies.cs` — **sole** Allies FSM: `/set start`→C2=21 (skip 11)→22 buy deadline→31 post-buy anchor→silent Live→40+Rpc→101 WinTeam
 - `GameMatchHost.WorldObjects.cs` — observe plant Rpc → `TryEnterBombPlanted`; Allies host fan-out, drop peer relay
 - `GameMatchHost.Ranked2v2HalfTime.cs` — half-time 111/112/113 + forced team swap (Allies-only callers)
 - `GameMatchHost.Ranked2v2RoundEnd.cs` — shared `EnterRoundEndPause` delegates bag shape to `BuildAlliesRoundEndRoomProps`; `ContinueAfterRoundEnd` redirects Allies → `ContinueAfterRoundEndAllies`
 - `GameMatchHost.Ranked2v2Phases.cs` — `TryEnterBombPlanted` redirects Allies → `TryEnterAlliesBombPlanted`; generic Ranked path never runs for `Ranked2v2` C0
 - `AlliesFlowParams` in `MatchWorld.cs` — probe-verified host timers (wire vs internal)
+
+### Match over → lobby (dedicated)
+
+When first-to-`WinsNeeded` fires: TX `C2=205` MatchResults, wait **5s**, then:
+
+1. Disconnect match peers + HardReset Dedik room
+2. **Stop** match LiteNetLib (UDP **7777** down until next `/play`)
+3. Lobby idle: `SearchingStarted=false`, `hasHosting=0`, `GameInProgress=false` — **keep** `GameModeId` + `SelectedLevels`
+4. Discovery flips back to waiting (map/mode extras). Next: `/play` → rebind 7777 + op9, then `/set start`
+
+### Mid-match reconnect
+
+Disconnect remembers fighting team by `userId`. On rejoin after INIT: host forces same `team` SetProperty; if no respawn CWO within **5s** → Spectator **once** (`ReconnectSpectatorFallbackDone`).
 
 **`bc21cb6` user-override reverted** — that commit reintroduced C2=22 deadline + C2=101 Live 90s (same ~19s / round-score failure class as `9e4d4c2`).

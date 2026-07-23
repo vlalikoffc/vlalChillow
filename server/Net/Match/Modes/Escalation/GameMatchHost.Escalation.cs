@@ -51,7 +51,15 @@ public sealed partial class GameMatchHost
                     return;
             }
             else if (phase == MatchFlowPhase.MatchOver)
-                return;
+            {
+                // Handled below after lock.
+            }
+        }
+
+        if (phase == MatchFlowPhase.MatchOver)
+        {
+            TryFireMatchOverLobbyReturn(room, ends);
+            return;
         }
 
         if (MatchFlowRules.AllowsWipeCheck(phase))
@@ -135,18 +143,7 @@ public sealed partial class GameMatchHost
 
         if (MatchHostSettings.IsMatchSeriesOver(round, scoreTr, scoreCt))
         {
-            lock (_roomGate)
-            {
-                room.Flow.Phase = MatchFlowPhase.MatchOver;
-                room.Flow.PhaseEndsUtc = DateTime.MaxValue;
-            }
-            BroadcastRoomProps(room,
-            [
-                (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchResults)),
-            ], reason: $"MatchResults Tr={scoreTr} Ct={scoreCt}");
-            Console.WriteLine(
-                $"[match-host] escalation: MatchResults C2={MatchC2States.MatchResults} " +
-                $"Tr={scoreTr} Ct={scoreCt} after round={round}");
+            EnterMatchResultsAndArmLobbyReturn(room, scoreTr, scoreCt, "escalation", round);
             return;
         }
 

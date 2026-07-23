@@ -221,18 +221,7 @@ public sealed partial class GameMatchHost
 
         if (MatchHostSettings.IsMatchSeriesOver(round, scoreTr, scoreCt))
         {
-            lock (_roomGate)
-            {
-                room.Flow.Phase = MatchFlowPhase.MatchOver;
-                room.Flow.PhaseEndsUtc = DateTime.MaxValue;
-            }
-            BroadcastRoomProps(room,
-            [
-                (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchResults)),
-            ], reason: $"MatchResults Tr={scoreTr} Ct={scoreCt}");
-            Console.WriteLine(
-                $"[match-host] match-flow: MatchResults C2={MatchC2States.MatchResults} " +
-                $"Tr={scoreTr} Ct={scoreCt} after round={round}");
+            EnterMatchResultsAndArmLobbyReturn(room, scoreTr, scoreCt, "match-flow", round);
             return;
         }
 

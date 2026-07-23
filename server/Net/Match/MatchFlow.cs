@@ -106,6 +106,12 @@ public sealed class MatchFlowState
     /// Allies half-time swap completed (C2=112 + server-forced team flip). Set once per match.
     /// </summary>
     public bool TeamsSwapped { get; set; }
+    /// <summary>
+    /// After <see cref="MatchFlowPhase.MatchOver"/> / MatchResults: when
+    /// <see cref="PhaseEndsUtc"/> elapses, host tears down 7777 and returns lobby to idle
+    /// (mode/map kept). Armed once per series end; cleared when fired or on HardReset.
+    /// </summary>
+    public bool LobbyReturnPending { get; set; }
 }
 
 /// <summary>Shared wipe / spawn / alive-count rules for match flow.</summary>
