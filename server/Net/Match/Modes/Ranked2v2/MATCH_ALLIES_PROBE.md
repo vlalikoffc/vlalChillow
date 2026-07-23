@@ -64,27 +64,50 @@ Probe joined mid-match (R3 plant visible first); R1 open sequence (10→11→21�
 - **C2=101 round end:** len=151, `Time` anchor + scores + `WinTeam`; **never** sent as Live round clock
 - **101→22:** stime Δ ≈ **6037–6046 ms** (round-end pause)
 
-## User vs gold (conflicts — implement gold)
+## User-directed override (dedicated host — diverges from phone gold)
 
-| User request | Gold wire | Dedicated action |
-|--------------|-----------|------------------|
-| «1:30 round timer» / `/set roundtime 90` | **No** Live C2 bag; no Live `Time` after Prep | Silent Live; round ends on wipe/plant/defuse/explode only. `/set roundtime` ignored for Allies wire (document only). |
-| «Drop C2=31; client wants buy on C2=22» | Gold **always** sends **22 then 31** every round | Keep both; **only C2=31** gets deadline `Time`. |
-| «C2=101 Live + 90s MatchStarted» | C2=101 is **round-end WinTeam only** | Never TX C2=101 on Live entry. |
+Live client 2.06 OBT F1 tested by operator. **Implement this map**, not the gold mid-match capture loop below.
 
-A new ConnectAsClient probe showing phone host TX **C2=101 + Time** during Live would be required to change Live clock behaviour.
+| Phase | Wire C2 | `Time` | Notes |
+|-------|---------|--------|-------|
+| Match open (R1) | **21** WarmUp | anchor | Skip gold C2=11 freeforall; `/set start` → C2=21 (~3s) |
+| Prep/buy (every round) | **22** WarmupWillFinish | **deadline** = now + Prep (~10s) | Single prep — **no** separate PreStart anchor, **no C2=31** |
+| Live | **101** MatchStarted | **deadline** = now + RoundDuration (default **90s**) | Round clock bag — **no WinTeam**, no scores |
+| Plant | **40** | *(none)* | C2 only + BombManager Rpc fan-out to all peers |
+| Round end | **101** MatchStarted | anchor | **WinTeam** + scores + CoLosses — only round-end use of WinTeam |
+| R2+ inter-round | **22** Prep | deadline | Skip C2=21; after round-end pause → C2=22 directly |
+| Half-time (after R7) | **111→112→113** → **22** | anchor each | Unchanged gold half-time chain |
+
+**Why not gold 11→22(anchor)→31(deadline)→silent Live:** operator wants visible buy on C2=22 and a **1:30 round timer** after prep. Gold has no Live `Time` TX; dedicated adds C2=101 Live without WinTeam (same key split as generic Ranked `EnterRoundLive`).
+
+### Avoiding `9e4d4c2` failure (~19s prep, broken round end)
+
+| Failure | Fix in this FSM |
+|---------|-----------------|
+| Stacked prep (~10+10s) | **One** wire countdown: only C2=22 deadline while `PurchasePhase`; no C2=31, no internal PreStart wait after wire prep |
+| C2=101 Live broke round-end UI | Live bag = C2=101 + Round + RoundStartTime + Time — **never** WinTeam/scores; round-end bag **always** adds WinTeam |
+| Phantom «starting match» timer | Live entry resets `RoundStartTime` + `Time` to fresh Live anchors (not leftover prep deadline) |
+
+## User vs gold (reference — phone capture, not dedicated wire)
+
+| User request | Gold wire | Dedicated (override) |
+|--------------|-----------|------------------------|
+| Skip C2=11 | Gold sends C2=11 ~8s after C2=10 | **Skip** — straight to C2=21 on `/set start` |
+| One prep C2=22 | Gold: C2=22 anchor ~10s **then** C2=31 deadline ~10s | **C2=22 only** with deadline `Time`; no C2=31 |
+| 1:30 round timer | No Live C2 bag | **C2=101 Live** + `Time`=now+90s, no WinTeam |
+| Round end scoring | C2=101 + WinTeam | Same — WinTeam only on round-end bag |
 
 ## Regression: commit `9e4d4c2` (~19 s prep, broken round end / plant)
 
-`9e4d4c2` dropped C2=31, put **deadline** `Time=now+prep` on **C2=22**, and TX **C2=101 Live + 90s** — all contradict gold.
+`9e4d4c2` had the right high-level map but stacked timers / collided Live vs round-end C2=101 shapes.
 
 **Why client showed ~19 s prep:**
 
-1. C2=22 carried a **10 s buy deadline** (invented — gold uses anchor on 22).
-2. Host still waited ~10 s before Live (old PreStart duration baked into FSM timing) **or** client retained C2=31 semantics while also counting C2=22 deadline → **~10 + ~10 ≈ 19–20 s** phantom/stacked timer.
-3. C2=101 Live with `Time=now+90` collided with round-end C2=101 WinTeam shape → round-end UI / scoring broke; fake round clock floated after prep.
+1. C2=22 carried a **10 s buy deadline** while host or client still counted a **second** prep window (C2=31 semantics or internal PreStart wait).
+2. Stacked deadlines without clearing phase → **~10 + ~10 ≈ 19–20 s** phantom timer.
+3. C2=101 Live without strict WinTeam separation broke round-end UI / scoring.
 
-**Restored FSM (this commit):** C2=11→21→22(anchor)→31(deadline)→silent Live→C2=40(C2 only)+BombManager Rpc fan-out→C2=101 WinTeam.
+**This FSM:** C2=21 (R1) → C2=22 prep deadline → C2=101 Live (90s, no WinTeam) → C2=40 plant + Rpc → C2=101 WinTeam round end.
 
 ## Gold C2 + stime timeline (RX `407424176+` — summary incl. R1)
 
@@ -111,21 +134,18 @@ Deltas from decoded `SetProperties` room bags (`match_rx*` captures).
 | 407914208 | 10174 | **31** | Prep | Ct=2 Tr=1 after swap |
 | … | … | **101** | R8+ | until first-to-8 |
 
-### Dedicated timer constants (`AlliesFlowParams`)
+### Dedicated timer constants (`AlliesFlowParams` — user override)
 
-| Constant | Seconds | Evidence |
-|----------|---------|----------|
-| PreWarmup C2=11 | 8 | RX 10→11 ≈8044 ms |
-| WarmUp C2=21 | 3 | RX 21→22 ≈3140 ms |
-| PreStart C2=22 | **10** | RX 22→31 ≈10.0 s (NOT generic 3s PreStart) |
-| Prep C2=31 | 10 | RX 22→31 stime ≈10 s; only phase with wire countdown `Time` |
-| RoundEndPause | 6 | RX 101→22 ≈6.0 s |
-| HalfTimeIntro 111 | 5 | RX 111→112 ≈5080 ms |
-| HalfTimeSwap 112 | 1 | RX 112→113 ≈1086 ms |
-| HalfTimeTransition 113 | 7 | RX 113→22 ≈7035 ms |
-| BombFuse | 40 | family default after C2=40 |
-
-**No fixed Live round clock** — round ends on wipe / manual plant / defuse / explode only.
+| Constant | Seconds | Wire |
+|----------|---------|------|
+| WarmUp C2=21 | 3 | R1 only; skip C2=11 |
+| Prep C2=22 | 10 ( `/set prep` ) | **deadline** `Time` — only prep countdown |
+| Live C2=101 | 90 ( `/set roundtime` ) | **deadline** `Time` — round clock, no WinTeam |
+| RoundEndPause | 6 | after C2=101 WinTeam bag |
+| HalfTimeIntro 111 | 5 | unchanged |
+| HalfTimeSwap 112 | 1 | unchanged |
+| HalfTimeTransition 113 | 7 | unchanged |
+| BombFuse | 40 | host-side after C2=40 |
 
 ## `Time` field semantics (decoded gold RX bags)
 
@@ -199,13 +219,16 @@ If client still flashes ~2:00 then stalls: client Ranked2v2 mode config may defa
 `Time` expires while wire C2=31 — server sends **no** Live Time updates (gold-faithful), so local countdown
 freezes. Phone host behaves the same on wire; dedicated must not re-add C2=101 Live bags to «fix» it.
 
-## Phase sequence (dedicated host)
+## Phase sequence (dedicated host — user override)
 
 ```
-C2=10 → C2=11 (~8s) → C2=21 (~3s, R1 only) → C2=22 (~10s) → C2=31 (~10s prep countdown) →
-(silent Live) → (manual plant C2=40?) → C2=101 round end + WinTeam (~6s pause) → C2=22 …
+/set start → C2=21 (~3s, R1 only) → C2=22 Prep/buy (~10s deadline) →
+C2=101 Live (~90s round clock, no WinTeam) → (manual plant C2=40?) →
+C2=101 round end + WinTeam (~6s pause) → C2=22 …
 After R7: C2=101 → C2=111 (~5s) → team flip → C2=112 (~1s) → C2=113 (~7s) → C2=22 R8 …
 ```
+
+Gold reference loop (phone capture — **not** dedicated wire): C2=10→11→21→22(anchor)→31(deadline)→silent Live.
 
 Dedicated host must rebuild these bags with codecs — **never replay capture blobs**.
 
@@ -264,7 +287,7 @@ Server-authoritative:
 
 ## Implementation
 
-- `GameMatchHost.Allies.cs` — **sole** Allies FSM: all phase enters, bomb plant C2=40 + Rpc fan-out, round-end bag builder, prep spawn-extend
+- `GameMatchHost.Allies.cs` — **sole** Allies FSM (user override): C2=21→22 prep→101 Live→40 plant→101 WinTeam
 - `GameMatchHost.WorldObjects.cs` — observe plant Rpc → `TryEnterBombPlanted`; Allies host fan-out, drop peer relay
 - `GameMatchHost.Ranked2v2HalfTime.cs` — half-time 111/112/113 + forced team swap (Allies-only callers)
 - `GameMatchHost.Ranked2v2RoundEnd.cs` — shared `EnterRoundEndPause` delegates bag shape to `BuildAlliesRoundEndRoomProps`; `ContinueAfterRoundEnd` redirects Allies → `ContinueAfterRoundEndAllies`
