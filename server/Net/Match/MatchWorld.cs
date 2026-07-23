@@ -323,22 +323,29 @@ public static class EscalationFlowParams
 /// (default 8), half-time team swap after round 7. Gold stime deltas:
 /// <c>allies-probe</c> run-20260723_215727 RX captures — see
 /// <c>MATCH_ALLIES_PROBE.md</c>. Distinct from generic <see cref="MatchFlowTestParams"/> /
-/// User-directed override: skip gold C2=11/31 split; one C2=22 prep + C2=101 Live round clock.
-/// See <c>MATCH_ALLIES_PROBE.md</c> §User-directed override.
+/// Escalation — do not copy Ranked 3s PreStart or 90s round clock onto Allies.
 /// </summary>
 public static class AlliesFlowParams
 {
     /// <summary>Round index after which half-time 111→112→113 runs (not match end).</summary>
     public const int HalfTimeAfterRound = 7;
-    /// <summary>ReCreateSceneManager ids on every Prep C2=22 (same as Escalation gold).</summary>
+    /// <summary>ReCreateSceneManager ids on every PreStart C2=22 (same as Escalation gold).</summary>
     public static readonly short[] RecreateSceneManagerIds = EscalationFlowParams.RecreateSceneManagerIds;
 
-    /// <summary>C2=21 WarmUp (first round only) — gold RX ≈3s; C2=11 skipped per user override.</summary>
+    /// <summary>
+    /// Phone gold C2=11 freeforall after C2=10 (~8s). Dedicated skips C2=11 —
+    /// <c>/set start</c> goes straight to C2=21. Kept for probe documentation only.
+    /// </summary>
+    public static readonly TimeSpan PreWarmup = TimeSpan.FromSeconds(8);
+    /// <summary>C2=21 WarmUp (first round only) — gold RX 407472265→407475405 ≈3.1s.</summary>
     public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
-    /// <summary>C2=22 Prep/buy countdown — overridable via <see cref="MatchHostSettings.Prep"/>.</summary>
-    public static TimeSpan Prep => MatchHostSettings.Prep;
-    /// <summary>Live round clock — default 90s via <see cref="MatchHostSettings.RoundDuration"/>.</summary>
-    public static TimeSpan RoundDuration => MatchHostSettings.RoundDuration;
+    /// <summary>
+    /// C2=22 PreStart freeze + bomberId — gold RX 22→31 stime ≈10.0s every round
+    /// (10169, 9992, 10167, 10182, 10000, 10171, 10174 ms). Not 3s generic PreStart.
+    /// </summary>
+    public static readonly TimeSpan PreStart = TimeSpan.FromSeconds(10);
+    /// <summary>C2=31 Prep before Live — phone TX 31→C2=101 Live ≈10.0s (allies-probe family).</summary>
+    public static readonly TimeSpan Prep = TimeSpan.FromSeconds(10);
     /// <summary>Silent pause after C2=101 round-end WinTeam bag — gold RX 101→22 ≈6.0s.</summary>
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);
     /// <summary>Bomb fuse after manual plant C2=40 — gold family ≈40s.</summary>
