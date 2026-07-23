@@ -28,8 +28,8 @@ public sealed partial class GameMatchHost
     /// <summary>
     /// Allies / Ranked2v2 phase machine — C2=22 buy 5s + C2=31 post-buy 5s (each with its own
     /// <c>Time</c> deadline; entering 31 replaces the 22 countdown — no ~19s stack). Then silent
-    /// Live. Plant accepted in RoundLive / C2=31 / late C2=22 (client expires buy before host
-    /// RoundLive — see live logs). Half-time 111→112→113 after round 7; first-to-8 wins.
+    /// Live. Plant <b>RoundLive only</b> (buy C2=22/31 field=1 is bomber equip — not plant).
+    /// Half-time 111→112→113 after round 7; first-to-8 wins.
     /// </summary>
     private void TickAlliesFlowRoom(MatchRoom room)
     {
@@ -409,10 +409,8 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Allies manual plant — gold len≈14 C2=40 + BombManager Rpc fan-out to all peers.
-    /// Accept RoundLive / PurchasePhase / WarmupWillFinish: live logs show every plant during
-    /// C2=22/31 (client expires buy <c>Time</c> before host reaches RoundLive). Reject only
-    /// WarmUp / waiting / round-end (anti-cheat — no invent from empty lobby).
+    /// Allies manual plant — <b>RoundLive only</b>. Buy-phase field=1 is bomber equip Rpc
+    /// (latest.log: WarmupWillFinish → false C2=40 at round start). Fan-out kept for Live plants.
     /// </summary>
     private int TryEnterAlliesBombPlanted(
         MatchRoom room,
@@ -440,13 +438,11 @@ public sealed partial class GameMatchHost
                     $"IGNORED — pendingEnd={room.Flow.PendingEndReason}");
                 return -1;
             }
-            if (fromPhase is not (MatchFlowPhase.RoundLive
-                or MatchFlowPhase.PurchasePhase
-                or MatchFlowPhase.WarmupWillFinish))
+            if (fromPhase is not MatchFlowPhase.RoundLive)
             {
                 Console.WriteLine(
                     $"[match-host] allies: BombManager plant field={sourceField} " +
-                    $"IGNORED — phase={fromPhase} (need Live/C2=31/C2=22 buy end)");
+                    $"IGNORED — phase={fromPhase} (RoundLive only; buy field=1 ≠ plant)");
                 return -1;
             }
 

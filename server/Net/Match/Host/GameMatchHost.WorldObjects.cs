@@ -270,18 +270,14 @@ public sealed partial class GameMatchHost
                         "IGNORED — already planted this round (one bomb/round; no relay)");
                     dropRelay = true;
                 }
-                else if (plantPhase != MatchFlowPhase.RoundLive
-                         && !(IsAlliesRoom(st.Room)
-                              && plantPhase is MatchFlowPhase.PurchasePhase
-                                  or MatchFlowPhase.WarmupWillFinish))
+                else if (plantPhase != MatchFlowPhase.RoundLive)
                 {
-                    // WarmUp / waiting / round-end — never invent C2=40.
-                    // Allies: client often plants during C2=22/31 (buy Time expired locally
-                    // before host RoundLive) — those phases are accepted in TryEnterAlliesBombPlanted.
+                    // Buy/PreStart field=1 is bomber equip noise — accepting it made C2=40
+                    // from round start (latest.log WarmupWillFinish → BombPlanted). RoundLive only.
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
                         $"from actor={st.ActorNr} IGNORED — phase={plantPhase} " +
-                        "(not plantable; no relay)");
+                        "(RoundLive only; buy-phase field=1 is not a plant)");
                     dropRelay = true;
                 }
                 else
