@@ -26,10 +26,10 @@ public sealed partial class GameMatchHost
         IsAlliesRoom(room) ? AlliesFlowParams.RoundEndPause : MatchFlowTestParams.RoundEndPause;
 
     /// <summary>
-    /// Allies / Ranked2v2 phase machine — dedicated buy on C2=22 (visible <c>Time</c> deadline),
-    /// then background C2=31 anchor + silent Live. Gold probe still documents phone
-    /// 22-anchor/31-deadline; dedicated overrides per user (buy on 22, no stacked 31 countdown).
-    /// Plant RoundLive-only; half-time 111→112→113 after round 7; first-to-8 wins.
+    /// Allies / Ranked2v2 phase machine — C2=22 buy 5s + C2=31 post-buy 5s (each with its own
+    /// <c>Time</c> deadline; entering 31 replaces the 22 countdown — no ~19s stack). Then silent
+    /// Live. Plant accepted in RoundLive / C2=31 / late C2=22 (client expires buy before host
+    /// RoundLive — see live logs). Half-time 111→112→113 after round 7; first-to-8 wins.
     /// </summary>
     private void TickAlliesFlowRoom(MatchRoom room)
     {
@@ -155,13 +155,12 @@ public sealed partial class GameMatchHost
                 EnterAlliesPreStart(room);
                 break;
             case MatchFlowPhase.WarmupWillFinish:
-                // Buy (C2=22) ended — TX C2=31 background/anchor then Live (no second buy wait).
+                // Buy (C2=22) ended — enter C2=31 with a fresh 5s Time deadline (not instant Live).
                 if (TryExtendAlliesBuyForAwaitingSpawn(room))
                     break;
-                EnterAlliesPostBuyThenLive(room);
+                EnterAlliesPostBuy(room);
                 break;
             case MatchFlowPhase.PurchasePhase:
-                // Should not linger — PostBuyThenLive enters Live in the same call.
                 EnterAlliesLive(room);
                 break;
             case MatchFlowPhase.RoundEndPause:
@@ -206,15 +205,14 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// C2=22 = real buy/prep: PreStart bag (ReCreate, Round++, bomberId, money on R1) plus
-    /// visible buy <c>Time</c> deadline (~Prep settings). Host waits buy duration — do not
-    /// chain C2=31 immediately (that removed the buy UI).
+    /// visible buy <c>Time</c> deadline (default 5s via <see cref="AlliesFlowParams.BuyPhase"/>).
+    /// Host waits buy duration — then C2=31 with a fresh 5s deadline (not instant Live).
     /// </summary>
     private void EnterAlliesPreStart(MatchRoom room)
     {
         int round;
         int bomberId;
-        // Buy duration from /set prep (default 10s) — same knob clients treat as buy timer.
-        var dur = MatchHostSettings.Prep;
+        var dur = AlliesFlowParams.BuyPhase;
         var ends = DateTime.UtcNow + dur;
         lock (_roomGate)
         {
@@ -259,15 +257,16 @@ public sealed partial class GameMatchHost
             $"[match-host] allies: buy C2={MatchC2States.WarmupWillFinish} " +
             $"round={round} bomberId={bomberId} dur={dur.TotalSeconds:0}s deadline={deadline:0.###} " +
             $"money={(round <= 1 ? MatchFlowTestParams.RoundStartMoney.ToString() : "keep")} " +
-            "(host waits buy; C2=31 after — no second countdown)");
+            "(host waits buy; then C2=31 with fresh 5s deadline)");
         PostServerDebugChat($"Prep/buy · раунд {round} ({dur.TotalSeconds:0}s)");
     }
 
     /// <summary>
-    /// After C2=22 buy ends: TX C2=31 with roster keys + <b>anchor</b> <c>Time</c> (no new
-    /// deadline — avoids ~19s stacked buy), then silent Live promptly.
+    /// After C2=22 buy ends: TX C2=31 with roster keys + <b>fresh</b> <c>Time</c> deadline
+    /// (replaces the C2=22 countdown — one visible timer at a time). Host waits post-buy
+    /// duration then <see cref="EnterAlliesLive"/>.
     /// </summary>
-    private void EnterAlliesPostBuyThenLive(MatchRoom room)
+    private void EnterAlliesPostBuy(MatchRoom room)
     {
         lock (_roomGate)
         {
@@ -282,34 +281,35 @@ public sealed partial class GameMatchHost
         int ctCount;
         int trCount;
         int bomberId;
+        var dur = AlliesFlowParams.PostBuyPhase;
+        var ends = DateTime.UtcNow + dur;
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex;
             if (round < 1) round = 1;
             room.Flow.Phase = MatchFlowPhase.PurchasePhase;
-            // No host wait on C2=31 — Live follows in this call.
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow;
+            room.Flow.PhaseEndsUtc = ends;
             room.Flow.PendingEndReason = null;
             (trCount, ctCount) = CountFightingTeamRoster(room);
             bomberId = room.Flow.BomberActorNr;
         }
 
         var nowSec = ServerTimeSeconds();
-        // Anchor Time (not deadline) + gold Prep roster keys — background bag only.
+        var deadline = nowSec + dur.TotalSeconds;
+        // Fresh deadline Time — client must not keep counting the old C2=22 deadline.
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
             (MatchRoomPropKeys.CtRoundStartPlayersCount, LobbyVariant.FromInt(ctCount)),
             (MatchRoomPropKeys.TrRoundStartPlayersCount, LobbyVariant.FromInt(trCount)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.PurchasePhase)),
-        ], reason: $"Allies post-buy C2=31 round={round}");
+        ], reason: $"Allies post-buy C2=31 round={round}", phaseDeadlineSec: deadline);
         Console.WriteLine(
             $"[match-host] allies: post-buy C2={MatchC2States.PurchasePhase} " +
             $"round={round} TrCount={trCount} CtCount={ctCount} bomberId={bomberId} " +
-            "(anchor Time only — no second buy countdown → Live)");
-        PostServerDebugChat($"C2=31 · раунд {round} → Live");
-
-        EnterAlliesLive(room);
+            $"dur={dur.TotalSeconds:0}s deadline={deadline:0.###} " +
+            "(fresh Time — replaces C2=22 countdown; then Live)");
+        PostServerDebugChat($"C2=31 · раунд {round} ({dur.TotalSeconds:0}s)");
     }
 
     /// <summary>
@@ -409,10 +409,12 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Allies manual plant — <b>RoundLive only</b> (no Prep/PreStart — anti-cheat).
-    /// Gold len≈14 C2=40 + BombManager Rpc fan-out to all peers.
+    /// Allies manual plant — gold len≈14 C2=40 + BombManager Rpc fan-out to all peers.
+    /// Accept RoundLive / PurchasePhase / WarmupWillFinish: live logs show every plant during
+    /// C2=22/31 (client expires buy <c>Time</c> before host reaches RoundLive). Reject only
+    /// WarmUp / waiting / round-end (anti-cheat — no invent from empty lobby).
     /// </summary>
-    private void TryEnterAlliesBombPlanted(
+    private int TryEnterAlliesBombPlanted(
         MatchRoom room,
         byte sourceField,
         byte[]? plantPayload = null,
@@ -429,21 +431,23 @@ public sealed partial class GameMatchHost
             {
                 Console.WriteLine(
                     $"[match-host] allies: BombManager plant field={sourceField} IGNORED — already planted");
-                return;
+                return -1;
             }
             if (room.Flow.PendingEndReason is not null)
             {
                 Console.WriteLine(
                     $"[match-host] allies: BombManager plant field={sourceField} " +
                     $"IGNORED — pendingEnd={room.Flow.PendingEndReason}");
-                return;
+                return -1;
             }
-            if (fromPhase is not MatchFlowPhase.RoundLive)
+            if (fromPhase is not (MatchFlowPhase.RoundLive
+                or MatchFlowPhase.PurchasePhase
+                or MatchFlowPhase.WarmupWillFinish))
             {
                 Console.WriteLine(
                     $"[match-host] allies: BombManager plant field={sourceField} " +
-                    $"IGNORED — phase={fromPhase} (RoundLive only; fix desync, do not accept Prep plant)");
-                return;
+                    $"IGNORED — phase={fromPhase} (need Live/C2=31/C2=22 buy end)");
+                return -1;
             }
 
             var plantUtc = DateTime.UtcNow;
@@ -462,9 +466,10 @@ public sealed partial class GameMatchHost
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),
         ], reason: $"Allies BombPlanted field={sourceField} C2=40 fromPhase={fromPhase}");
 
+        var fanOutPeers = 0;
         if (plantPayload is { Length: > 0 })
         {
-            FanOutAlliesBombPlantRpc(
+            fanOutPeers = FanOutAlliesBombPlantRpc(
                 room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget);
         }
         else
@@ -478,16 +483,18 @@ public sealed partial class GameMatchHost
         Console.WriteLine(
             $"[match-host] allies: manual plant field={sourceField} → C2=40 " +
             $"(fromPhase={fromPhase}; plantUtc={plantedAt:O} fuse={fuseSec:0}s; " +
-            $"Rpc fan-out={(plantPayload is { Length: > 0 })})");
+            $"Rpc fan-out peers={fanOutPeers})");
         PostServerDebugChat($"бомба установлена (fuse {fuseSec:0}s)");
         ApplyPlantEconomy(room, planterActorNr);
+        return fanOutPeers;
     }
 
     /// <summary>
-    /// Host-authoritative BombManager plant Rpc to every INIT-ready peer — use the planter's
+    /// Host-authoritative BombManager plant Rpc to every INIT-ready peer — planter's
     /// rpc/gaa/field/payload (do not hardcode); gold RX len41 near C2=40.
+    /// Returns INIT-ready peer count that received the packet.
     /// </summary>
-    private void FanOutAlliesBombPlantRpc(
+    private int FanOutAlliesBombPlantRpc(
         MatchRoom room,
         byte sourceField,
         byte[] plantPayload,
@@ -497,8 +504,8 @@ public sealed partial class GameMatchHost
     {
         var stime = NextServerTime();
         var timeVal = plantTimeValue > 0 ? plantTimeValue : stime / 1000.0;
-        // gaa=2 (Others) on wire from planter; host must reach ALL peers including CT —
-        // force AllCached(2) broadcast via BroadcastInitReady (ignores gaa filtering).
+        // gaa on wire from planter is often Others(1)/AllCached(2); host must reach ALL peers
+        // including CT — BroadcastInitReady ignores gaa filtering (Escalation auto-plant pattern).
         var pkt = MatchCodec.BuildWorldObjectRpc(
             stime,
             objectId: MatchFlowTestParams.BombManagerObjectId,
@@ -508,9 +515,26 @@ public sealed partial class GameMatchHost
             timeValue: timeVal,
             payload: plantPayload);
         var n = BroadcastInitReady(room, pkt, tag: "match_tx_BombManager_alliesPlant");
+        var nReady = CountInitReadyPeers(room);
         Console.WriteLine(
             $"[match-host] allies: BombManager plant fan-out field={sourceField} " +
-            $"rpc={rpcId} gaaIn={gaaTarget} payloadLen={plantPayload.Length} → peers={n}");
+            $"rpc={rpcId} gaaIn={gaaTarget} payloadLen={plantPayload.Length} " +
+            $"→ peers={n} initReady={nReady}" +
+            (nReady >= 2 && n < nReady ? " WARN incomplete fan-out" : "") +
+            (nReady >= 2 && n < 2 ? " WARN peers<2" : ""));
+        return n;
+    }
+
+    /// <summary>INIT-ready (<see cref="MatchPeerState.BootstrapSent"/>) peers in <paramref name="room"/>.</summary>
+    private int CountInitReadyPeers(MatchRoom room)
+    {
+        var n = 0;
+        foreach (var (_, st) in _peers)
+        {
+            if (st.Room == room && st.BootstrapSent)
+                n++;
+        }
+        return n;
     }
 
     /// <summary>

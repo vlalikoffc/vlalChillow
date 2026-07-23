@@ -346,7 +346,7 @@ public sealed partial class GameMatchHost
         {
             Console.WriteLine(
                 "[match-host] match-flow: EnterWarmupWillFinish BLOCKED for Allies — " +
-                "use EnterAlliesPreStart (anchor Time, ~10s PreStart)");
+                "use EnterAlliesPreStart (buy Time deadline, then C2=31 5s)");
             EnterAlliesPreStart(room);
             return;
         }
@@ -583,10 +583,11 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Plant only in <see cref="MatchFlowPhase.RoundLive"/>. Prep/buy plant is rejected
-    /// (anti-cheat). Allies: buy on C2=22, then C2=31 anchor → Live promptly.
+    /// Plant authority. Allies: RoundLive / C2=31 / C2=22 (client buy-Time expiry race).
+    /// Generic Ranked: RoundLive only. Returns Allies fan-out peer count (0 if no payload /
+    /// non-Allies; -1 if rejected).
     /// </summary>
-    private void TryEnterBombPlanted(
+    private int TryEnterBombPlanted(
         MatchRoom room,
         byte sourceField,
         byte[]? plantPayload = null,
@@ -597,9 +598,8 @@ public sealed partial class GameMatchHost
     {
         if (IsAlliesRoom(room))
         {
-            TryEnterAlliesBombPlanted(
+            return TryEnterAlliesBombPlanted(
                 room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget, planterActorNr);
-            return;
         }
 
         MatchFlowPhase fromPhase;
@@ -611,14 +611,14 @@ public sealed partial class GameMatchHost
                 Console.WriteLine(
                     $"[match-host] match-flow: BombManager plant field={sourceField} " +
                     "IGNORED — already BombPlanted this round");
-                return;
+                return -1;
             }
             if (room.Flow.PendingEndReason is not null)
             {
                 Console.WriteLine(
                     $"[match-host] match-flow: BombManager plant field={sourceField} " +
                     $"IGNORED — pendingEnd={room.Flow.PendingEndReason}");
-                return;
+                return -1;
             }
             if (fromPhase is not MatchFlowPhase.RoundLive)
             {
@@ -626,7 +626,7 @@ public sealed partial class GameMatchHost
                     $"[match-host] match-flow: BombManager plant field={sourceField} " +
                     $"IGNORED — phase={fromPhase} (evidence-only: RoundLive only; " +
                     "no PreStart/Prep plant→C2=40 invent)");
-                return;
+                return -1;
             }
 
             var plantUtc = DateTime.UtcNow;
@@ -655,6 +655,7 @@ public sealed partial class GameMatchHost
             $"fromPhase={fromPhase}");
         PostServerDebugChat($"бомба установлена (fuse {fuseSec:0}s)");
         ApplyPlantEconomy(room, planterActorNr);
+        return 0;
     }
 
     /// <summary>

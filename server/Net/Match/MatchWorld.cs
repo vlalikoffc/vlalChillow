@@ -340,12 +340,19 @@ public static class AlliesFlowParams
     /// <summary>C2=21 WarmUp (first round only) — gold RX 407472265→407475405 ≈3.1s.</summary>
     public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
     /// <summary>
-    /// C2=22 buy duration — dedicated uses <see cref="MatchHostSettings.Prep"/> (default 10s).
-    /// Phone gold waited ~10s on C2=22 before C2=31; dedicated puts the visible buy deadline on 22.
+    /// C2=22 buy — host wait + wire <c>Time</c> deadline. Default 5s via
+    /// <see cref="MatchHostSettings.Prep"/> (<c>/set prep</c> overrides C2=22 and C2=31).
     /// </summary>
-    public static TimeSpan PreStart => MatchHostSettings.Prep;
-    /// <summary>Legacy gold C2=31 wait — dedicated post-buy C2=31 is immediate (anchor only).</summary>
-    public static readonly TimeSpan Prep = TimeSpan.FromSeconds(10);
+    public static TimeSpan BuyPhase => MatchHostSettings.Prep;
+    /// <summary>Alias — C2=22 buy.</summary>
+    public static TimeSpan PreStart => BuyPhase;
+    /// <summary>
+    /// C2=31 post-buy — host wait + <b>fresh</b> wire <c>Time</c> deadline (replaces C2=22
+    /// countdown; same <see cref="MatchHostSettings.Prep"/> default 5s).
+    /// </summary>
+    public static TimeSpan PostBuyPhase => MatchHostSettings.Prep;
+    /// <summary>Alias — C2=31 post-buy.</summary>
+    public static TimeSpan Prep => PostBuyPhase;
     /// <summary>Silent pause after C2=101 round-end WinTeam bag — gold RX 101→22 ≈6.0s.</summary>
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);
     /// <summary>Bomb fuse after manual plant C2=40 — gold family ≈40s.</summary>
