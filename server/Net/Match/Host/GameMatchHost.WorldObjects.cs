@@ -270,20 +270,21 @@ public sealed partial class GameMatchHost
                         "IGNORED — already planted this round (one bomb/round; no relay)");
                     dropRelay = true;
                 }
-                else if (plantPhase != MatchFlowPhase.RoundLive)
+                else if (!IsAlliesPlantPhaseAllowed(st.Room, plantPhase))
                 {
-                    // PreStart/Prep/WarmUp plant Rpc must not invent C2=40 or paint peers.
+                    // WarmUp / waiting / round-end — do not invent C2=40.
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
                         $"from actor={st.ActorNr} IGNORED — phase={plantPhase} " +
-                        "(RoundLive only; no relay — no invent)");
+                        "(not a plantable phase; no relay)");
                     dropRelay = true;
                 }
                 else
                 {
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
-                        $"from actor={st.ActorNr} (apply fuse + host fan-out before relay)");
+                        $"from actor={st.ActorNr} phase={plantPhase} " +
+                        "(apply fuse + host fan-out before relay)");
                     var payloadCopy = parsed.Payload.Length > 0
                         ? (byte[])parsed.Payload.Clone()
                         : null;
@@ -291,8 +292,11 @@ public sealed partial class GameMatchHost
                         st.Room,
                         sourceField: (byte)parsed.Field,
                         plantPayload: payloadCopy,
-                        plantTimeValue: parsed.TimeValue);
+                        plantTimeValue: parsed.TimeValue,
+                        rpcId: parsed.RpcId,
+                        gaaTarget: parsed.GaaTarget);
                     // Host fan-out covers all peers for Allies; relay would duplicate.
+                    // Non-Allies Ranked still relays below unless plant failed.
                     lock (_roomGate)
                     {
                         if (!st.Room.Flow.BombPlanted

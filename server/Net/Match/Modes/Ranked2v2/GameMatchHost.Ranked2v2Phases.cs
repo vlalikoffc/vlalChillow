@@ -572,19 +572,39 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Evidence-only plant: <c>BombManager</c> field=1/2 observed during <b>RoundLive only</b>.
-    /// PreStart/Prep plant Rpc is ignored (latest.log: WarmupWillFinish field=1 → invented
-    /// C2=40 + free T round). No deferred PendingBombPlant. No host plant TX invent.
+    /// <summary>
+    /// Allies: client often plants while host internal phase is still C2=22/31
+    /// (silent Live / UI already in «round») — allow WarmupWillFinish + PurchasePhase + RoundLive.
+    /// Generic Ranked: RoundLive only.
+    /// </summary>
+    private bool IsAlliesPlantPhaseAllowed(MatchRoom room, MatchFlowPhase phase)
+    {
+        if (IsAlliesRoom(room))
+        {
+            return phase is MatchFlowPhase.RoundLive
+                or MatchFlowPhase.PurchasePhase
+                or MatchFlowPhase.WarmupWillFinish;
+        }
+
+        return phase == MatchFlowPhase.RoundLive;
+    }
+
+    /// <summary>
+    /// Evidence plant: <c>BombManager</c> field=1/2. Allies also accepts Prep/PreStart host
+    /// phases when the client is already in round UI (see <see cref="IsAlliesPlantPhaseAllowed"/>).
     /// </summary>
     private void TryEnterBombPlanted(
         MatchRoom room,
         byte sourceField,
         byte[]? plantPayload = null,
-        double plantTimeValue = 0)
+        double plantTimeValue = 0,
+        byte rpcId = 2,
+        byte gaaTarget = 2)
     {
         if (IsAlliesRoom(room))
         {
-            TryEnterAlliesBombPlanted(room, sourceField, plantPayload, plantTimeValue);
+            TryEnterAlliesBombPlanted(
+                room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget);
             return;
         }
 

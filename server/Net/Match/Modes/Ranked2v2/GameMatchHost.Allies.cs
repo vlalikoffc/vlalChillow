@@ -106,7 +106,21 @@ public sealed partial class GameMatchHost
             return;
         }
 
-        // Allies: no fixed round clock — ends on wipe / plant / defuse / explode only.
+        // Host-side round clock (no Live Time TX): client local timer hits 00:00 and hangs
+        // unless we end the round. Duration = MatchHostSettings.RoundDuration (default 90s).
+        if (phase == MatchFlowPhase.RoundLive)
+        {
+            if (DateTime.UtcNow < ends)
+                return;
+            Console.WriteLine(
+                "[match-host] allies: round timeout → CT win " +
+                $"(PhaseEndsUtc={ends:O} dur={AlliesFlowParams.RoundDuration.TotalSeconds:0}s)");
+            PostServerDebugChat(
+                $"таймаут раунда {AlliesFlowParams.RoundDuration.TotalSeconds:0}s → CT");
+            EnterRoundEndPause(room, MatchTeam.Ct, "timeout");
+            return;
+        }
+
         if (DateTime.UtcNow < ends)
             return;
 
@@ -283,7 +297,8 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// Live — gold: no room bag after Prep C2=31; combat starts when Prep <c>Time</c> deadline
-    /// expires. C2=101 is round-end only (WinTeam bag). No round clock in Live.
+    /// expires. C2=101 is round-end only (WinTeam bag). No Live <c>Time</c> TX (avoids 19s/desync),
+    /// but host <see cref="MatchFlowState.PhaseEndsUtc"/> ends the round so client 00:00 cannot hang.
     /// </summary>
     private void EnterAlliesLive(MatchRoom room)
     {
@@ -303,6 +318,8 @@ public sealed partial class GameMatchHost
         int round;
         int bomberId;
         var txBomberFix = false;
+        var roundDur = AlliesFlowParams.RoundDuration;
+        var ends = DateTime.UtcNow + roundDur;
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex;
@@ -317,7 +334,7 @@ public sealed partial class GameMatchHost
             }
             bomberId = room.Flow.BomberActorNr;
             room.Flow.Phase = MatchFlowPhase.RoundLive;
-            room.Flow.PhaseEndsUtc = DateTime.MaxValue;
+            room.Flow.PhaseEndsUtc = ends;
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
             room.Flow.PendingCombatDestroy.Clear();
@@ -336,9 +353,9 @@ public sealed partial class GameMatchHost
             wireC2 = room.RoomC2;
         Console.WriteLine(
             $"[match-host] allies: Live round={round} bomberId={bomberId} " +
-            $"(silent — no C2/Time TX; wire C2={wireC2} stays PurchasePhase until plant/round-end; " +
-            "no round clock — wipe/plant/defuse/explode only; C2=101 is round-end only)");
-        PostServerDebugChat($"Live · раунд {round} (без таймера)");
+            $"(silent wire — no C2/Time TX; wire C2={wireC2}; host timeout " +
+            $"{roundDur.TotalSeconds:0}s → CT; C2=101 WinTeam only on round end)");
+        PostServerDebugChat($"Live · раунд {round} (таймаут {roundDur.TotalSeconds:0}s)");
     }
 
     private void ContinueAfterRoundEndAllies(MatchRoom room)
@@ -386,14 +403,17 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// Allies manual plant — gold len≈14: C2=40 only (no Time / RoundStartTime on wire).
-    /// Host tracks <see cref="MatchFlowState.BombPlantedUtc"/> for fuse authority and fan-outs
-    /// the planter's BombManager Rpc so non-planter peers see bomb mesh (gold RX len41+25 near C2=40).
+    /// Host tracks fuse and fan-outs planter BombManager Rpc to all INIT-ready peers.
+    /// Accepts RoundLive / PurchasePhase / WarmupWillFinish — client «round» often starts
+    /// while host is still on C2=22/31 (latest.log IGNORED WarmupWillFinish plants).
     /// </summary>
     private void TryEnterAlliesBombPlanted(
         MatchRoom room,
         byte sourceField,
         byte[]? plantPayload = null,
-        double plantTimeValue = 0)
+        double plantTimeValue = 0,
+        byte rpcId = 2,
+        byte gaaTarget = 2)
     {
         MatchFlowPhase fromPhase;
         lock (_roomGate)
@@ -412,11 +432,13 @@ public sealed partial class GameMatchHost
                     $"IGNORED — pendingEnd={room.Flow.PendingEndReason}");
                 return;
             }
-            if (fromPhase is not MatchFlowPhase.RoundLive)
+            if (fromPhase is not (MatchFlowPhase.RoundLive
+                or MatchFlowPhase.PurchasePhase
+                or MatchFlowPhase.WarmupWillFinish))
             {
                 Console.WriteLine(
                     $"[match-host] allies: BombManager plant field={sourceField} " +
-                    $"IGNORED — phase={fromPhase} (RoundLive only)");
+                    $"IGNORED — phase={fromPhase}");
                 return;
             }
 
@@ -434,35 +456,48 @@ public sealed partial class GameMatchHost
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),
-        ], reason: $"Allies BombPlanted field={sourceField} C2=40");
+        ], reason: $"Allies BombPlanted field={sourceField} C2=40 fromPhase={fromPhase}");
 
         if (plantPayload is { Length: > 0 })
-            FanOutAlliesBombPlantRpc(room, sourceField, plantPayload, plantTimeValue);
+        {
+            FanOutAlliesBombPlantRpc(
+                room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget);
+        }
+        else
+        {
+            Console.WriteLine(
+                "[match-host] allies: plant ACCEPTED but payload empty — " +
+                "C2=40 only; peers may miss bomb mesh");
+        }
 
         var fuseSec = AlliesFlowParams.BombFuse.TotalSeconds;
         Console.WriteLine(
-            $"[match-host] allies: manual plant field={sourceField} → C2=40 only " +
-            $"(gold len≈14; plantUtc={plantedAt:O} host fuse={fuseSec:0}s; " +
+            $"[match-host] allies: manual plant field={sourceField} → C2=40 " +
+            $"(fromPhase={fromPhase}; plantUtc={plantedAt:O} fuse={fuseSec:0}s; " +
             $"Rpc fan-out={(plantPayload is { Length: > 0 })})");
         PostServerDebugChat($"бомба установлена (fuse {fuseSec:0}s)");
     }
 
     /// <summary>
-    /// Host-authoritative BombManager plant Rpc to every INIT-ready peer — gold shows host TX
-    /// WorldObjectRpc len41/25 to all peers within ~650ms of C2=40; planter had local apply.
+    /// Host-authoritative BombManager plant Rpc to every INIT-ready peer — use the planter's
+    /// rpc/gaa/field/payload (do not hardcode); gold RX len41 near C2=40.
     /// </summary>
     private void FanOutAlliesBombPlantRpc(
         MatchRoom room,
         byte sourceField,
         byte[] plantPayload,
-        double plantTimeValue)
+        double plantTimeValue,
+        byte rpcId,
+        byte gaaTarget)
     {
         var stime = NextServerTime();
         var timeVal = plantTimeValue > 0 ? plantTimeValue : stime / 1000.0;
+        // gaa=2 (Others) on wire from planter; host must reach ALL peers including CT —
+        // force AllCached(2) broadcast via BroadcastInitReady (ignores gaa filtering).
         var pkt = MatchCodec.BuildWorldObjectRpc(
             stime,
             objectId: MatchFlowTestParams.BombManagerObjectId,
-            rpcId: 2,
+            rpcId: rpcId == 0 ? (byte)2 : rpcId,
             gaaTarget: 2,
             field: sourceField,
             timeValue: timeVal,
@@ -470,7 +505,7 @@ public sealed partial class GameMatchHost
         var n = BroadcastInitReady(room, pkt, tag: "match_tx_BombManager_alliesPlant");
         Console.WriteLine(
             $"[match-host] allies: BombManager plant fan-out field={sourceField} " +
-            $"payloadLen={plantPayload.Length} → peers={n}");
+            $"rpc={rpcId} gaaIn={gaaTarget} payloadLen={plantPayload.Length} → peers={n}");
     }
 
     /// <summary>

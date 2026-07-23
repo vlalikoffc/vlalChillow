@@ -350,6 +350,11 @@ public static class AlliesFlowParams
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);
     /// <summary>Bomb fuse after manual plant C2=40 — gold family ≈40s.</summary>
     public static TimeSpan BombFuse => MatchHostSettings.BombFuse;
+    /// <summary>
+    /// Host-only Live round timeout (no Live <c>Time</c> TX) — default via
+    /// <see cref="MatchHostSettings.RoundDuration"/> (90s). Ends round so client 00:00 cannot hang.
+    /// </summary>
+    public static TimeSpan RoundDuration => MatchHostSettings.RoundDuration;
 
     /// <summary>C2=111 half-time intro — gold RX R7 end→111 ≈6s; 111→112 ≈5s hold.</summary>
     public static readonly TimeSpan HalfTimeIntro = TimeSpan.FromSeconds(5);
