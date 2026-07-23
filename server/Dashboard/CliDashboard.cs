@@ -490,28 +490,45 @@ public sealed class CliDashboard : IDisposable
         return lines;
     }
 
+    private static bool IsAlliesLike(MatchSnapshot snap) =>
+        !snap.IsDeathMatch
+        && string.Equals(snap.GameModeId, "Ranked2v2", StringComparison.Ordinal);
+
     private string DescribePhase(MatchSnapshot snap)
     {
-        // Prefer host Flow.PhaseEndsUtc (wire Time for C2=22/31 is the same deadline).
-        // Fall back to room Time deadline for Live/BombPlanted when PhaseEndsUtc unset.
+        var allies = IsAlliesLike(snap);
+        // Prefer host Flow.PhaseEndsUtc (wire Time for C2=31 Prep is the countdown deadline;
+        // Allies PreStart C2=22 uses anchor Time on wire — host PhaseEndsUtc drives the ~10s wait).
+        // Fall back to room Time deadline only for modes with a wire round/fuse clock (Ranked Live,
+        // TDM) — never for Allies RoundLive (gold: silent combat, no round Time TX).
         double remain = 0;
         if (snap.PhaseEndsUtc > DateTime.MinValue && snap.PhaseEndsUtc < DateTime.MaxValue)
             remain = (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
         else if (snap.TimeDeadline > 0
                  && snap.Phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted
-                     or MatchFlowPhase.DeathMatchLive or MatchFlowPhase.DeathMatchWarmup)
+                     or MatchFlowPhase.DeathMatchLive or MatchFlowPhase.DeathMatchWarmup
+                 && !(allies && snap.Phase == MatchFlowPhase.RoundLive))
             remain = snap.TimeDeadline - Environment.TickCount / 1000.0;
 
         var clock = remain > 0.5 ? $" {FormatClock(remain)}" : "";
         var label = snap.Phase switch
         {
             MatchFlowPhase.WaitingPlayers => "WAITING PLAYERS",
-            MatchFlowPhase.Warmup => "WARM-UP",
-            MatchFlowPhase.WarmupWillFinish => "MATCH STARTING",
-            MatchFlowPhase.PurchasePhase => $"PREP · Round {snap.Round}",
-            MatchFlowPhase.RoundLive => $"LIVE · Round {snap.Round}",
+            MatchFlowPhase.AlliesPreWarmup => allies ? "FREE-FOR-ALL · C2=11" : snap.Phase.ToString(),
+            MatchFlowPhase.Warmup => allies ? $"WARM-UP · Round {Math.Max(1, snap.Round)}" : "WARM-UP",
+            // C2=22 PreStart every round (gold) — not a once-per-match «match starting» banner.
+            MatchFlowPhase.WarmupWillFinish => allies
+                ? $"PRE-START · Round {snap.Round} · C2=22"
+                : "MATCH STARTING",
+            MatchFlowPhase.PurchasePhase => $"PREP · Round {snap.Round} · C2=31",
+            MatchFlowPhase.RoundLive => allies
+                ? $"LIVE · Round {snap.Round} (no round clock)"
+                : $"LIVE · Round {snap.Round}",
             MatchFlowPhase.BombPlanted => $"BOMB PLANTED · Round {snap.Round}",
             MatchFlowPhase.RoundEndPause => $"ROUND END · Round {snap.Round}",
+            MatchFlowPhase.HalfTimeIntro => "HALF-TIME · INTRO · C2=111",
+            MatchFlowPhase.HalfTimeSwap => "HALF-TIME · SWAP · C2=112",
+            MatchFlowPhase.HalfTimeTransition => "HALF-TIME · RESUME · C2=113",
             MatchFlowPhase.MatchOver => "MATCH OVER",
             MatchFlowPhase.DeathMatchWarmup => "WARM-UP",
             MatchFlowPhase.DeathMatchLive => "LIVE",

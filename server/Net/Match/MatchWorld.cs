@@ -230,9 +230,8 @@ public static class MatchC2States
 }
 
 /// <summary>
-/// Allies / bomb-family timings: WarmUp C2=21 ≈3s → PreStart C2=22 ≈3s
-/// (<c>_roundStartingTime</c> / MATCH_PHASES_TIMERS; every round including post-RoundEnd) →
-/// Prep C2=31 ≈10s → live → RoundEnd C2=101+WinTeam → silent ≈6s → C2=22 again.
+/// Generic Ranked fallback timings (non-Allies). Allies uses <see cref="AlliesFlowParams"/>.
+/// WarmUp C2=21 → PreStart C2=22 → Prep C2=31 → live → RoundEnd C2=101+WinTeam → pause → C2=22 again.
 /// Do <b>not</b> skip C2=22 between rounds (client never enters next Prep).
 /// </summary>
 public static class MatchFlowTestParams

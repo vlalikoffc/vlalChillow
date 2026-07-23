@@ -85,6 +85,38 @@ Gold examples (R1):
 Dedicated bug (fixed): sending PreStart/WarmUp `Time` as deadline + a fake Live C2=101 bag stacked
 “starting match” UI on top of the Prep countdown (`RoundStartTime` from PreStart minus Live `Time` ≈ 20s phantom timer).
 
+## Phase map (phone gold ↔ dedicated host ↔ UI)
+
+Every inter-round loop (R2+): **C2=22 → C2=31 → silent Live → C2=101** — never skip C2=22.
+R1 only adds C2=11 (~8s) and C2=21 (~3s) before the first C2=22.
+
+| Phone C2 | Dedicated `MatchFlowPhase` | Wire `Time` | Server CLI / console | Client UI (2.06 OBT F1) |
+|----------|---------------------------|-------------|----------------------|-------------------------|
+| 10 | WaitingPlayers | — | WAITING PLAYERS | lobby / waiting |
+| 11 | AlliesPreWarmup | anchor | FREE-FOR-ALL · C2=11 | free-for-all (R1 only) |
+| 21 | Warmup | anchor | WARM-UP · Round 1 | warm-up (R1 only) |
+| **22** | WarmupWillFinish | anchor = `RoundStartTime` | **PRE-START · Round N · C2=22** (~10s host wait) | «раунд начинается» / round-start freeze — **every round**, not once-per-match |
+| 31 | PurchasePhase | **deadline** (+~10s) | PREP · Round N · C2=31 | buy/spawn countdown (only visible wire timer) |
+| *(none)* | RoundLive | *(unchanged — last Prep deadline passed)* | LIVE · Round N **(no round clock)** | combat; **no** fixed round timer on phone gold |
+| 40 | BombPlanted | *(no Time)* | BOMB PLANTED | fuse from plant Rpc |
+| 101 | RoundEndPause | anchor | ROUND END · Round N | round-end + WinTeam bag |
+| 111–113 | HalfTime* | anchor each | HALF-TIME · … | side swap after R7 |
+
+**Operator note:** CLI used to label C2=22 as «MATCH STARTING» — that was misleading.
+Gold sends C2=22 before **every** round’s prep; it is per-round PreStart, not a match-open banner.
+
+### In-round 2:00 → freeze (dedicated bug history)
+
+| Cause | Evidence | Fix |
+|-------|----------|-----|
+| Ranked `EnterRoundLive` TX **C2=101 + `Time`=now+RoundDuration** | Generic Ranked path; client shows mode round clock (~90–120s) | Allies hard-branched: `EnterAlliesLive` — **no** room bag |
+| PreStart/WarmUp **`Time`=deadline** stacked on Prep | Phantom «starting match» + prep timers | Allies: anchor `Time` on C2=11/21/22; **only** C2=31 sends deadline |
+| Stale Prep `Time` used as Live round clock in CLI | Dashboard `TimeDeadline` fallback on RoundLive | CLI: no clock on Allies RoundLive; use `PhaseEndsUtc` only |
+
+If client still flashes ~2:00 then stalls: client Ranked2v2 mode config may default ~120s locally when prep
+`Time` expires while wire C2=31 — server sends **no** Live Time updates (gold-faithful), so local countdown
+freezes. Phone host behaves the same on wire; dedicated must not re-add C2=101 Live bags to «fix» it.
+
 ## Phase sequence (dedicated host)
 
 ```

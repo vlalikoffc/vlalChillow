@@ -334,6 +334,15 @@ public sealed partial class GameMatchHost
             return;
         }
 
+        if (IsAlliesRoom(room))
+        {
+            Console.WriteLine(
+                "[match-host] match-flow: EnterWarmupWillFinish BLOCKED for Allies — " +
+                "use EnterAlliesPreStart (anchor Time, ~10s PreStart)");
+            EnterAlliesPreStart(room);
+            return;
+        }
+
         int bomberId;
         int round;
         var dur = MatchFlowTestParams.WarmupWillFinish;
@@ -472,6 +481,15 @@ public sealed partial class GameMatchHost
 
     private void EnterRoundLive(MatchRoom room)
     {
+        if (IsAlliesRoom(room))
+        {
+            Console.WriteLine(
+                "[match-host] match-flow: EnterRoundLive BLOCKED for Allies — " +
+                "use EnterAlliesLive (no C2=101 / no round clock on wire)");
+            EnterAlliesLive(room);
+            return;
+        }
+
         // Real plant during Live already owns C2=40 — do not clobber fuse.
         lock (_roomGate)
         {

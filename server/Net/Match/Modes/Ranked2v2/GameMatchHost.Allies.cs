@@ -253,7 +253,7 @@ public sealed partial class GameMatchHost
             $"[match-host] allies: PreStart C2={MatchC2States.WarmupWillFinish} " +
             $"dur={dur.TotalSeconds:0}s round={round} bomberId={bomberId} money={MatchFlowTestParams.RoundStartMoney} " +
             "(gold RX 22→31 ≈10s; manual plant field=1/2 during Live)");
-        PostServerDebugChat($"Prep · раунд {round}");
+        PostServerDebugChat($"PreStart · раунд {round} (C2=22)");
     }
 
     /// <summary>PurchasePhase C2=31 — gold len≈90; only phase with wire countdown Time deadline.</summary>
@@ -300,7 +300,9 @@ public sealed partial class GameMatchHost
         ], reason: $"Allies Prep round={round}", phaseDeadlineSec: deadline);
         Console.WriteLine(
             $"[match-host] allies: Prep C2={MatchC2States.PurchasePhase} dur={dur.TotalSeconds:0}s " +
-            $"round={round} TrCount={trCount} CtCount={ctCount} bomberId={bomberId}");
+            $"round={round} TrCount={trCount} CtCount={ctCount} bomberId={bomberId} " +
+            "(only wire countdown; client buy timer)");
+        PostServerDebugChat($"Prep · раунд {round} (C2=31)");
     }
 
     /// <summary>
@@ -353,10 +355,14 @@ public sealed partial class GameMatchHost
             ], reason: $"Allies Live bomberId-fix={bomberId}");
         }
 
+        byte wireC2;
+        lock (_roomGate)
+            wireC2 = room.RoomC2;
         Console.WriteLine(
             $"[match-host] allies: Live round={round} bomberId={bomberId} " +
-            "(silent — no C2/Time TX; gold Prep deadline→combat; C2=101 is round-end only)");
-        PostServerDebugChat($"Live · раунд {round}");
+            $"(silent — no C2/Time TX; wire C2={wireC2} stays PurchasePhase until plant/round-end; " +
+            "no round clock — wipe/plant/defuse/explode only; C2=101 is round-end only)");
+        PostServerDebugChat($"Live · раунд {round} (без таймера)");
     }
 
     private void ContinueAfterRoundEndAllies(MatchRoom room)
