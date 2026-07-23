@@ -321,7 +321,10 @@ public static class EscalationFlowParams
 
 /// <summary>
 /// Allies / Ranked2v2 («союзники») — first-to-<see cref="MatchHostSettings.WinsNeeded"/> wins
-/// (default 8), half-time team swap after round 7. Gold: <c>allies-probe</c> run-20260723_215727.
+/// (default 8), half-time team swap after round 7. Gold stime deltas:
+/// <c>allies-probe</c> run-20260723_215727 RX captures — see
+/// <c>MATCH_ALLIES_PROBE.md</c>. Distinct from generic <see cref="MatchFlowTestParams"/> /
+/// Escalation — do not copy Ranked 3s PreStart or 90s round clock onto Allies.
 /// </summary>
 public static class AlliesFlowParams
 {
@@ -329,11 +332,28 @@ public static class AlliesFlowParams
     public const int HalfTimeAfterRound = 7;
     /// <summary>ReCreateSceneManager ids on every PreStart C2=22 (same as Escalation gold).</summary>
     public static readonly short[] RecreateSceneManagerIds = EscalationFlowParams.RecreateSceneManagerIds;
-    /// <summary>C2=111 half-time intro — gold ≈5s before team swap bag.</summary>
+
+    /// <summary>C2=11 freeforall after C2=10 — gold RX 407424176→407432220 ≈8.0s.</summary>
+    public static readonly TimeSpan PreWarmup = TimeSpan.FromSeconds(8);
+    /// <summary>C2=21 WarmUp (first round only) — gold RX 407472265→407475405 ≈3.1s.</summary>
+    public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// C2=22 PreStart freeze + bomberId — gold RX 22→31 stime ≈10.0s every round
+    /// (10169, 9992, 10167, 10182, 10000, 10171, 10174 ms). Not 3s generic PreStart.
+    /// </summary>
+    public static readonly TimeSpan PreStart = TimeSpan.FromSeconds(10);
+    /// <summary>C2=31 Prep before Live — phone TX 31→C2=101 Live ≈10.0s (allies-probe family).</summary>
+    public static readonly TimeSpan Prep = TimeSpan.FromSeconds(10);
+    /// <summary>Silent pause after C2=101 round-end WinTeam bag — gold RX 101→22 ≈6.0s.</summary>
+    public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);
+    /// <summary>Bomb fuse after manual plant C2=40 — gold family ≈40s.</summary>
+    public static TimeSpan BombFuse => MatchHostSettings.BombFuse;
+
+    /// <summary>C2=111 half-time intro — gold RX R7 end→111 ≈6s; 111→112 ≈5s hold.</summary>
     public static readonly TimeSpan HalfTimeIntro = TimeSpan.FromSeconds(5);
-    /// <summary>C2=112 → C2=113 — gold ≈1s.</summary>
+    /// <summary>C2=112 → C2=113 — gold RX ≈1.1s.</summary>
     public static readonly TimeSpan HalfTimeSwapHold = TimeSpan.FromSeconds(1);
-    /// <summary>C2=113 → round 8 PreStart C2=22 — gold ≈7s.</summary>
+    /// <summary>C2=113 → round 8 PreStart C2=22 — gold RX ≈7.0s.</summary>
     public static readonly TimeSpan HalfTimeTransition = TimeSpan.FromSeconds(7);
 }
 

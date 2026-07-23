@@ -125,6 +125,12 @@ public sealed partial class GameMatchHost
             return;
         }
 
+        if (IsAlliesRoom(room))
+        {
+            TickAlliesFlowRoom(room);
+            return;
+        }
+
         MatchFlowPhase phase;
         DateTime ends;
         DateTime bombPlantedUtc;
@@ -586,14 +592,17 @@ public sealed partial class GameMatchHost
             room.Flow.BombPlanted = true;
             room.Flow.BombPlantedUtc = plantUtc;
             room.Flow.Phase = MatchFlowPhase.BombPlanted;
-            room.Flow.PhaseEndsUtc = plantUtc + MatchFlowTestParams.BombFuse;
+            room.Flow.PhaseEndsUtc = plantUtc + (IsAlliesRoom(room)
+                ? AlliesFlowParams.BombFuse
+                : MatchFlowTestParams.BombFuse);
         }
 
         DateTime plantedAt;
         lock (_roomGate)
             plantedAt = room.Flow.BombPlantedUtc;
         var nowSec = ServerTimeSeconds();
-        var fuseSec = MatchFlowTestParams.BombFuse.TotalSeconds;
+        var fuse = IsAlliesRoom(room) ? AlliesFlowParams.BombFuse : MatchFlowTestParams.BombFuse;
+        var fuseSec = fuse.TotalSeconds;
         var deadline = nowSec + fuseSec;
         BroadcastRoomProps(room,
         [

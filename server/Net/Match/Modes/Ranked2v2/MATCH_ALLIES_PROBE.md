@@ -2,8 +2,8 @@
 
 **Source:** ConnectAsClient `allies-probe` as Tr (`--team tr`) against phone host  
 **Sessions:** `run-20260723_215727` (lobby) / `run-20260723_2206…` (match)  
-**Log:** `server/latest.log`  
-**Captures:** `server/bin/Release/net8.0/captures/20260723_2157*` / `2206*`
+**Captures:** `server/bin/Release/net8.0/captures/20260723_2157*` / `2206*`  
+**Decode tool:** `server/tools/decode_allies_probe.py` (SetProperties C2 + stime deltas)
 
 ## Lobby / match selection
 
@@ -14,76 +14,98 @@
 | Match C0 | `Ranked2v2` |
 | Match C1 | `Sandstone 2x2` |
 
-## Win condition (design)
+## Win condition
 
-- **First to 8 round wins** — not “only 8 rounds”, not MR-8 first-to-5.
+- **First to 8 round wins** — not MR-8 cap, not first-to-5.
 - Default dedicated: `WinsNeeded=8` (`/set wins N`).
-- Match continues past round 7 until one side reaches 8 wins.
+- Half-time after **round 7** — match continues until first-to-8.
 
-## Phase timeline (stime C2 table)
+## Gold C2 + stime timeline (RX `407424176+`)
 
-| stime (approx) | Round | C2 | Notes |
-|----------------|-------|-----|-------|
-| 407424176 | — | **10** | WaitingPlayers (both teams joined) |
-| 407432220 | — | **11** | DeathMatchPreWarmup / freeforall (~3s) |
-| 407475405 | — | **21** | WarmUp (first round only) |
-| 407475405 | 1 | **22** | PreStart: Round, RoundStartTime, **bomberId**, ReCreate 4/5/6/8, money=800 |
-| 407477… | 1 | **31** | Prep: Ct/Tr_RoundStartPlayersCount, BombManager field=1 |
-| 40748… | 1 | **40** | BombPlanted (manual plant — not Escalation auto-plant field=3) |
-| 407484809 | 1 | **101** | Round end bag: WinTeam + TrScore/CtScore + CoLosses, **not C2=111** |
-| … | 2–6 | **22→31→Live→101** | Skip WarmUp; PreStart every round |
-| 407884809 | 7 | **101** | Round 7 end — score **4:3** (Tr leading) |
-| 407890833 | 7 | **111** | **Half-time intro** (~5s) — mid-match, not round-end UI |
-| 407895913 | 7 | — | Host SetProperty **team flip** actor 1 Tr→Ct, money=800 |
-| 407895913 | 7 | **112** | `swapped_team=true`, **CtScore=4 TrScore=3** (perspective flip), CoLosses=0 |
-| 407896999 | 7 | **113** | Half-time transition (~7s) |
-| 407904034 | **8** | **22** | PreStart: Round=8, bomberId=3 (new T side), ReCreate 4/5/6/8 |
-| 407909562 | 8 | — | Actor 3 Ct→Tr SetProperty + Tr_Tr pawn respawn |
-| 407914208 | 8 | **31** | Prep (Ct_RoundStartPlayersCount=2, Tr=1) |
-| … | 8+ | **101** | Round wins continue until first-to-8 |
+Deltas from decoded `SetProperties` room bags (`match_rx*` captures).
+
+| stime | Δ ms | C2 | Phase | Notes |
+|-------|------|-----|-------|-------|
+| 407424176 | — | **10** | WaitingPlayers | both teams joined |
+| 407432220 | 8044 | **11** | PreWarmup / freeforall | ~**8s** |
+| 407472265 | 40045 | **21** | WarmUp | first round only; Δ includes phone lobby wait |
+| 407475405 | 3140 | **22** | PreStart R1 | bomberId, ReCreate 4/5/6/8, money=800 |
+| 407485574 | 10169 | **31** | Prep | Ct/Tr_RoundStartPlayersCount — ~**10s** after C2=22 |
+| 407499898 | 14324 | **40** | BombPlanted | manual plant field=1/2 (not Escalation field=3) |
+| 407522337 | 22439 | **101** | Round end | WinTeam + TrScore/CtScore + CoLosses |
+| 407528375 | 6038 | **22** | PreStart R2 | skip WarmUp — ~**6s** after round-end bag |
+| 407538367 | 9992 | **31** | Prep | 22→31 ≈**10s** every round |
+| … | … | **22→31→Live→101** | Rounds 2–6 | same loop; no fixed round clock |
+| 407884809 | — | **101** | R7 end | score 4:3 Tr leading |
+| 407890833 | 6024 | **111** | Half-time intro | ~**5s** (111→112 stime) |
+| 407895913 | 5080 | **112** | swapped_team | server SetProperty team flip + score perspective |
+| 407896999 | 1086 | **113** | Half-time transition | ~**1s** |
+| 407904034 | 7035 | **22** | PreStart R8 | new T-side bomberId — ~**7s** after 113 |
+| 407914208 | 10174 | **31** | Prep | Ct=2 Tr=1 after swap |
+| … | … | **101** | R8+ | until first-to-8 |
+
+### Dedicated timer constants (`AlliesFlowParams`)
+
+| Constant | Seconds | Evidence |
+|----------|---------|----------|
+| PreWarmup C2=11 | 8 | RX 10→11 ≈8044 ms |
+| WarmUp C2=21 | 3 | RX 21→22 ≈3140 ms |
+| PreStart C2=22 | **10** | RX 22→31 ≈10.0 s (NOT generic 3s PreStart) |
+| Prep C2=31 | 10 | phone TX 31→Live 101 ≈10 s |
+| RoundEndPause | 6 | RX 101→22 ≈6.0 s |
+| HalfTimeIntro 111 | 5 | RX 111→112 ≈5080 ms |
+| HalfTimeSwap 112 | 1 | RX 112→113 ≈1086 ms |
+| HalfTimeTransition 113 | 7 | RX 113→22 ≈7035 ms |
+| BombFuse | 40 | family default after C2=40 |
+
+**No fixed Live round clock** — round ends on wipe / manual plant / defuse / explode only.
+
+## Phase sequence (dedicated host)
+
+```
+C2=10 → C2=11 (~8s) → C2=21 (~3s, R1 only) → C2=22 (~10s) → C2=31 (~10s) →
+C2=101 Live → (manual plant C2=40?) → C2=101 round end + WinTeam (~6s pause) → C2=22 …
+After R7: C2=101 → C2=111 (~5s) → team flip → C2=112 (~1s) → C2=113 (~7s) → C2=22 R8 …
+```
 
 ## Round end bag (C2=101)
 
-Phone Allies round end uses **C2=101** (`MatchStarted` id) + nested `WinTeam` — **not** C2=111.
+Phone Allies round end uses **C2=101** + nested `WinTeam` — **not** C2=111.
 
 Typical keys (len≈151):
 
 1. `Time`
 2. Winner flat score (`TrScore` or `CtScore` first)
 3. Loser `CoLosses`
-4. Winner `CoLosses=0` (streak reset)
+4. Winner `CoLosses=0`
 5. `WinTeam` `{ team, mvpPlayer, mvpCode, resultRoundType=0, resultRoundActor=0 }`
 6. `C2=101`
 
-Dedicated host also TX both `TrScore` + `CtScore` to stay-in peers.
-
 ## Half-time team swap (after round 7)
 
-Gold sequence: **111 → (team SetProperty) → 112 → 113 → 22**
+Gold: **111 → (SetProperty team) → 112 → 113 → 22**
 
-Server-authoritative rules (dedicated host):
+Server-authoritative:
 
-1. Remember each fighter’s team before swap.
-2. After C2=111 pause: **force SetProperty `team`** on every Tr/Ct actor (Tr↔Ct).
-3. C2=112 bag: `swapped_team=true`, flip `TrScore`↔`CtScore`, reset CoLosses.
-4. Do **not** rely on client-side swap (original client buggy — one side may not swap).
-5. Example from probe: влал+ерзат were T → become CT; арсен+денис were CT → become T.
-
-## bomberId
-
-Present on Allies PreStart C2=22 (unlike Escalation which omits bomberId and auto-plants field=3).
+1. C2=111 pause (~5s)
+2. **Force SetProperty `team`** on every Tr/Ct actor (Tr↔Ct) + money=800
+3. C2=112: `swapped_team=true`, flip `TrScore`↔`CtScore`, reset CoLosses
+4. C2=113 (~7s) → PreStart round 8
 
 ## Escalation divergence
 
 | | Allies / Ranked2v2 | Escalation |
 |--|-------------------|------------|
-| Plant | Manual carry plant field=1/2 during Live | Auto-plant field=3 ~8s after C2=22 |
-| Round end C2 | 101 + WinTeam | 101 + WinTeam (same family) |
-| Half-time | 111→112→113 after R7 | (not observed in this probe) |
-| Win condition | First to 8 (default) | MR-N via `/set round` |
+| FSM file | `GameMatchHost.Allies.cs` | `GameMatchHost.Escalation.cs` |
+| PreStart C2=22 | ~10s + bomberId | ~8s, no bomberId, BombSite |
+| Plant | Manual carry field=1/2 during Live | Auto-plant field=3 |
+| Live | C2=101 after Prep; no round clock | C2=31 combat after auto-plant |
+| Round end | C2=101 + WinTeam | C2=101 + WinTeam |
+| Half-time | 111→112→113 after R7 | (not in Escalation probe) |
+| Win condition | First to 8 | MR-N via `/set round` |
 
-## Dedicated implementation
+## Implementation
 
-- `GameMatchHost.Ranked2v2*.cs` — live FSM
+- `GameMatchHost.Allies.cs` — dedicated FSM (Escalation-style branch)
 - `GameMatchHost.Ranked2v2HalfTime.cs` — half-time 111/112/113 + forced team swap
-- `AlliesFlowParams` in `MatchWorld.cs` — constants and timers
+- `AlliesFlowParams` in `MatchWorld.cs` — probe-verified timers

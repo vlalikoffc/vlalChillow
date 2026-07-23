@@ -33,6 +33,8 @@ public enum MatchFlowPhase : byte
     HalfTimeSwap = 13,
     /// <summary>Allies half-time transition C2=113 before round 8 PreStart.</summary>
     HalfTimeTransition = 14,
+    /// <summary>Allies C2=11 DeathMatchPreWarmup / freeforall after WaitingPlayers (first match start).</summary>
+    AlliesPreWarmup = 15,
 }
 
 /// <summary>Per-room match clock — C2 / Time / Round / scores / wipe state.

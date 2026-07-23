@@ -40,7 +40,7 @@ public sealed partial class GameMatchHost
                     $"reason={reason} TrScore={beforeTr} CtScore={beforeCt} — no score bump");
                 room.Flow.PendingEndReason = null;
                 room.Flow.Phase = MatchFlowPhase.RoundEndPause;
-                room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchFlowTestParams.RoundEndPause;
+                room.Flow.PhaseEndsUtc = DateTime.UtcNow + RoundEndPauseFor(room);
                 room.Flow.BombPlanted = false;
                 room.Flow.BombPlantedUtc = DateTime.MinValue;
                 room.Flow.PendingBombPlant = false;
@@ -85,7 +85,7 @@ public sealed partial class GameMatchHost
                 room.ActorProps[(mvpNr, MatchRoomPropKeys.Mvp)] = LobbyVariant.FromInt(mvpCount);
             }
             room.Flow.Phase = MatchFlowPhase.RoundEndPause;
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchFlowTestParams.RoundEndPause;
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow + RoundEndPauseFor(room);
             room.Flow.BombPlanted = false;
             room.Flow.BombPlantedUtc = DateTime.MinValue;
             room.Flow.PendingBombPlant = false;
@@ -126,7 +126,7 @@ public sealed partial class GameMatchHost
         // Explicit TrScore+CtScore SetProperty to ALL connected match peers so stay-in
         // clients match late-join snapshot (rejoin was the only path that had both scores).
         BroadcastMatchScoresToAllPeers(room, scoreTr, scoreCt);
-        var pause = MatchFlowTestParams.RoundEndPause;
+        var pause = RoundEndPauseFor(room);
         Console.WriteLine(
             $"[match-host] match-flow: RoundEnd C2={MatchC2States.MatchStarted} round={round} " +
             $"winner={winner} reason={reason} " +

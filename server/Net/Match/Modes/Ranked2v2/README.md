@@ -2,7 +2,9 @@
 
 **Owner agent:** mode-ranked2v2 (see `decompiled/AGENT_SWARM.md`)
 
-**Status:** IMPLEMENTED — Allies loop with half-time swap + first-to-8 in GameMatchHost.Ranked2v2*.cs
+**Status:** LIVE — gold `MATCH_ALLIES_PROBE.md` (`allies-probe` run-20260723_215727)
+
+Dedicated FSM: `GameMatchHost.Allies.cs` (Escalation-style branch; **not** shared Ranked 3s/90s timers).
 
 **Probe doc:** [MATCH_ALLIES_PROBE.md](./MATCH_ALLIES_PROBE.md) (`allies-probe` Sandstone 2x2 run-20260723_215727)
 
