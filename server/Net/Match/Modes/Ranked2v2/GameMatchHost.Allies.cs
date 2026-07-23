@@ -26,10 +26,10 @@ public sealed partial class GameMatchHost
         IsAlliesRoom(room) ? AlliesFlowParams.RoundEndPause : MatchFlowTestParams.RoundEndPause;
 
     /// <summary>
-    /// Allies / Ranked2v2 phase machine — gold <c>allies-probe</c> run-20260723_215727
-    /// (<c>MATCH_ALLIES_PROBE.md</c>): /set start → C2=21 (skip C2=11) → C2=22 anchor →
-    /// C2=31 deadline → silent Live → C2=40 + BombManager Rpc fan-out → C2=101 WinTeam;
-    /// half-time 111→112→113 after round 7; first-to-8 wins.
+    /// Allies / Ranked2v2 phase machine — dedicated buy on C2=22 (visible <c>Time</c> deadline),
+    /// then background C2=31 anchor + silent Live. Gold probe still documents phone
+    /// 22-anchor/31-deadline; dedicated overrides per user (buy on 22, no stacked 31 countdown).
+    /// Plant RoundLive-only; half-time 111→112→113 after round 7; first-to-8 wins.
     /// </summary>
     private void TickAlliesFlowRoom(MatchRoom room)
     {
@@ -147,11 +147,13 @@ public sealed partial class GameMatchHost
                 EnterAlliesPreStart(room);
                 break;
             case MatchFlowPhase.WarmupWillFinish:
-                EnterAlliesPrep(room);
+                // Buy (C2=22) ended — TX C2=31 background/anchor then Live (no second buy wait).
+                if (TryExtendAlliesBuyForAwaitingSpawn(room))
+                    break;
+                EnterAlliesPostBuyThenLive(room);
                 break;
             case MatchFlowPhase.PurchasePhase:
-                if (TryExtendAlliesPrepForAwaitingSpawn(room))
-                    break;
+                // Should not linger — PostBuyThenLive enters Live in the same call.
                 EnterAlliesLive(room);
                 break;
             case MatchFlowPhase.RoundEndPause:
@@ -195,23 +197,24 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// C2=22 bag (ReCreate, Round++, bomberId, money) then <b>immediately</b> C2=31 Prep.
-    /// Phone gold idled ~10s on C2=22; dedicated must not — clients already enter the round UI
-    /// while host was still WarmupWillFinish (plant IGNORED / «server in the clouds»).
-    /// Both wire bags kept; no 10s host stall between them.
+    /// C2=22 = real buy/prep: PreStart bag (ReCreate, Round++, bomberId, money on R1) plus
+    /// visible buy <c>Time</c> deadline (~Prep settings). Host waits buy duration — do not
+    /// chain C2=31 immediately (that removed the buy UI).
     /// </summary>
     private void EnterAlliesPreStart(MatchRoom room)
     {
         int round;
         int bomberId;
+        // Buy duration from /set prep (default 10s) — same knob clients treat as buy timer.
+        var dur = MatchHostSettings.Prep;
+        var ends = DateTime.UtcNow + dur;
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex + 1;
             if (round < 1) round = 1;
             room.Flow.RoundIndex = round;
             room.Flow.Phase = MatchFlowPhase.WarmupWillFinish;
-            // No idle wait — Prep follows in this call (PhaseEndsUtc overwritten there).
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow;
+            room.Flow.PhaseEndsUtc = ends;
             room.Flow.PendingEndReason = null;
             room.Flow.PrepSpawnExtensionUsed = false;
             room.Flow.DeadActors.Clear();
@@ -226,32 +229,37 @@ public sealed partial class GameMatchHost
             room.Flow.BomberActorNr = bomberId;
         }
 
-        ClearBombAuthority(room, $"Allies PreStart C2=22 round={round} bomberId={bomberId}");
+        ClearBombAuthority(room, $"Allies PreStart/buy C2=22 round={round} bomberId={bomberId}");
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
-        // Gold C2=22: Time == RoundStartTime == nowSec (anchor).
+        var deadline = nowSec + dur.TotalSeconds;
+        // RoundStartTime = phase start; Time = buy deadline (visible countdown).
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
             (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
             (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmupWillFinish)),
-        ], reason: $"Allies PreStart round={round}");
-        SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
+        ], reason: $"Allies buy C2=22 round={round}", phaseDeadlineSec: deadline);
+        // Round 1: seed RoundStartMoney. Later rounds keep balances from round-end payouts.
+        if (round <= 1)
+            SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
         ClearFighterDeathFlags(room);
-        DestroyTrackedRoundEntities(room, reason: "Allies PreStart");
+        DestroyTrackedRoundEntities(room, reason: "Allies PreStart/buy");
         Console.WriteLine(
-            $"[match-host] allies: PreStart C2={MatchC2States.WarmupWillFinish} " +
-            $"round={round} bomberId={bomberId} money={MatchFlowTestParams.RoundStartMoney} " +
-            "(no host idle — chain Prep C2=31 immediately; desync fix)");
-        PostServerDebugChat($"PreStart · раунд {round} → Prep");
-
-        EnterAlliesPrep(room);
+            $"[match-host] allies: buy C2={MatchC2States.WarmupWillFinish} " +
+            $"round={round} bomberId={bomberId} dur={dur.TotalSeconds:0}s deadline={deadline:0.###} " +
+            $"money={(round <= 1 ? MatchFlowTestParams.RoundStartMoney.ToString() : "keep")} " +
+            "(host waits buy; C2=31 after — no second countdown)");
+        PostServerDebugChat($"Prep/buy · раунд {round} ({dur.TotalSeconds:0}s)");
     }
 
-    /// <summary>PurchasePhase C2=31 — gold len≈90; only phase with wire countdown Time deadline.</summary>
-    private void EnterAlliesPrep(MatchRoom room)
+    /// <summary>
+    /// After C2=22 buy ends: TX C2=31 with roster keys + <b>anchor</b> <c>Time</c> (no new
+    /// deadline — avoids ~19s stacked buy), then silent Live promptly.
+    /// </summary>
+    private void EnterAlliesPostBuyThenLive(MatchRoom room)
     {
         lock (_roomGate)
         {
@@ -260,49 +268,45 @@ public sealed partial class GameMatchHost
                 && room.Flow.Phase == MatchFlowPhase.BombPlanted)
                 return;
         }
-        ClearBombAuthority(room, "Allies Prep entry");
+        ClearBombAuthority(room, "Allies post-buy C2=31");
 
         int round;
         int ctCount;
         int trCount;
         int bomberId;
-        var dur = AlliesFlowParams.Prep;
-        var ends = DateTime.UtcNow + dur;
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex;
             if (round < 1) round = 1;
             room.Flow.Phase = MatchFlowPhase.PurchasePhase;
-            room.Flow.PhaseEndsUtc = ends;
+            // No host wait on C2=31 — Live follows in this call.
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow;
             room.Flow.PendingEndReason = null;
-            room.Flow.PrepSpawnExtensionUsed = false;
-            room.Flow.DeadActors.Clear();
-            room.Flow.PendingCombatDestroy.Clear();
-            room.LastCombatDamage.Clear();
             (trCount, ctCount) = CountFightingTeamRoster(room);
             bomberId = room.Flow.BomberActorNr;
         }
 
         var nowSec = ServerTimeSeconds();
-        var deadline = nowSec + dur.TotalSeconds;
+        // Anchor Time (not deadline) + gold Prep roster keys — background bag only.
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.CtRoundStartPlayersCount, LobbyVariant.FromInt(ctCount)),
             (MatchRoomPropKeys.TrRoundStartPlayersCount, LobbyVariant.FromInt(trCount)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.PurchasePhase)),
-        ], reason: $"Allies Prep round={round}", phaseDeadlineSec: deadline);
+        ], reason: $"Allies post-buy C2=31 round={round}");
         Console.WriteLine(
-            $"[match-host] allies: Prep C2={MatchC2States.PurchasePhase} dur={dur.TotalSeconds:0}s " +
+            $"[match-host] allies: post-buy C2={MatchC2States.PurchasePhase} " +
             $"round={round} TrCount={trCount} CtCount={ctCount} bomberId={bomberId} " +
-            "(only wire countdown; client buy timer)");
-        PostServerDebugChat($"Prep · раунд {round} (C2=31)");
+            "(anchor Time only — no second buy countdown → Live)");
+        PostServerDebugChat($"C2=31 · раунд {round} → Live");
+
+        EnterAlliesLive(room);
     }
 
     /// <summary>
-    /// Live — gold: no room bag after Prep C2=31; combat starts when Prep <c>Time</c> deadline
-    /// expires. C2=101 is round-end only (WinTeam bag). No Live <c>Time</c> TX (avoids 19s/desync),
-    /// but host <see cref="MatchFlowState.PhaseEndsUtc"/> ends the round so client 00:00 cannot hang.
+    /// Live — gold: no room bag after Prep; combat after buy. C2=101 is round-end only.
+    /// No Live <c>Time</c> TX; host <see cref="MatchFlowState.PhaseEndsUtc"/> ends the round.
     /// </summary>
     private void EnterAlliesLive(MatchRoom room)
     {
@@ -415,7 +419,8 @@ public sealed partial class GameMatchHost
         byte[]? plantPayload = null,
         double plantTimeValue = 0,
         byte rpcId = 2,
-        byte gaaTarget = 2)
+        byte gaaTarget = 2,
+        byte planterActorNr = 0)
     {
         MatchFlowPhase fromPhase;
         lock (_roomGate)
@@ -476,6 +481,7 @@ public sealed partial class GameMatchHost
             $"(fromPhase={fromPhase}; plantUtc={plantedAt:O} fuse={fuseSec:0}s; " +
             $"Rpc fan-out={(plantPayload is { Length: > 0 })})");
         PostServerDebugChat($"бомба установлена (fuse {fuseSec:0}s)");
+        ApplyPlantEconomy(room, planterActorNr);
     }
 
     /// <summary>
@@ -543,8 +549,11 @@ public sealed partial class GameMatchHost
         return props;
     }
 
-    /// <summary>Defer Live once if a fighter picked team but has not spawned — refresh Prep Time only.</summary>
-    private bool TryExtendAlliesPrepForAwaitingSpawn(MatchRoom room)
+    /// <summary>
+    /// Defer Live once during C2=22 buy if a fighter picked team but has not spawned —
+    /// refresh buy <c>Time</c> deadline only (+5s).
+    /// </summary>
+    private bool TryExtendAlliesBuyForAwaitingSpawn(MatchRoom room)
     {
         if (!FightersAwaitingSpawn(room))
             return false;
@@ -553,7 +562,7 @@ public sealed partial class GameMatchHost
         int bomberId = 0;
         lock (_roomGate)
         {
-            if (room.Flow.Phase != MatchFlowPhase.PurchasePhase)
+            if (room.Flow.Phase != MatchFlowPhase.WarmupWillFinish)
                 return false;
             if (room.Flow.PrepSpawnExtensionUsed)
                 return false;
@@ -576,9 +585,9 @@ public sealed partial class GameMatchHost
         };
         if (bomberId > 0)
             props.Add((MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)));
-        BroadcastRoomProps(room, props, reason: "Allies Prep spawn-extend 5s", phaseDeadlineSec: deadline);
+        BroadcastRoomProps(room, props, reason: "Allies buy spawn-extend 5s", phaseDeadlineSec: deadline);
         Console.WriteLine(
-            "[match-host] allies: Prep extended 5s — spawn wait (Time deadline only; no RoundStartTime)");
+            "[match-host] allies: buy C2=22 extended 5s — spawn wait (Time deadline refresh)");
         return true;
     }
 }

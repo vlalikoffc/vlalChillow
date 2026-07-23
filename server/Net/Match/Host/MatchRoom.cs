@@ -32,7 +32,11 @@ internal sealed class MatchRoom
     /// victim from here when the killer confirms the kill (<c>kills</c>++). Damage is per-hit and
     /// non-lethal, so this is only bookkeeping — never a kill on its own.
     /// </summary>
-    public readonly Dictionary<byte, (byte Victim, DateTime When)> LastCombatDamage = new();
+    /// <summary>
+    /// Attacker → last damage attribution. <c>WeaponId</c> is decompile <c>gpy</c> when
+    /// peeked from the damage payload (0 = unknown → kill reward default).
+    /// </summary>
+    public readonly Dictionary<byte, (byte Victim, DateTime When, byte WeaponId)> LastCombatDamage = new();
     /// <summary>
     /// DeathMatch de-dup — last time the host master-authored a death for a victim actor nr.
     /// Guards the two combat-death signals (killer <c>kills</c>++ and the Live no-respawn Destroy

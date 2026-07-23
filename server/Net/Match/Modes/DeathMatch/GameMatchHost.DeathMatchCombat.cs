@@ -24,13 +24,17 @@ public sealed partial class GameMatchHost
     /// confirmed later by the killer's <c>kills</c>++ (damage is per-hit and non-lethal).
     /// Shared by DeathMatch and Escalation/Ranked master-death paths.
     /// </summary>
-    private void NoteDeathMatchDamage(MatchRoom room, byte attackerActorNr, short victimPawnId)
+    private void NoteDeathMatchDamage(
+        MatchRoom room, byte attackerActorNr, short victimPawnId, ReadOnlySpan<byte> damagePayload = default)
     {
         if (attackerActorNr == 0 || attackerActorNr == MatchHostActor.ActorNr)
             return;
 
         byte victim;
         MatchTeam at, vt;
+        var weaponId = damagePayload.IsEmpty
+            ? (byte)0
+            : MatchEconomy.TryPeekDamageWeaponId(damagePayload);
         lock (_roomGate)
         {
             var phase = room.Flow.Phase;
@@ -72,12 +76,12 @@ public sealed partial class GameMatchHost
                 return; // ignore self / friendly / spectator damage for attribution
             }
 
-            room.LastCombatDamage[attackerActorNr] = (victim, DateTime.UtcNow);
+            room.LastCombatDamage[attackerActorNr] = (victim, DateTime.UtcNow, weaponId);
         }
 
         Console.WriteLine(
             $"[combat-death] damage field=5 attribution: attacker={attackerActorNr}/{at} → " +
-            $"victim={victim}/{vt} (pawn={victimPawnId}); armed for next kills++ within " +
+            $"victim={victim}/{vt} (pawn={victimPawnId} weapon={weaponId}); armed for next kills++ within " +
             $"{DeathMatchFlowParams.KillAttributionWindow.TotalSeconds:0.#}s");
     }
 

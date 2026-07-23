@@ -294,7 +294,8 @@ public sealed partial class GameMatchHost
                         plantPayload: payloadCopy,
                         plantTimeValue: parsed.TimeValue,
                         rpcId: parsed.RpcId,
-                        gaaTarget: parsed.GaaTarget);
+                        gaaTarget: parsed.GaaTarget,
+                        planterActorNr: st.ActorNr);
                     // Host fan-out covers all peers for Allies; relay would duplicate.
                     lock (_roomGate)
                     {
@@ -312,7 +313,7 @@ public sealed partial class GameMatchHost
                 Console.WriteLine(
                     $"[observe] BombManager field=6 nzu from actor={st.ActorNr} " +
                     $"payloadLen={parsed.Payload.Length} (defuse/explode — apply before relay)");
-                HandleBombManagerNzu(st.Room, parsed.Payload);
+                HandleBombManagerNzu(st.Room, parsed.Payload, senderActorNr: st.ActorNr);
             }
             else if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
                      && parsed.Field == MatchFlowTestParams.BombManagerFieldNzg)
@@ -330,7 +331,11 @@ public sealed partial class GameMatchHost
                 lock (_roomGate)
                     isLivingPawn = st.Room.LivingPawns.ContainsKey(parsed.ObjectId);
                 if (isLivingPawn)
-                    NoteDeathMatchDamage(st.Room, attackerActorNr: st.ActorNr, victimPawnId: parsed.ObjectId);
+                    NoteDeathMatchDamage(
+                        st.Room,
+                        attackerActorNr: st.ActorNr,
+                        victimPawnId: parsed.ObjectId,
+                        damagePayload: parsed.Payload);
             }
 
             if (dropRelay)

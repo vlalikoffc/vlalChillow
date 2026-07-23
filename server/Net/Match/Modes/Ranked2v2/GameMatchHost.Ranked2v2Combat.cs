@@ -218,6 +218,7 @@ public sealed partial class GameMatchHost
     private void NoteBombModeKillByKiller(MatchRoom room, byte killerActorNr)
     {
         byte victim = 0;
+        byte weaponId = 0;
         string how = "damage-attribution";
         MatchFlowPhase phase;
         bool alreadyDead = false;
@@ -230,7 +231,10 @@ public sealed partial class GameMatchHost
             {
                 var age = DateTime.UtcNow - dmg.When;
                 if (age <= DeathMatchFlowParams.KillAttributionWindow)
+                {
                     victim = dmg.Victim;
+                    weaponId = dmg.WeaponId;
+                }
                 else
                 {
                     Console.WriteLine(
@@ -293,6 +297,9 @@ public sealed partial class GameMatchHost
             }
             return;
         }
+
+        // Instant kill money on confirmed elimination (alive or already-dead confirm path).
+        ApplyKillEconomy(room, killerActorNr, weaponId);
 
         // death/wipe already owned this elimination — confirm killer only, no second Destroy.
         if (alreadyDead)

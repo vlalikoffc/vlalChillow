@@ -340,11 +340,11 @@ public static class AlliesFlowParams
     /// <summary>C2=21 WarmUp (first round only) — gold RX 407472265→407475405 ≈3.1s.</summary>
     public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
     /// <summary>
-    /// C2=22 PreStart freeze + bomberId — gold RX 22→31 stime ≈10.0s every round
-    /// (10169, 9992, 10167, 10182, 10000, 10171, 10174 ms). Not 3s generic PreStart.
+    /// C2=22 buy duration — dedicated uses <see cref="MatchHostSettings.Prep"/> (default 10s).
+    /// Phone gold waited ~10s on C2=22 before C2=31; dedicated puts the visible buy deadline on 22.
     /// </summary>
-    public static readonly TimeSpan PreStart = TimeSpan.FromSeconds(10);
-    /// <summary>C2=31 Prep before Live — phone TX 31→C2=101 Live ≈10.0s (allies-probe family).</summary>
+    public static TimeSpan PreStart => MatchHostSettings.Prep;
+    /// <summary>Legacy gold C2=31 wait — dedicated post-buy C2=31 is immediate (anchor only).</summary>
     public static readonly TimeSpan Prep = TimeSpan.FromSeconds(10);
     /// <summary>Silent pause after C2=101 round-end WinTeam bag — gold RX 101→22 ≈6.0s.</summary>
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);

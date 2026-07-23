@@ -497,10 +497,9 @@ public sealed class CliDashboard : IDisposable
     private string DescribePhase(MatchSnapshot snap)
     {
         var allies = IsAlliesLike(snap);
-        // Prefer host Flow.PhaseEndsUtc (wire Time for C2=31 Prep is the countdown deadline;
-        // Allies PreStart C2=22 uses anchor Time on wire — host PhaseEndsUtc drives the ~10s wait).
-        // Fall back to room Time deadline only for modes with a wire round/fuse clock (Ranked Live,
-        // TDM) — never for Allies RoundLive (gold: silent combat, no round Time TX).
+        // Prefer host Flow.PhaseEndsUtc (Allies C2=22 buy uses wire Time deadline;
+        // C2=31 is anchor-only post-buy). Fall back to room Time for modes with a wire
+        // round/fuse clock (Ranked Live, TDM) — never for Allies RoundLive (silent combat).
         double remain = 0;
         if (snap.PhaseEndsUtc > DateTime.MinValue && snap.PhaseEndsUtc < DateTime.MaxValue)
             remain = (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
@@ -516,11 +515,13 @@ public sealed class CliDashboard : IDisposable
             MatchFlowPhase.WaitingPlayers => "WAITING PLAYERS",
             MatchFlowPhase.AlliesPreWarmup => allies ? "FREE-FOR-ALL · C2=11" : snap.Phase.ToString(),
             MatchFlowPhase.Warmup => allies ? $"WARM-UP · Round {Math.Max(1, snap.Round)}" : "WARM-UP",
-            // C2=22 PreStart every round (gold) — not a once-per-match «match starting» banner.
+            // Allies: C2=22 is the real buy/prep (visible timer). Generic Ranked keeps MATCH STARTING.
             MatchFlowPhase.WarmupWillFinish => allies
-                ? $"PRE-START · Round {snap.Round} · C2=22"
+                ? $"PREP · Round {snap.Round} · C2=22"
                 : "MATCH STARTING",
-            MatchFlowPhase.PurchasePhase => $"PREP · Round {snap.Round} · C2=31",
+            MatchFlowPhase.PurchasePhase => allies
+                ? $"POST-BUY · Round {snap.Round} · C2=31"
+                : $"PREP · Round {snap.Round} · C2=31",
             MatchFlowPhase.RoundLive => allies
                 ? $"LIVE · Round {snap.Round} (no round clock)"
                 : $"LIVE · Round {snap.Round}",

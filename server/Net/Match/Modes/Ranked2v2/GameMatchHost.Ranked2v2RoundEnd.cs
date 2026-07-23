@@ -155,6 +155,8 @@ public sealed partial class GameMatchHost
         Dashboard.DashboardHub.PostRoundResult(
             $"Round {round}: {winSide} win  ·  {scoreTr}:{scoreCt}  ({reason})",
             winner, mvpNr, mvpName, isFinal: false);
+
+        ApplyRoundEndEconomy(room, winner, reason);
     }
 
     /// <summary>

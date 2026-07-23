@@ -55,10 +55,23 @@ Probe joined mid-match (R3 plant visible first); R1 open sequence (10→11→21�
 | 407936831 | 22623 | 101 | | 407936.818 | | 22.620 | 151 | Time,CtScore,TrCoLosses,CtCoLosses,WinTeam,C2 |
 | 407942877 | 6046 | 22 | 9 | 407942.839 | 407942.839 | 6.021 | 77 | Time,Round,RoundStartTime,bomberId,C2 |
 
-**Patterns (gold, not guesses):**
+## Dedicated override (buy on C2=22 — post-`7af999c`)
 
-- **C2=22:** `Time == RoundStartTime` (anchor); host waits ~10s (stime 22→31 ≈ 10000–10182 ms) — **no wire countdown**
-- **C2=31:** `Time` deadline only; `ΔTime-prev` from C2=22 anchor ≈ **10.0 s** — **only visible buy timer**
+Phone gold: C2=22 **anchor**, C2=31 **deadline** (~10s buy). Dedicated user override:
+
+| Step | Wire | Host |
+|------|------|------|
+| **C2=22** | `Time` = **buy deadline** (`now+prep`), `RoundStartTime` = now; ReCreate, bomberId, Round, money(R1) | Wait buy duration (`/set prep`, default 10s). CLI: **PREP · C2=22** |
+| **C2=31** | Roster keys + **anchor** `Time` (no new deadline) | Background bag then **immediate** silent Live — **no** second buy countdown |
+| **Live** | no bag | Host round timeout → CT; plant **RoundLive only** |
+| **Economy** | — | CS-style round/kill/plant/defuse payouts (`MatchEconomy`, cap $10k); CoLosses drive loss streak |
+
+Do **not** stack deadline on both 22 and 31 (~19s bug from `9e4d4c2`/`bc21cb6`). Buy lives on **22 only**; 31 is post-buy anchor.
+
+## Patterns (gold phone wire, not dedicated)
+
+- **C2=22 (gold):** `Time == RoundStartTime` (anchor); host waits ~10s (stime 22→31 ≈ 10000–10182 ms) — **no wire countdown on phone**
+- **C2=31 (gold):** `Time` deadline only; `ΔTime-prev` from C2=22 anchor ≈ **10.0 s** — phone’s visible buy timer
 - **Live:** no SetProperties between C2=31 deadline and C2=40 or C2=101
 - **C2=40:** len=14, `C2` only — no `Time` / `RoundStartTime`
 - **C2=101 round end:** len=151, `Time` anchor + scores + `WinTeam`; **never** sent as Live round clock
@@ -181,9 +194,9 @@ Phone R1: C2=11 (~8s) then C2=21 (~3s). **Dedicated R1:** skip C2=11 → C2=21 o
 | 10 | WaitingPlayers | — | WAITING PLAYERS | lobby / waiting |
 | 11 | *(skipped)* | — | — | phone freeforall only; dedicated does not TX |
 | 21 | Warmup | anchor | WARM-UP · Round 1 | warm-up (R1 only) |
-| **22** | WarmupWillFinish | anchor = `RoundStartTime` | **PRE-START · Round N · C2=22** (~10s host wait) | «раунд начинается» / round-start freeze — **every round** |
-| 31 | PurchasePhase | **deadline** (+~10s) | PREP · Round N · C2=31 | buy/spawn countdown (only visible wire timer) |
-| *(none)* | RoundLive | *(unchanged — last Prep deadline passed)* | LIVE · Round N **(no round clock)** | combat; **no** fixed round timer |
+| **22** | WarmupWillFinish | **deadline** = now+prep (buy) | **PREP · Round N · C2=22** | buy/spawn countdown (dedicated) |
+| 31 | PurchasePhase | **anchor** = nowSec | POST-BUY · Round N · C2=31 | background bag → Live (no 2nd timer) |
+| *(none)* | RoundLive | *(no Live Time TX)* | LIVE · Round N | combat; host timeout; **no plant in Prep/buy** |
 | 40 | BombPlanted | *(no Time)* | BOMB PLANTED | fuse from plant Rpc |
 | 101 | RoundEndPause | anchor | ROUND END · Round N | round-end + WinTeam bag |
 | 111–113 | HalfTime* | anchor each | HALF-TIME · … | side swap after R7 |
@@ -206,13 +219,15 @@ freezes. Phone host behaves the same on wire; dedicated must not re-add C2=101 L
 ## Phase sequence (dedicated host)
 
 ```
-/set start → skip C2=11 → C2=21 (~3s, R1 only) → C2=22 PreStart ANCHOR (Time==RoundStartTime) →
-C2=31 Prep DEADLINE ~10s ONLY → silent Live (NO C2=101 Live, NO 90s clock) →
-(manual plant C2=40 C2-only + BombManager Rpc fan-out?) → C2=101 WinTeam round end (~6s) → C2=22 …
+/set start → skip C2=11 → C2=21 (~3s, R1 only) →
+C2=22 BUY DEADLINE (~prep /set, default 10s; RoundStartTime=now) →
+C2=31 post-buy ANCHOR (roster keys, no new deadline) → silent Live promptly →
+(manual plant C2=40 RoundLive-only + BombManager Rpc fan-out) → C2=101 WinTeam (~6s) → C2=22 …
 After R7: C2=101 → C2=111 (~5s) → team flip → C2=112 (~1s) → C2=113 (~7s) → C2=22 R8 …
+Economy: round-end / kill / plant / defuse payouts (cap $10k); R1 money seed on C2=22 only.
 ```
 
-Phone gold reference (not dedicated open): C2=10→11→21→22(anchor)→31(deadline)→silent Live.
+Phone gold reference (not dedicated buy placement): C2=10→11→21→22(anchor)→31(deadline)→silent Live.
 
 Dedicated host must rebuild these bags with codecs — **never replay capture blobs**.
 

@@ -167,8 +167,8 @@ public static class MatchHostSettings
           /set team <t>      ct|tr|t|spectator — себе в матче (SetProperty team)
           /set money <N>     деньги на старт раунда (0–16000)
           /set fuse <сек>    таймер бомбы
-          /set prep <сек>    подготовка C2=31
-          /set prestart <сек> PreStart C2=22
+          /set prep <сек>    Allies buy C2=22 / Ranked Prep C2=31
+          /set prestart <сек> Ranked PreStart C2=22 (Allies buy uses /set prep)
           /set warmup <сек>  WarmUp C2=21 (первый раунд)
           /set roundtime <сек> длительность live
           /set pause <сек>   пауза после RoundEnd

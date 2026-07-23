@@ -561,21 +561,22 @@ public sealed partial class GameMatchHost
             (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
         ], reason: $"RoundLive round={round}", phaseDeadlineSec: deadline);
-        SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
+        // Round 1 only — later rounds keep balances from round-end / kill / plant payouts.
+        if (round <= 1)
+            SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
         ClearFighterDeathFlags(room);
         Console.WriteLine(
             $"[match-host] match-flow: RoundLive C2={MatchC2States.MatchStarted} " +
             $"round={round}/{MatchFlowTestParams.TotalRounds} " +
             $"duration={MatchFlowTestParams.RoundDuration.TotalSeconds:0}s deadline={deadline:0.###} " +
-            $"money={MatchFlowTestParams.RoundStartMoney} bomberId={bomberId}");
+            $"money={(round <= 1 ? MatchFlowTestParams.RoundStartMoney.ToString() : "keep")} " +
+            $"bomberId={bomberId}");
         PostServerDebugChat($"Live · раунд {round}");
     }
 
     /// <summary>
-    /// <summary>
-    /// Plant only in <see cref="MatchFlowPhase.RoundLive"/>. Prep/PreStart plant is rejected
-    /// (anti-cheat). Allies desync fix: do not idle 10s on C2=22 while clients already play —
-    /// <see cref="EnterAlliesPreStart"/> chains straight into C2=31 Prep.
+    /// Plant only in <see cref="MatchFlowPhase.RoundLive"/>. Prep/buy plant is rejected
+    /// (anti-cheat). Allies: buy on C2=22, then C2=31 anchor → Live promptly.
     /// </summary>
     private void TryEnterBombPlanted(
         MatchRoom room,
@@ -583,12 +584,13 @@ public sealed partial class GameMatchHost
         byte[]? plantPayload = null,
         double plantTimeValue = 0,
         byte rpcId = 2,
-        byte gaaTarget = 2)
+        byte gaaTarget = 2,
+        byte planterActorNr = 0)
     {
         if (IsAlliesRoom(room))
         {
             TryEnterAlliesBombPlanted(
-                room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget);
+                room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget, planterActorNr);
             return;
         }
 
@@ -644,6 +646,7 @@ public sealed partial class GameMatchHost
             $"plantUtc={plantedAt:O} fuse={fuseSec:0}s (explode only at plant+{fuseSec:0}s) " +
             $"fromPhase={fromPhase}");
         PostServerDebugChat($"бомба установлена (fuse {fuseSec:0}s)");
+        ApplyPlantEconomy(room, planterActorNr);
     }
 
     /// <summary>
@@ -653,7 +656,7 @@ public sealed partial class GameMatchHost
     /// before any PreStart/Prep — never skip the round-end UI.
     /// Wire method id is <c>field</c> (DiffableCs <c>[Rpc(6)]</c>), not the rpc sender byte.
     /// </summary>
-    private void HandleBombManagerNzu(MatchRoom room, byte[] payload)
+    private void HandleBombManagerNzu(MatchRoom room, byte[] payload, byte senderActorNr = 0)
     {
         if (payload.Length < 1)
         {
@@ -725,7 +728,10 @@ public sealed partial class GameMatchHost
             $"fuseElapsed={fuseElapsed:F3}s → {(defused ? "CT" : "T")} win " +
             "(immediate RoundEnd; fuse cancelled)");
         if (defused)
+        {
             PostServerDebugChat($"дефьюз ({fuseElapsed:F1}s)");
+            ApplyDefuseEconomy(room, senderActorNr);
+        }
         else
             PostServerDebugChat($"взрыв rpc ({fuseElapsed:F1}s)");
         EnterRoundEndPause(room, winner, reason);
