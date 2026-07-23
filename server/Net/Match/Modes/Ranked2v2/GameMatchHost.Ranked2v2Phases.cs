@@ -338,8 +338,8 @@ public sealed partial class GameMatchHost
         {
             Console.WriteLine(
                 "[match-host] match-flow: EnterWarmupWillFinish BLOCKED for Allies — " +
-                "use EnterAlliesPrep (C2=22 buy deadline)");
-            EnterAlliesPrep(room);
+                "use EnterAlliesPreStart (anchor Time, ~10s PreStart)");
+            EnterAlliesPreStart(room);
             return;
         }
 
@@ -485,7 +485,7 @@ public sealed partial class GameMatchHost
         {
             Console.WriteLine(
                 "[match-host] match-flow: EnterRoundLive BLOCKED for Allies — " +
-                "use EnterAlliesLive (C2=101 + round clock)");
+                "use EnterAlliesLive (no C2=101 / no round clock on wire)");
             EnterAlliesLive(room);
             return;
         }

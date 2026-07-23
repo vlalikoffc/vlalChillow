@@ -92,7 +92,6 @@ class Reader:
             return ("null", None)
         if code == 10:
             return read_fzu(self)
-        # fallback: fzu directly
         self.pos -= 1
         return read_fzu(self)
 
@@ -145,7 +144,10 @@ def open_body(payload: bytes):
         comp = payload[off + 4 :]
         if lz4block is None:
             raise RuntimeError("pip install lz4 for compressed captures")
-        body = lz4block.decompress(comp, uncompressed_size=unc_len)
+        try:
+            body = lz4block.decompress(comp, uncompressed_size=unc_len)
+        except Exception as exc:
+            raise RuntimeError(f"lz4 decompress failed: {exc}") from exc
         return flags, opcode, stime, body
     body = payload[off:]
     return flags, opcode, stime, body
@@ -169,32 +171,24 @@ def parse_set_property(body: bytes):
     return actor, key, val
 
 
-def fmt_val(v):
-    kind, val = v
-    if kind == "props":
-        inner = ", ".join(f"{k}={fmt_val(x)}" for k, x in val[:6])
-        if len(val) > 6:
-            inner += "…"
-        return f"{{{inner}}}"
-    if kind == "double":
-        return f"{val:.3f}"
-    return str(val)
+def double_val(v):
+    return v[1] if v and v[0] == "double" else None
 
 
-def main():
-    cap_dir = Path(sys.argv[1] if len(sys.argv) > 1 else
-                   "bin/Release/net8.0/captures")
-    patterns = ["20260723_2157*", "20260723_2200*", "20260723_2201*", "20260723_2202*",
-                "20260723_2203*", "20260723_2204*"]
+def collect_events(cap_dir: Path, patterns):
     files = []
     for pat in patterns:
-        files.extend(sorted(cap_dir.glob(f"{pat}*SetPropert*.bin")))
+        files.extend(cap_dir.glob(f"{pat}*SetPropert*.bin"))
     files = sorted(set(files), key=lambda p: p.name)
 
     events = []
     for path in files:
         payload = path.read_bytes()
-        opened = open_body(payload)
+        try:
+            opened = open_body(payload)
+        except Exception as e:
+            print(f"# skip {path.name}: {e}", file=sys.stderr)
+            continue
         if not opened:
             continue
         _flags, opcode, stime, body = opened
@@ -211,7 +205,8 @@ def main():
                         "stime": stime,
                         "c2": c2[1],
                         "round": d.get("Round"),
-                        "time": d.get("Time"),
+                        "time": double_val(d.get("Time")),
+                        "rst": double_val(d.get("RoundStartTime")),
                         "bomber": d.get("bomberId"),
                         "tr_score": d.get("TrScore"),
                         "ct_score": d.get("CtScore"),
@@ -229,6 +224,7 @@ def main():
                         "c2": val[1],
                         "round": None,
                         "time": None,
+                        "rst": None,
                         "bomber": None,
                         "tr_score": None,
                         "ct_score": None,
@@ -241,9 +237,16 @@ def main():
             print(f"# skip {path.name}: {e}", file=sys.stderr)
 
     events.sort(key=lambda e: (e["stime"] or 0, e["file"]))
+    return events
 
+
+def print_table(events):
     prev_stime = None
-    print("stime\tΔms\tC2\tname\tRound\tTime\tTr\tCt\tbomber\tkeys\tfile")
+    prev_time = None
+    print(
+        "stime\tΔms\tC2\tname\tRound\tTime\tRST\tΔTime-RST\t"
+        "ΔTime-prev\tlen\tkeys\tfile"
+    )
     for e in events:
         st = e["stime"]
         delta = ""
@@ -252,12 +255,38 @@ def main():
         if st is not None:
             prev_stime = st
         rnd = e["round"][1] if e["round"] else ""
-        tm = f"{e['time'][1]:.3f}" if e["time"] and e["time"][0] == "double" else ""
-        tr = e["tr_score"][1] if e["tr_score"] else ""
-        ct = e["ct_score"][1] if e["ct_score"] else ""
-        bom = e["bomber"][1] if e["bomber"] else ""
+        tm = e["time"]
+        rst = e["rst"]
+        dtr = f"{tm - rst:.3f}" if tm is not None and rst is not None else ""
+        dtp = ""
+        if tm is not None and prev_time is not None:
+            dtp = f"{tm - prev_time:.3f}"
+        if tm is not None:
+            prev_time = tm
+        tm_s = f"{tm:.3f}" if tm is not None else ""
+        rst_s = f"{rst:.3f}" if rst is not None else ""
         name = C2_NAMES.get(e["c2"], "?")
-        print(f"{st}\t{delta}\t{e['c2']}\t{name}\t{rnd}\t{tm}\t{tr}\t{ct}\t{bom}\t{','.join(e['keys'])}\t{e['file']}")
+        print(
+            f"{st}\t{delta}\t{e['c2']}\t{name}\t{rnd}\t{tm_s}\t{rst_s}\t{dtr}\t"
+            f"{dtp}\t{e['len']}\t{','.join(e['keys'])}\t{e['file']}"
+        )
+
+
+def main():
+    cap_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "bin/Release/net8.0/captures")
+    patterns = [
+        "20260723_2157*",
+        "20260723_2200*",
+        "20260723_2201*",
+        "20260723_2202*",
+        "20260723_2203*",
+        "20260723_2204*",
+        "20260723_2205*",
+        "20260723_2206*",
+    ]
+    events = collect_events(cap_dir, patterns)
+    print_table(events)
+    print(f"# events={len(events)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
