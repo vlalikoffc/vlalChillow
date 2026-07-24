@@ -64,7 +64,7 @@ public sealed partial class GameMatchHost
         var req = MatchCodec.ParseJoinRoomRequestBody(body);
         // Dict lookup = password only (fyi.boeh). Live password='Dedik' (chillow joke).
         // room (cwgt) = participant roster string — who should load into катка.
-        // Live 'влал' alone is consistent with per-client lobby illusion (Server+self).
+        // Live phone often sends self nick; dedicated may see fuller roster strings.
         Console.WriteLine(
             $"[match-host] JoinRoomRequest room={MatchRoomField.Describe(req.Room)} " +
             $"mode={req.Mode} " +
@@ -103,8 +103,7 @@ public sealed partial class GameMatchHost
         else
         {
             // Accept JoinOnly when password hits Dedik. Do not gate on room==LobbyId —
-            // room is roster semantics, not the dict key. Multi-name encoding TBD;
-            // when lobby illusion is dropped, expect fuller roster strings here.
+            // room is roster semantics, not the dict key. Multi-name encoding TBD.
             byte nr;
             lock (_roomGate)
             {
@@ -160,7 +159,8 @@ public sealed partial class GameMatchHost
 
             // Phone-host probe (20260722_003523_* / run-20260722_073504): thin Found ~148B —
             // room props + actor names only (empty gak props). Identity/avatar come post-Found.
-            // Match channel = shared truth (all actors). Lobby stays Server+self illusion for N>4.
+            // Match channel = shared truth (all actors). Lobby JoinResponse now fans out
+            // full roster via op4 NewMember (dedicated MaxMembers=16).
             // MaxActorsHint ≥ live roster so Found never advertises fewer slots than actors present.
             var maxHint = (byte)Math.Clamp(
                 Math.Max(MatchGapDefaults.MaxActorsHint, actorsSnap.Count), 1, 255);
@@ -199,8 +199,14 @@ public sealed partial class GameMatchHost
         {
             // Dynamic roster: peers who already Found only knew actors-at-entry.
             // Push ActorJoinedEvent (fup) so early humans learn about this joiner.
-            NotifyPeersActorJoined(room, peer, joinerNr, st.RosterName ?? $"actor{joinerNr}");
+            var joinName = st.RosterName ?? $"actor{joinerNr}";
+            NotifyPeersActorJoined(room, peer, joinerNr, joinName);
             BeginAwaitJoinerThenBootstrap(peer, room, joinerNr);
+            try { OnMatchPlayerJoined?.Invoke(joinName); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[match-host] OnMatchPlayerJoined: {ex.Message}");
+            }
         }
     }
 

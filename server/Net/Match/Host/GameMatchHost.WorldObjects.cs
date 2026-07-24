@@ -223,21 +223,28 @@ public sealed partial class GameMatchHost
             if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
                 return;
 
+            var dropRelay = false;
+
             // ChatManager mid-match text: length-prefixed UTF-8 payload (captures
             // 20260723_030750_1117 / 20260723_030756_1126). Lobby OpChat never sees these —
             // execute slash commands (/set start, …) via host callback when present.
+            // Slash: do NOT fan-out the command text to other peers (private Server feedback).
             if (parsed.ObjectId == MatchSceneManagers.ChatManagerObjectId
                 && TryDecodeChatManagerText(parsed.Payload, out var chatText))
             {
                 Console.WriteLine(
                     $"[match-host] ChatManager text actor={st.ActorNr}: {chatText}");
-                if (chatText.StartsWith('/') && peer.Address is { } chatIp)
+                if (chatText.StartsWith('/'))
                 {
-                    try { OnMatchChatSlashCommand?.Invoke(chatIp, chatText); }
-                    catch (Exception ex)
+                    dropRelay = true;
+                    if (peer.Address is { } chatIp)
                     {
-                        Console.WriteLine(
-                            $"[match-host] ChatManager slash handler failed: {ex.Message}");
+                        try { OnMatchChatSlashCommand?.Invoke(chatIp, chatText); }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine(
+                                $"[match-host] ChatManager slash handler failed: {ex.Message}");
+                        }
                     }
                 }
             }
@@ -247,7 +254,6 @@ public sealed partial class GameMatchHost
             // exceptSender still updates DeadActors / fuse / wipe same tick. [observe] logs
             // only on decisive events (plant/defuse/explode) — damage attribution logs inside
             // NoteDeathMatchDamage on accept/ignore, not every hit here.
-            var dropRelay = false;
             var alliesRoom = IsAlliesRoom(st.Room);
             // Allies gold plant = field=3; field=1 near C2=22/31 is round-start reset (relay only).
             // Ranked/Escalation carry plant = field=1/2.

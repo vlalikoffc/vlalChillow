@@ -96,6 +96,16 @@ public sealed partial class GameMatchHost : IDisposable
     public Action<IPAddress, string>? OnMatchChatSlashCommand { get; set; }
 
     /// <summary>
+    /// Fired when a human JoinRoom Found into Dedik (enters катка). Name = roster nick.
+    /// </summary>
+    public Action<string>? OnMatchPlayerJoined { get; set; }
+
+    /// <summary>
+    /// Fired when a human leaves the Dedik room (disconnect / remove). Name = roster nick.
+    /// </summary>
+    public Action<string>? OnMatchPlayerLeft { get; set; }
+
+    /// <summary>
     /// Fired once when MatchOver + LobbyReturnPending timer elapses (wins-needed / series over).
     /// Lobby host should HardReset, stop 7777 advertise, restore idle lobby (keep mode/map).
     /// </summary>

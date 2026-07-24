@@ -26,7 +26,7 @@ The dashboard activates automatically whenever stdout is a real terminal. If out
 ## Views
 
 - **Lobby** (before Play): header (mode / map / players / match state), a players card
-  (all real members — the host still tracks everyone under the hide-peers illusion) and a
+  (all real members with lobby / in-match presence) and a
   chat card.
 - **Match** (after Play / match in progress): centered mode·map + phase/timer, big
   team-colored score tiles, a two-column TAB scoreboard (**DEFENSE (CT)** cyan left,

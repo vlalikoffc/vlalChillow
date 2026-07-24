@@ -13,7 +13,7 @@ namespace StandChillow.LanServer.Net;
 /// Handles Chillow LanLobby envelope (etz) after CONNECT — join snapshot, chat, leave.
 /// Match start emits op7/op9 and relies on <see cref="GameMatchHost"/> on UDP 7777.
 /// </summary>
-public sealed class GameNetHost : IDisposable
+public sealed partial class GameNetHost : IDisposable
 {
     public const int DefaultGamePort = LanDiscoveryHost.DefaultGamePort;
 
@@ -65,6 +65,11 @@ public sealed class GameNetHost : IDisposable
         // Wins-needed / series MatchResults + 5s → stop 7777, idle lobby (keep mode/map).
         _match.OnMatchOverReturnToLobby = () =>
             _deferred.Enqueue(() => ReturnPlayersToLobbyIdle("match-over"));
+        // Match JoinRoom Found / peer leave → Server chat + per-player lobby presence.
+        _match.OnMatchPlayerJoined = name =>
+            _deferred.Enqueue(() => NotifyMatchPlayerJoined(name));
+        _match.OnMatchPlayerLeft = name =>
+            _deferred.Enqueue(() => NotifyMatchPlayerLeft(name));
 
         _listener = new EventBasedNetListener();
         _manager = new NetManager(_listener)
@@ -95,11 +100,15 @@ public sealed class GameNetHost : IDisposable
             var left = _session.OnPeerDisconnected(peer, out var name);
             if (name is not null && left is not null)
             {
-                // HIDE PEERS (4-cap illusion): never send OpLobbyMemberLeftEvent. Peers were never
-                // told this member existed (no OpLobbyNewMemberEvent), so a leave event would carry
-                // a member id the client's roster doesn't have and could desync it. A Server(0)
-                // chat line is enough to notify others by name without exposing roster membership.
-                BroadcastServerChat($"{name} Отключился!");
+                // Full roster: OpLobbyMemberLeftEvent so remaining clients drop the member.
+                // Match leave chat is separate (OnMatchPlayerLeft); lobby disconnect is silent
+                // unless they never entered катка (optional notice only when still Lobby).
+                var leftId = left.ServerMemberId;
+                var wasInMatch = left.Status == PlayerLobbyStatus.InMatch;
+                Broadcast(LobbyCodec.BuildMemberLeft(leftId));
+                if (!wasInMatch)
+                    BroadcastServerChat($"{name} Отключился!");
+                BroadcastServerChat(_session.BuildPlayerListMessage());
                 _onRosterChanged?.Invoke();
             }
         };
@@ -226,6 +235,7 @@ public sealed class GameNetHost : IDisposable
         // Preserve GameModeId + SelectedLevels — only clear in-progress flags.
         _session.Searching = false;
         _session.GameInProgress = false;
+        _session.ResetAllToLobby();
         MatchHostSettings.MatchStartArmed = false;
 
         _match.SuspendMatchListen(reason);
@@ -385,32 +395,32 @@ public sealed class GameNetHost : IDisposable
         }
 
         Console.WriteLine(
-            $"[lobby] join OK → illusion Server+{result.Player!.Name} (serverId={result.Player.ServerMemberId})" +
+            $"[lobby] join OK → {result.Player!.Name} id={result.Player.ServerMemberId}" +
             (_matchStarted
                 ? $" mid-match hasHosting={_advertiseLanIp}:{GameMatchHost.DefaultMatchPort}"
                 : " pre-match hasHosting=0"));
         Send(peer, result.ResponseBytes!);
 
-        // HIDE PEERS (4-cap illusion): do NOT announce this joiner to existing peers and do NOT
-        // replay existing peers to this joiner. No OpLobbyNewMemberEvent is ever sent, so every
-        // client's lobby roster stays exactly Server(0)+self(1) from its JoinResponse. The client
-        // 4-slot LAN cap therefore never trips regardless of how many real peers connect. The host
-        // still tracks every real member in the session for /play, chat relay and match start.
+        // Full roster: announce joiner to everyone already in lobby (op4 NewMember).
+        var self = result.Player!;
+        var newMemberPkt = LobbyCodec.BuildNewMember(LobbySession.ToLobbyMember(self));
+        foreach (var p in _session.JoinedPlayers())
+        {
+            if (ReferenceEquals(p.Peer, peer)) continue;
+            Send(p.Peer, newMemberPkt);
+        }
         _onRosterChanged?.Invoke();
 
-        var nick = result.Player.Name;
         Schedule(0, () =>
         {
             SendServerChatTo(peer, LobbySession.WelcomeMessage);
-            BroadcastServerChat($"{nick} Подключился!");
+            // Lobby join is quiet for match-style Подключился — that fires on JoinRoom Found.
+            BroadcastServerChat(_session.BuildPlayerListMessage());
         });
-        // Hide-peers: show only Server + self in the join player-list (never other real peers).
-        var self = result.Player!;
-        Schedule(50, () => SendServerChatTo(peer, _session.BuildIllusionPlayerListMessageFor(self)));
         Schedule(80, () => SendServerChatTo(peer,
             _matchStarted
                 ? "матч уже идёт — JoinRoom Dedik на 7777 (не новый start)"
-                : "чат: /mode /map /set · /play (запуск) · /set start|/start (WarmUp)"));
+                : FormatCommandHelp()));
 
         // Late joiner into running match: also push PropertyChanged + op9 (JoinResponse may already
         // embed hasHosting; op9 is the live phone path clients always listen for).
@@ -450,18 +460,15 @@ public sealed class GameNetHost : IDisposable
         if (message.StartsWith('/'))
         {
             Console.WriteLine($"[chat] {player.Name}: {message} (command, silent)");
-            if (TryHandleSlashCommand(player, message))
-                return;
-            // Unknown slash — do not tear down match (never fuzzy-map typos to /play).
-            SendServerChatTo(player.Peer, $"unknown command '{message}'");
+            if (!TryHandleSlashCommand(player, message))
+                ReplyPrivate(player, FormatUnknownCommandHelp(message));
             return;
         }
 
         Console.WriteLine($"[chat] {player.Name}: {message}");
         DashboardHub.PostChat(player.Name, message);
 
-        // Relay as Server(0) with "nick: text" to ALL other joined peers (hide-peers illusion).
-        // No team filter — CT→T and T→CT both must arrive.
+        // Relay with the speaker's real member id — clients now have the full roster.
         RelayPlayerChat(player, message);
     }
 
@@ -470,15 +477,7 @@ public sealed class GameNetHost : IDisposable
     /// </summary>
     private void HandleMatchChatSlashCommand(IPAddress matchPeerIp, string message)
     {
-        ConnectedPlayer? player = null;
-        foreach (var p in _session.JoinedPlayers())
-        {
-            if (p.Peer.Address is null) continue;
-            if (!p.Peer.Address.Equals(matchPeerIp)) continue;
-            player = p;
-            break;
-        }
-
+        var player = _session.TryGetByIp(matchPeerIp);
         if (player is null)
         {
             Console.WriteLine(
@@ -488,20 +487,15 @@ public sealed class GameNetHost : IDisposable
 
         Console.WriteLine($"[chat] {player.Name}: {message} (ChatManager command, silent)");
         if (!TryHandleSlashCommand(player, message))
-            SendServerChatTo(player.Peer, $"unknown command '{message}'");
+            ReplyPrivate(player, FormatUnknownCommandHelp(message));
     }
 
     /// <summary>
-    /// Relay a player's chat to the OTHER peers under the hide-peers illusion.
-    /// Each client only knows Server(0)+self(1) (no OpLobbyNewMemberEvent is ever sent), so we
-    /// cannot use the speaker's real member id — the recipient's roster has no such member and the
-    /// client would drop/mis-render the line. Instead we send as Server (id 0) with a "nick: text"
-    /// prefix (documented dedicated policy) so recipients still see who spoke without learning that
-    /// the peer exists as a roster member. The sender is skipped (their client already echoes it).
+    /// Relay a player's chat to the OTHER peers. Sender is skipped (their client already echoes).
     /// </summary>
     private void RelayPlayerChat(ConnectedPlayer speaker, string message)
     {
-        var bytes = LobbyCodec.BuildChatEvent(LobbySession.ServerMemberId, $"{speaker.Name}: {message}");
+        var bytes = LobbyCodec.BuildChatEvent(speaker.ServerMemberId, message);
         foreach (var p in _session.JoinedPlayers())
         {
             if (ReferenceEquals(p.Peer, speaker.Peer)) continue;
@@ -509,339 +503,7 @@ public sealed class GameNetHost : IDisposable
         }
     }
 
-    private bool TryHandleSlashCommand(ConnectedPlayer player, string message)
-    {
-        if (!message.StartsWith('/'))
-            return false;
-
-        var body = message[1..].Trim();
-        var space = body.IndexOf(' ');
-        var cmd = space < 0 ? body : body[..space];
-        var args = space < 0 ? "" : body[(space + 1)..].Trim();
-
-        if (cmd.Equals("mode", StringComparison.OrdinalIgnoreCase))
-        {
-            HandleModeCommand(player, args);
-            return true;
-        }
-
-        if (cmd.Equals("map", StringComparison.OrdinalIgnoreCase)
-            || cmd.Equals("maps", StringComparison.OrdinalIgnoreCase)
-            || cmd.Equals("level", StringComparison.OrdinalIgnoreCase)
-            || cmd.Equals("levels", StringComparison.OrdinalIgnoreCase))
-        {
-            HandleMapCommand(player, args);
-            return true;
-        }
-
-        if (cmd.Equals("set", StringComparison.OrdinalIgnoreCase))
-        {
-            HandleSetCommand(player, args);
-            return true;
-        }
-
-        // /play = launch or rematch (HardReset). /start = arm WarmUp only once match is up.
-        if (IsPlayCommand(message))
-        {
-            TryStartMatch($"chat:{player.Name}");
-            return true;
-        }
-
-        if (IsArmWarmupCommand(message))
-        {
-            TryArmWarmupOrFirstPlay($"chat:{player.Name}");
-            return true;
-        }
-
-        // Plugin slash commands (isolated; must not invent match opcodes).
-        try
-        {
-            if (PluginChatCommandHandler?.Invoke(player.Name, cmd, args) == true)
-                return true;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[lobby] plugin chat cmd '{cmd}': {ex.Message}");
-            return true;
-        }
-
-        return false;
-    }
-
-    private void HandleSetCommand(ConnectedPlayer player, string args)
-    {
-        if (string.IsNullOrWhiteSpace(args)
-            || args.Equals("help", StringComparison.OrdinalIgnoreCase)
-            || args.Equals("?", StringComparison.OrdinalIgnoreCase))
-        {
-            foreach (var line in MatchHostSettings.FormatSetHelp().Split('\n'))
-                SendServerChatTo(player.Peer, line.TrimEnd());
-            SendServerChatTo(player.Peer, MatchHostSettings.FormatStatusLine());
-            return;
-        }
-
-        var parts = args.Split(' ', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        var key = parts[0];
-        var val = parts.Length > 1 ? parts[1] : "";
-
-        if (key.Equals("status", StringComparison.OrdinalIgnoreCase))
-        {
-            var msg = MatchHostSettings.FormatStatusLine();
-            BroadcastServerChat(msg);
-            return;
-        }
-
-        if (key.Equals("start", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("startmatch", StringComparison.OrdinalIgnoreCase))
-        {
-            ArmMatchStart(player.Name);
-            return;
-        }
-
-        if (key.Equals("round", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("rounds", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!int.TryParse(val, out var n) || n < 1)
-            {
-                SendServerChatTo(player.Peer, "usage: /set round <N>  (e.g. /set round 16 → first to 9)");
-                return;
-            }
-
-            MatchHostSettings.TotalRounds = n;
-            var msg =
-                $"раунды → MR-{MatchHostSettings.TotalRounds} " +
-                $"(Escalation: победа до {MatchHostSettings.TotalRounds / 2 + 1}, " +
-                $"или ничья {MatchHostSettings.TotalRounds / 2}:{MatchHostSettings.TotalRounds / 2})";
-            Console.WriteLine($"[lobby] {player.Name}: {msg}");
-            BroadcastServerChat(msg);
-            return;
-        }
-
-        if (key.Equals("wins", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("win", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!int.TryParse(val, out var n) || n < 1)
-            {
-                SendServerChatTo(player.Peer, "usage: /set wins <N>  (Allies first-to-N, default 8)");
-                return;
-            }
-
-            MatchHostSettings.WinsNeeded = n;
-            var msg = $"победа → first-to-{MatchHostSettings.WinsNeeded} (Allies / Ranked2v2)";
-            Console.WriteLine($"[lobby] {player.Name}: {msg}");
-            BroadcastServerChat(msg);
-            return;
-        }
-
-        if (key.Equals("team", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!TryParseTeamArg(val, out var team))
-            {
-                SendServerChatTo(player.Peer, "usage: /set team ct|tr|t|spectator");
-                return;
-            }
-
-            var ip = player.Peer.Address;
-            if (ip is null)
-            {
-                SendServerChatTo(player.Peer, "нет IP у lobby-peer");
-                return;
-            }
-
-            if (!_match.TryForceTeamByIp(ip, team, out var teamMsg))
-            {
-                SendServerChatTo(player.Peer, teamMsg);
-                return;
-            }
-
-            Console.WriteLine($"[lobby] {player.Name}: {teamMsg}");
-            BroadcastServerChat($"{player.Name}: {teamMsg}");
-            return;
-        }
-
-        if (key.Equals("money", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!int.TryParse(val, out var money))
-            {
-                SendServerChatTo(player.Peer, "usage: /set money <0-16000>");
-                return;
-            }
-
-            MatchHostSettings.RoundStartMoney = money;
-            var msg = $"money → {MatchHostSettings.RoundStartMoney}";
-            Console.WriteLine($"[lobby] {player.Name}: {msg}");
-            BroadcastServerChat(msg);
-            return;
-        }
-
-        if (TrySetTimedParam(key, val, out var timedMsg, out var timedErr))
-        {
-            if (timedErr is not null)
-            {
-                SendServerChatTo(player.Peer, timedErr);
-                return;
-            }
-
-            Console.WriteLine($"[lobby] {player.Name}: {timedMsg}");
-            BroadcastServerChat(timedMsg!);
-            return;
-        }
-
-        SendServerChatTo(player.Peer, $"unknown /set '{key}' — /set help");
-    }
-
-    private static bool TryParseTeamArg(string raw, out MatchTeam team)
-    {
-        team = MatchTeam.None;
-        if (string.IsNullOrWhiteSpace(raw))
-            return false;
-        switch (raw.Trim().ToLowerInvariant())
-        {
-            case "ct":
-            case "cts":
-            case "def":
-            case "defense":
-                team = MatchTeam.Ct;
-                return true;
-            case "tr":
-            case "t":
-            case "terror":
-            case "atk":
-            case "attack":
-                team = MatchTeam.Tr;
-                return true;
-            case "spec":
-            case "spectator":
-            case "spectate":
-            case "none":
-                team = MatchTeam.Spectator;
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private static bool TrySetTimedParam(string key, string val, out string? okMsg, out string? err)
-    {
-        okMsg = null;
-        err = null;
-        if (!int.TryParse(val, out var sec))
-        {
-            // Not a timed key we own — let caller fall through.
-            if (key is "fuse" or "prep" or "prestart" or "warmup" or "roundtime" or "pause")
-            {
-                err = $"usage: /set {key} <seconds>";
-                return true;
-            }
-
-            return false;
-        }
-
-        switch (key.ToLowerInvariant())
-        {
-            case "fuse":
-                MatchHostSettings.BombFuseSeconds = sec;
-                okMsg = $"fuse → {MatchHostSettings.BombFuseSeconds}s";
-                return true;
-            case "prep":
-                MatchHostSettings.PrepSeconds = sec;
-                okMsg = $"prep → {MatchHostSettings.PrepSeconds}s";
-                return true;
-            case "prestart":
-                MatchHostSettings.PreStartSeconds = sec;
-                okMsg = $"prestart → {MatchHostSettings.PreStartSeconds}s";
-                return true;
-            case "warmup":
-                MatchHostSettings.WarmupSeconds = sec;
-                okMsg = $"warmup → {MatchHostSettings.WarmupSeconds}s";
-                return true;
-            case "roundtime":
-                MatchHostSettings.RoundSeconds = sec;
-                okMsg = $"roundtime → {MatchHostSettings.RoundSeconds}s";
-                return true;
-            case "pause":
-                MatchHostSettings.RoundEndPauseSeconds = sec;
-                okMsg = $"pause → {MatchHostSettings.RoundEndPauseSeconds}s";
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private void HandleModeCommand(ConnectedPlayer player, string args)
-    {
-        if (string.IsNullOrWhiteSpace(args)
-            || !GameModeCatalog.TryResolveMode(args, out var mode))
-        {
-            SendServerChatTo(player.Peer, GameModeCatalog.FormatModeHelp());
-            if (!string.IsNullOrWhiteSpace(args))
-                SendServerChatTo(player.Peer, $"неизвестный режим '{args}'");
-            return;
-        }
-
-        var levels = _session.SelectedLevels
-            .Where(L => mode.Levels.Any(c => c.Equals(L, StringComparison.Ordinal)))
-            .ToList();
-        if (levels.Count == 0)
-            levels.Add(GameModeCatalog.DefaultLevelFor(mode.GameModeId));
-
-        _session.GameModeId = mode.GameModeId;
-        _session.SelectedLevels = levels;
-        BroadcastModeLevelProps();
-        _onRosterChanged?.Invoke();
-
-        var msg =
-            $"режим → {mode.GameModeId} ({mode.DisplayName}); карты: {string.Join(", ", levels)}";
-        Console.WriteLine($"[lobby] {player.Name}: {msg}");
-        BroadcastServerChat(msg);
-    }
-
-    private void HandleMapCommand(ConnectedPlayer player, string args)
-    {
-        var modeId = _session.GameModeId;
-        if (!GameModeCatalog.TryGetMode(modeId, out var mode))
-        {
-            SendServerChatTo(player.Peer, GameModeCatalog.FormatMapHelp(modeId, _session.SelectedLevels));
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(args))
-        {
-            SendServerChatTo(player.Peer, GameModeCatalog.FormatMapHelp(modeId, _session.SelectedLevels));
-            return;
-        }
-
-        var tokens = args.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length == 0)
-        {
-            SendServerChatTo(player.Peer, GameModeCatalog.FormatMapHelp(modeId, _session.SelectedLevels));
-            return;
-        }
-
-        var resolved = new List<string>();
-        foreach (var token in tokens)
-        {
-            if (!GameModeCatalog.TryResolveLevel(mode, token, out var level, out var err))
-            {
-                SendServerChatTo(player.Peer, err ?? $"bad map '{token}'");
-                SendServerChatTo(player.Peer, GameModeCatalog.FormatMapHelp(modeId, _session.SelectedLevels));
-                return;
-            }
-
-            if (!resolved.Contains(level, StringComparer.Ordinal))
-                resolved.Add(level);
-        }
-
-        _session.SelectedLevels = resolved;
-        BroadcastModeLevelProps();
-        _onRosterChanged?.Invoke();
-
-        var msg = $"карты ({mode.GameModeId}) → {string.Join(", ", resolved)}";
-        Console.WriteLine($"[lobby] {player.Name}: {msg}");
-        BroadcastServerChat(msg);
-    }
-
-    /// <summary>op7 CustomProperties — same bag as live mode/level change (GameModeId + SelectedLevels).</summary>
+        /// <summary>op7 CustomProperties — same bag as live mode/level change (GameModeId + SelectedLevels).</summary>
     private void BroadcastModeLevelProps()
     {
         SyncMatchSelectionFromLobby();

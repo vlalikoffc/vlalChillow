@@ -15,42 +15,10 @@ public static class GameModeCatalog
     /// <summary>Nine LAN modes — level lists exact from probe PropChanged bags.</summary>
     public static readonly IReadOnlyList<ModeInfo> Modes = new ModeInfo[]
     {
-        new(
-            "Ranked2v2",
-            "Союзники / 2v2",
-            new[]
-            {
-                "Prison 2x2", "Hanami 2x2", "Rust 2x2", "Dune 2x2",
-                "Breeze 2x2", "Province 2x2", "Sandstone 2x2",
-            },
-            new[] { "allies", "2v2", "ranked2v2", "союзники" }),
-        new(
-            "Ranked2v2Alt",
-            "Союзники Alt / 2v2 Alt",
-            new[]
-            {
-                "Prison 2x2 Alt", "Hanami 2x2 Alt", "Rust 2x2 Alt", "Dune 2x2 Alt",
-                "Breeze 2x2 Alt", "Province 2x2 Alt", "Sandstone 2x2 Alt",
-            },
-            new[] { "allies-alt", "alliesalt", "2v2alt", "ranked2v2alt" }),
-        new(
-            "RankedDefuse",
-            "Ranked Defuse / Comp",
-            new[] { "Prison", "Hanami", "Rust", "Dune", "Breeze", "Province", "Sandstone" },
-            new[] { "comp", "ranked", "rankeddefuse", "ranked-defuse" }),
-        new(
-            "Defuse",
-            "Defuse",
-            new[] { "Prison", "Hanami", "Rust", "Dune", "Breeze", "Province", "Sandstone" },
-            new[] { "defuse" }),
-        new(
-            "Escalation",
-            "Escalation",
-            new[] { "Prison", "Hanami", "Rust", "Dune", "Breeze", "Province", "Sandstone" },
-            new[] { "escalation", "esc" }),
+        // Primary alias first — used by short /mode help (tdm/comp/2v2/…).
         new(
             "DeathMatch",
-            "Team Deathmatch / командный бой (TDM)",
+            "Командный бой",
             new[]
             {
                 "Perimeter", "Hanari", "Favelas", "Arena",
@@ -62,8 +30,46 @@ public static class GameModeCatalog
                 "dm", "deathmatch", "командный", "командныйбой",
             }),
         new(
+            "RankedDefuse",
+            "Соревновательный",
+            new[] { "Prison", "Hanami", "Rust", "Dune", "Breeze", "Province", "Sandstone" },
+            new[] { "comp", "ranked", "rankeddefuse", "ranked-defuse" }),
+        new(
+            "Ranked2v2",
+            "Союзники",
+            new[]
+            {
+                "Prison 2x2", "Hanami 2x2", "Rust 2x2", "Dune 2x2",
+                "Breeze 2x2", "Province 2x2", "Sandstone 2x2",
+            },
+            new[] { "2v2", "allies", "ranked2v2", "союзники" }),
+        new(
+            "Ranked2v2Alt",
+            "Союзники: Альтернатива",
+            new[]
+            {
+                "Prison 2x2 Alt", "Hanami 2x2 Alt", "Rust 2x2 Alt", "Dune 2x2 Alt",
+                "Breeze 2x2 Alt", "Province 2x2 Alt", "Sandstone 2x2 Alt",
+            },
+            new[] { "2v2alt", "allies-alt", "alliesalt", "ranked2v2alt" }),
+        new(
+            "Defuse",
+            "Обезвреживание",
+            new[] { "Prison", "Hanami", "Rust", "Dune", "Breeze", "Province", "Sandstone" },
+            new[] { "defuse" }),
+        new(
+            "Escalation",
+            "Эскалация",
+            new[] { "Prison", "Hanami", "Rust", "Dune", "Breeze", "Province", "Sandstone" },
+            new[] { "esc", "escalation" }),
+        new(
+            "Duel",
+            "Дуэль",
+            new[] { "Block", "Cableway", "Pipeline", "Bridge", "Pool", "Temple", "Yard" },
+            new[] { "duel" }),
+        new(
             "ArmsRace",
-            "Arms Race",
+            "Гонка вооружений",
             new[]
             {
                 "Perimeter", "Hanari", "Favelas", "Arena",
@@ -72,14 +78,9 @@ public static class GameModeCatalog
             new[] { "arms", "armsrace", "arms-race" }),
         new(
             "FreeForAll",
-            "Free For All / FFA",
+            "Против всех",
             new[] { "Prison", "Hanami", "Rust", "Dune", "Breeze", "Province", "Sandstone" },
             new[] { "ffa", "freeforall", "free-for-all" }),
-        new(
-            "Duel",
-            "Duel",
-            new[] { "Block", "Cableway", "Pipeline", "Bridge", "Pool", "Temple", "Yard" },
-            new[] { "duel" }),
     };
 
     private static readonly Dictionary<string, ModeInfo> ById =
@@ -171,47 +172,74 @@ public static class GameModeCatalog
         return false;
     }
 
+    /// <summary>Preferred short alias for help (first catalog alias).</summary>
+    public static string PrimaryAlias(ModeInfo mode) =>
+        mode.Aliases.Count > 0 ? mode.Aliases[0] : mode.GameModeId;
+
+    /// <summary>
+    /// Short Russian mode list — preferred aliases only (tdm/comp/2v2/…).
+    /// </summary>
     public static string FormatModeHelp()
     {
+        // Fixed order/labels from host UX (catalog still owns resolution).
+        var lines = new (string Alias, string Label)[]
+        {
+            ("tdm", "Командный бой"),
+            ("comp", "Соревновательный"),
+            ("2v2", "Союзники"),
+            ("2v2alt", "Союзники: Альтернатива"),
+            ("defuse", "Обезвреживание"),
+            ("esc", "Эскалация"),
+            ("duel", "Дуэль"),
+            ("arms", "Гонка вооружений"),
+            ("ffa", "Против всех"),
+        };
         var sb = new System.Text.StringBuilder();
-        sb.Append("режимы (/mode <alias>):");
-        foreach (var m in Modes)
+        sb.Append("Список режимов");
+        foreach (var (alias, label) in lines)
         {
             sb.Append('\n');
-            var aliases = string.Join(", ", m.Aliases.Take(4));
-            sb.Append("  ");
-            sb.Append(aliases);
-            sb.Append(" → ");
-            sb.Append(m.GameModeId);
-            sb.Append(" (");
-            sb.Append(m.DisplayName);
-            sb.Append(')');
+            sb.Append(alias);
+            sb.Append(" - ");
+            sb.Append(label);
         }
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Short map list for <paramref name="gameModeId"/>: alias → full catalog name.
+    /// Alias = first whitespace token, lowercased (e.g. Province 2x2 Alt → province).
+    /// </summary>
     public static string FormatMapHelp(string gameModeId, IReadOnlyList<string> selected)
     {
         if (!TryGetMode(gameModeId, out var mode))
-        {
             return $"режим '{gameModeId}' неизвестен — /mode для списка";
-        }
 
         var sel = selected.Count > 0 ? string.Join(", ", selected) : "(нет)";
         var sb = new System.Text.StringBuilder();
         sb.Append("режим: ");
-        sb.Append(mode.GameModeId);
+        sb.Append(PrimaryAlias(mode));
         sb.Append(" (");
         sb.Append(mode.DisplayName);
         sb.Append(")\nвыбрано: ");
         sb.Append(sel);
-        sb.Append("\nкарты (/map a, b, …):");
+        sb.Append("\nкарты (/map <alias>):");
         foreach (var L in mode.Levels)
         {
             sb.Append('\n');
             sb.Append("  ");
+            sb.Append(ShortMapAlias(L));
+            sb.Append(" → ");
             sb.Append(L);
         }
         return sb.ToString();
+    }
+
+    public static string ShortMapAlias(string levelName)
+    {
+        var t = levelName.Trim();
+        var sp = t.IndexOf(' ');
+        var head = sp < 0 ? t : t[..sp];
+        return head.ToLowerInvariant();
     }
 }

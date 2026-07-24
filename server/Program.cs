@@ -209,12 +209,13 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
     Console.WriteLine($"  mode/levels  : {game.Session.GameModeId} / [{string.Join(", ", game.Session.SelectedLevels)}]");
     Console.WriteLine($"  discovery    : cxbl={(current.HasExtraStrings ? 1 : 0)} (1=map waiting, 0=Join in-progress)");
     Console.WriteLine($"  payload hex  : {current.ToHex()}");
-    Console.WriteLine("Phone: LAN list → join → chat /mode /map /set · /play (launch) · /set start (WarmUp).");
+    Console.WriteLine("Phone: LAN list → join → chat /mode /map /set · /play · /start · /end · /help");
     Console.WriteLine("Expect: op7 → SearchingStarted → op9 LAN:7777 → Handshake → JoinRoom Dedik.");
     Console.WriteLine("After both teams: /set start | set start | start | startmatch → WarmUp.");
     Console.WriteLine("Rematch: after MatchResults wait 5s → lobby idle (7777 stopped); /play then /set start.");
+    Console.WriteLine("Early end: /end | set end | stopmatch — immediate teardown (no 5s).");
     Console.WriteLine("Captures: server/bin/Release/net8.0/captures/");
-    Console.WriteLine("Commands: play|start|set start|startmatch|mode|map|status|binds|roster|plugins|quit");
+    Console.WriteLine("Commands: play|start|end|mode|map|set|help|status|binds|roster|plugins|quit");
     Console.WriteLine($"  defaults: {MatchHostSettings.FormatStatusLine()}");
     if (MatchHostSettings.DebugMatchChat)
         Console.WriteLine("  debug-chat: ON — Server posts plant/kill/round-end into lobby chat");
@@ -285,41 +286,27 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
 
         var parts = trimmed.Split(' ', 2, StringSplitOptions.TrimEntries);
         if (parts.Length == 0 || parts[0].Length == 0) return true;
-        switch (parts[0].ToLowerInvariant())
+        var cmd0 = parts[0].ToLowerInvariant();
+
+        // Shared host commands (mode/map/set/play/start/end/help) — same as in-game /.
+        if (cmd0 is "mode" or "map" or "maps" or "level" or "levels" or "set"
+            or "play" or "start" or "startmatch" or "старт" or "игра"
+            or "end" or "stopmatch" or "стопматч" or "help" or "?" or "команды"
+            or "режим" or "карта")
+        {
+            if (!game.TryDispatchHostCommand(trimmed, Feedback, who: "console"))
+                Feedback($"unknown command '{trimmed}' — help");
+            return true;
+        }
+
+        switch (cmd0)
         {
             case "quit":
             case "exit":
                 return false;
-            case "play":
-                // Explicit rematch / first launch — may HardResetMatchForNewStart.
-                game.TryStartMatch("console");
-                break;
-            case "start":
-            case "startmatch":
-                // Arm WarmUp when match already up; first launch only if never Play'd.
-                // Never HardReset (that was the `start`/`stat` teardown bug).
-                game.TryArmWarmupOrFirstPlay("console");
-                break;
             case "stat":
-                // Typo for status — never chat/teardown (latest.log: `stat` was broadcast then
-                // a follow-up `start` tore down the live WaitingPlayers room).
+                // Typo for status — never chat/teardown.
                 goto case "status";
-            case "mode" when parts.Length == 2:
-                if (GameModeCatalog.TryResolveMode(parts[1], out var m))
-                {
-                    game.Session.GameModeId = m.GameModeId;
-                    game.Session.SelectedLevels = new[] { GameModeCatalog.DefaultLevelFor(m.GameModeId) };
-                    SyncDiscovery();
-                    Feedback($"mode → {m.GameModeId} / {game.Session.SelectedLevels[0]}");
-                }
-                else Feedback($"unknown mode '{parts[1]}'");
-                break;
-            case "map" when parts.Length == 2:
-            case "level" when parts.Length == 2 && parts[1].Contains(' '):
-                game.Session.SelectedLevels = new[] { parts[1] };
-                SyncDiscovery();
-                Feedback($"map → {parts[1]}");
-                break;
             case "title" when parts.Length == 2:
                 lobbyTitle = parts[1];
                 game.LobbyName = parts[1];
@@ -345,9 +332,6 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
                     $"match={game.MatchStarted} peers={game.PeerCount} joined={game.JoinedCount} " +
                     $"matchPeers={game.Match.PeerCount}");
                 Feedback(MatchHostSettings.FormatStatusLine());
-                break;
-            case "set":
-                HandleConsoleSet(parts.Length > 1 ? parts[1] : "", Feedback, game);
                 break;
             case "plugins":
             case "plugin":
@@ -381,115 +365,6 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
             }
         }
         return true;
-    }
-
-    static void HandleConsoleSet(string args, Action<string> feedback, GameNetHost game)
-    {
-        if (string.IsNullOrWhiteSpace(args)
-            || args.Equals("help", StringComparison.OrdinalIgnoreCase))
-        {
-            feedback(MatchHostSettings.FormatSetHelp().Replace("/set", "set"));
-            feedback(MatchHostSettings.FormatStatusLine());
-            return;
-        }
-
-        var bits = args.Split(' ', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        var key = bits[0];
-        var val = bits.Length > 1 ? bits[1] : "";
-        if (key.Equals("status", StringComparison.OrdinalIgnoreCase))
-        {
-            feedback(MatchHostSettings.FormatStatusLine());
-            return;
-        }
-
-        if (key.Equals("start", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("startmatch", StringComparison.OrdinalIgnoreCase))
-        {
-            game.ArmMatchStart("console");
-            return;
-        }
-
-        if (key.Equals("round", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("rounds", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!int.TryParse(val, out var n) || n < 1)
-            {
-                feedback("usage: set round <N>");
-                return;
-            }
-
-            MatchHostSettings.TotalRounds = n;
-            feedback(
-                $"rounds → MR-{MatchHostSettings.TotalRounds} " +
-                $"(Escalation first to {MatchHostSettings.TotalRounds / 2 + 1})");
-            return;
-        }
-
-        if (key.Equals("wins", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("win", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!int.TryParse(val, out var n) || n < 1)
-            {
-                feedback("usage: set wins <N>");
-                return;
-            }
-
-            MatchHostSettings.WinsNeeded = n;
-            feedback($"wins → first-to-{MatchHostSettings.WinsNeeded} (Allies)");
-            return;
-        }
-
-        if (key.Equals("money", StringComparison.OrdinalIgnoreCase)
-            && int.TryParse(val, out var money))
-        {
-            MatchHostSettings.RoundStartMoney = money;
-            feedback($"money → {MatchHostSettings.RoundStartMoney}");
-            return;
-        }
-
-        if (key.Equals("fuse", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var fuse))
-        {
-            MatchHostSettings.BombFuseSeconds = fuse;
-            feedback($"fuse → {MatchHostSettings.BombFuseSeconds}s");
-            return;
-        }
-
-        if (key.Equals("prep", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var prep))
-        {
-            MatchHostSettings.PrepSeconds = prep;
-            feedback($"prep → {MatchHostSettings.PrepSeconds}s");
-            return;
-        }
-
-        if (key.Equals("prestart", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var ps))
-        {
-            MatchHostSettings.PreStartSeconds = ps;
-            feedback($"prestart → {MatchHostSettings.PreStartSeconds}s");
-            return;
-        }
-
-        if (key.Equals("warmup", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var wu))
-        {
-            MatchHostSettings.WarmupSeconds = wu;
-            feedback($"warmup → {MatchHostSettings.WarmupSeconds}s");
-            return;
-        }
-
-        if (key.Equals("roundtime", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var rt))
-        {
-            MatchHostSettings.RoundSeconds = rt;
-            feedback($"roundtime → {MatchHostSettings.RoundSeconds}s");
-            return;
-        }
-
-        if (key.Equals("pause", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out var pause))
-        {
-            MatchHostSettings.RoundEndPauseSeconds = pause;
-            feedback($"pause → {MatchHostSettings.RoundEndPauseSeconds}s");
-            return;
-        }
-
-        feedback("set help | set start | set round N | set money N | set fuse|prep|prestart|warmup|roundtime|pause N");
     }
 
     try

@@ -11,9 +11,8 @@ public enum PlayerLobbyStatus
 public sealed class ConnectedPlayer
 {
     public required NetPeer Peer { get; init; }
+    /// <summary>Stable lobby member id (Server=0; humans start at 1). Same on the wire for all peers.</summary>
     public required int ServerMemberId { get; init; }
-    /// <summary>Member id as presented to this client (always 1 — self, after Server=0).</summary>
-    public int ClientLocalMemberId => 1;
     public required string Name { get; set; }
     public byte[]? Avatar { get; set; }
     public PlayerLobbyStatus Status { get; set; } = PlayerLobbyStatus.Lobby;
@@ -21,25 +20,21 @@ public sealed class ConnectedPlayer
 }
 
 /// <summary>
-/// Host-side LAN lobby session.
-/// Per-client illusion: each joiner only ever sees Server (id 0) + self (id 1),
-/// so the client's 4-player LAN cap never triggers while unlimited real peers can connect.
+/// Host-side LAN lobby session. Full roster: JoinResponse + OpLobbyNewMember/Left so every
+/// client sees Server + all real peers (phone host ops 4/5 — not the former Server+self illusion).
 /// </summary>
 public sealed class LobbySession
 {
     public const string ServerPlayerName = "Server";
     public const int ServerMemberId = 0;
-    public const byte ClientVisibleMaxMembers = 4;
+    /// <summary>Dedicated soft cap for snapshot maxMembers (live phone uses 4).</summary>
+    public const byte DedicatedMaxMembers = 16;
     public const string WelcomeMessage = "это тест ради нехуй делать";
 
     private readonly object _gate = new();
     private readonly Dictionary<NetPeer, ConnectedPlayer> _byPeer = new();
     private readonly List<ConnectedPlayer> _order = new();
-    /// <summary>
-    /// Lobby chat / NewMember ids start at 2 so they never collide with each client's
-    /// illusion <see cref="ConnectedPlayer.ClientLocalMemberId"/> (=1). Server stays 0.
-    /// </summary>
-    private int _nextMemberId = 2;
+    private int _nextMemberId = 1;
     private string _lobbyName;
     private readonly string _lobbyId;
     private string _gameModeId = LobbyPropKeys.DefaultGameModeId;
@@ -107,9 +102,13 @@ public sealed class LobbySession
             lock (_gate)
             {
                 _gameInProgress = value;
-                foreach (var p in _order)
-                    if (p.Joined)
-                        p.Status = value ? PlayerLobbyStatus.InMatch : PlayerLobbyStatus.Lobby;
+                // Do not force every peer InMatch — presence is per-player (JoinRoom Dedik).
+                if (!value)
+                {
+                    foreach (var p in _order)
+                        if (p.Joined)
+                            p.Status = PlayerLobbyStatus.Lobby;
+                }
             }
         }
     }
@@ -123,8 +122,6 @@ public sealed class LobbySession
     {
         lock (_gate)
         {
-            // Dedicated defaults: Ranked2v2 + Sandstone 2x2 (live «союзники» capture).
-            // Phone JoinResponse often starts DeathMatch then op7; we ship mode+levels in snapshot.
             return new List<(string, LobbyVariant)>
             {
                 (LobbyPropKeys.LobbyId, LobbyVariant.FromString(_lobbyId)),
@@ -153,7 +150,7 @@ public sealed class LobbySession
         {
             var list = new List<(string, PlayerLobbyStatus)>(_order.Count + 1)
             {
-                (ServerPlayerName, _gameInProgress ? PlayerLobbyStatus.InMatch : PlayerLobbyStatus.Lobby)
+                (ServerPlayerName, PlayerLobbyStatus.Lobby)
             };
             foreach (var p in _order.Where(p => p.Joined))
                 list.Add((p.Name, p.Status));
@@ -205,7 +202,7 @@ public sealed class LobbySession
             if (!_joinable)
                 return JoinResult.Fail(JoinFailReason.NotJoinable, "not joinable");
 
-            // Dedicated server intentionally does NOT enforce MaxMembersReached (4-player LAN bypass).
+            // Dedicated server intentionally does NOT enforce MaxMembersReached (live phone = 4).
 
             if (!LobbyAuth.HashEquals(req.VersionHash, LobbyAuth.VersionHash))
                 return JoinResult.Fail(JoinFailReason.InvalidGameVersion, "version hash mismatch");
@@ -221,24 +218,19 @@ public sealed class LobbySession
 
             player.Name = req.Profile.Name.Trim();
             player.Avatar = req.Profile.Avatar;
-            player.Status = _gameInProgress ? PlayerLobbyStatus.InMatch : PlayerLobbyStatus.Lobby;
+            player.Status = PlayerLobbyStatus.Lobby;
             player.Joined = true;
 
-            // Policy: Server+self illusion (keep). Real phone JoinResponse is host-only + selfId;
-            // we still present Server(0)+self(1) so unlimited peers bypass the client 4-cap.
+            // Full roster snapshot: Server(0) + every already-joined peer (not self — client
+            // maps self via selfMemberId, same as live phone host). Live maxMembers=4; dedicated
+            // advertises a higher soft cap so N>4 peers still fit the UI roster.
             var visible = new List<LobbyMember>
             {
                 new() { Id = ServerMemberId, Name = ServerPlayerName, Avatar = null },
-                new()
-                {
-                    Id = player.ClientLocalMemberId,
-                    Name = player.Name,
-                    Avatar = player.Avatar,
-                },
             };
+            foreach (var p in _order.Where(p => p.Joined && !ReferenceEquals(p, player)))
+                visible.Add(ToLobbyMember(p));
 
-            // Mid-match: embed etm.hasHosting (match IP:7777) — same esz shape as op9.
-            // Pre-match: hasHosting=0 (live phone JoinResponse).
             string? hostIp = null;
             ushort hostPort = 0;
             if (_gameInProgress
@@ -250,9 +242,9 @@ public sealed class LobbySession
             }
 
             var response = LobbyCodec.BuildJoinSuccess(
-                selfMemberId: player.ClientLocalMemberId,
+                selfMemberId: player.ServerMemberId,
                 lobbyName: _lobbyName,
-                maxMembers: ClientVisibleMaxMembers,
+                maxMembers: DedicatedMaxMembers,
                 members: visible,
                 lobbyProps: BuildLobbyProps(),
                 hostingIp: hostIp,
@@ -267,9 +259,52 @@ public sealed class LobbySession
         lock (_gate) return _byPeer.TryGetValue(peer, out var p) ? p : null;
     }
 
+    public ConnectedPlayer? TryGetByIp(System.Net.IPAddress ip)
+    {
+        lock (_gate)
+        {
+            foreach (var p in _order)
+            {
+                if (!p.Joined || p.Peer.Address is null) continue;
+                if (p.Peer.Address.Equals(ip))
+                    return p;
+            }
+            return null;
+        }
+    }
+
     public IReadOnlyList<ConnectedPlayer> JoinedPlayers()
     {
         lock (_gate) return _order.Where(p => p.Joined).ToList();
+    }
+
+    /// <summary>Wire member for OpLobbyNewMemberEvent / JoinResponse rows.</summary>
+    public static LobbyMember ToLobbyMember(ConnectedPlayer p) => new()
+    {
+        Id = p.ServerMemberId,
+        Name = p.Name,
+        Avatar = p.Avatar,
+    };
+
+    public bool TrySetPlayerStatus(ConnectedPlayer player, PlayerLobbyStatus status)
+    {
+        lock (_gate)
+        {
+            if (!player.Joined) return false;
+            if (player.Status == status) return false;
+            player.Status = status;
+            return true;
+        }
+    }
+
+    public void ResetAllToLobby()
+    {
+        lock (_gate)
+        {
+            foreach (var p in _order)
+                if (p.Joined)
+                    p.Status = PlayerLobbyStatus.Lobby;
+        }
     }
 
     public static string FormatStatus(PlayerLobbyStatus s) => s switch
@@ -278,10 +313,7 @@ public sealed class LobbySession
         _ => "Лобби",
     };
 
-    /// <summary>
-    /// Host-side full roster text (all real members). For console/log use only — NOT sent to
-    /// clients, since it would reveal every peer and defeat the hide-peers 4-cap illusion.
-    /// </summary>
+    /// <summary>Full roster text (Server + all real members) with lobby/match presence.</summary>
     public string BuildPlayerListMessage()
     {
         var roster = SnapshotRoster();
@@ -295,21 +327,6 @@ public sealed class LobbySession
             sb.Append(FormatStatus(status));
             sb.Append(')');
         }
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Per-client player-list chat under the hide-peers illusion: only Server + the requesting
-    /// player, matching what that client sees in its JoinResponse roster (Server 0 + self 1).
-    /// Never lists other real peers, so the client 4-slot lobby view stays consistent.
-    /// </summary>
-    public string BuildIllusionPlayerListMessageFor(ConnectedPlayer self)
-    {
-        var status = GameInProgress ? PlayerLobbyStatus.InMatch : PlayerLobbyStatus.Lobby;
-        var sb = new System.Text.StringBuilder();
-        sb.Append("Текущие игроки в лобби:");
-        sb.Append('\n').Append(ServerPlayerName).Append('(').Append(FormatStatus(status)).Append(')');
-        sb.Append('\n').Append(self.Name).Append('(').Append(FormatStatus(self.Status)).Append(')');
         return sb.ToString();
     }
 }

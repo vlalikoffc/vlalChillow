@@ -196,6 +196,7 @@ public static class MatchHostSettings
           /set warmup <сек>  WarmUp C2=21 (первый раунд)
           /set roundtime <сек> host combat timeout (default 109 = client 1:49)
           /set pause <сек>   пауза после RoundEnd
+          /set end           завершить матч сразу (закрыть 7777, без 5с)
           /set status        текущие значения
         """.Trim();
 }

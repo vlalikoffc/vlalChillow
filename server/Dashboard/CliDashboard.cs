@@ -751,7 +751,7 @@ public sealed class CliDashboard : IDisposable
         lock (_inputGate) buf = _input.ToString();
         return
             $"{Ansi.Accent}{Ansi.Bold} ❯ {Ansi.Reset}{Ansi.Text}{buf}{Ansi.Reset}{Ansi.Ct}▏{Ansi.Reset}" +
-            $"   {Ansi.Faint}play | start·set start | mode <m> | map <l> | status | quit{Ansi.Reset}";
+            $"   {Ansi.Faint}play | start | end | mode | map | set | help | status | quit{Ansi.Reset}";
     }
 
     // ── card / layout primitives ────────────────────────────────────────────────
