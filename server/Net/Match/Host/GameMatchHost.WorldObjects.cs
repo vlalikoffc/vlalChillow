@@ -272,10 +272,12 @@ public sealed partial class GameMatchHost
                 }
                 else if (!IsAlliesPlantablePhase(st.Room, plantPhase))
                 {
+                    // Early C2=22 equip — do not invent C2=40; still relay pose to peers.
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
-                        $"from actor={st.ActorNr} IGNORED — phase={plantPhase}");
-                    dropRelay = true;
+                        $"from actor={st.ActorNr} not-authority phase={plantPhase} " +
+                        "(equip grace / not plantable — relay only)");
+                    dropRelay = false;
                 }
                 else
                 {

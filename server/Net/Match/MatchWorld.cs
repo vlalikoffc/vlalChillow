@@ -340,18 +340,15 @@ public static class AlliesFlowParams
     /// <summary>C2=21 WarmUp (first round only) — gold RX 407472265→407475405 ≈3.1s.</summary>
     public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
     /// <summary>
-    /// C2=22 buy — host wait + wire <c>Time</c> deadline. Fixed <b>10s</b> (not Prep settings —
-    /// `/set prep` no longer shrinks the visible buy window to 5s).
+    /// C2=22 buy — 10s. C2=31 unused on dedicated (client no-op).
     /// </summary>
     public static readonly TimeSpan BuyPhase = TimeSpan.FromSeconds(10);
     /// <summary>Alias — C2=22 buy.</summary>
     public static TimeSpan PreStart => BuyPhase;
-    /// <summary>
-    /// C2=31 background bag only — <b>1ms</b>, anchor <c>Time</c>, no visible countdown; then Live.
-    /// </summary>
+    /// <summary>Unused — C2=31 skipped.</summary>
     public static readonly TimeSpan PostBuyPhase = TimeSpan.FromMilliseconds(1);
-    /// <summary>Alias — C2=31 flash.</summary>
-    public static TimeSpan Prep => PostBuyPhase;
+    /// <summary>Alias.</summary>
+    public static TimeSpan Prep => BuyPhase;
     /// <summary>Silent pause after C2=101 round-end WinTeam bag — gold RX 101→22 ≈6.0s.</summary>
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);
     /// <summary>Bomb fuse after manual plant C2=40 — gold family ≈40s.</summary>
