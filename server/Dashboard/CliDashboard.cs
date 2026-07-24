@@ -524,10 +524,10 @@ public sealed class CliDashboard : IDisposable
         var alliesBuy = allies && snap.Phase == MatchFlowPhase.WarmupWillFinish;
         if (snap.PhaseEndsUtc > DateTime.MinValue && snap.PhaseEndsUtc < DateTime.MaxValue)
         {
-            remain = (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
-            // PhaseEndsUtc includes BuyEndGrace after client-zero — clock tracks buy UI to 00:00.
-            if (alliesBuy)
-                remain -= AlliesFlowParams.BuyEndGrace.TotalSeconds;
+            // Buy PhaseEndsUtc = client-zero; after zero, AlliesBuyEndGraceArmed holds Live.
+            remain = snap.AlliesBuyEndGraceArmed
+                ? 0
+                : (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
         }
         else if (snap.TimeDeadline > 0
                  && snap.Phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted
@@ -535,9 +535,9 @@ public sealed class CliDashboard : IDisposable
                  && !(allies && snap.Phase == MatchFlowPhase.RoundLive))
             remain = snap.TimeDeadline - Environment.TickCount / 1000.0;
 
-        // Ceil last second stays 00:01 until remain≈0; keep showing through 00:00 during
-        // Allies BuyEndGrace (remain≤0 while PhaseEndsUtc still in the future).
+        // Ceil last second stays 00:01 until remain≈0; keep showing 00:00 during BuyEndGrace.
         var showClock = remain > 0
+            || (alliesBuy && snap.AlliesBuyEndGraceArmed)
             || (alliesBuy && snap.PhaseEndsUtc > DateTime.UtcNow
                 && snap.PhaseEndsUtc < DateTime.MaxValue);
         var clock = showClock ? $" {FormatClock(Math.Max(0, remain))}" : "";

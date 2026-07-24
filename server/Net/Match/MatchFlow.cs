@@ -90,6 +90,12 @@ public sealed class MatchFlowState
     /// <summary>One 5s prep extension when a living fighter picked team but has no pawn yet.</summary>
     public bool PrepSpawnExtensionUsed { get; set; }
     /// <summary>
+    /// Allies C2=22: set when buy <see cref="PhaseEndsUtc"/> (client-zero) elapses and the
+    /// host has armed <see cref="AlliesFlowParams.BuyEndGrace"/> before Live. Cleared on
+    /// each EnterAlliesPreStart. Live must not fire while this is false.
+    /// </summary>
+    public bool AlliesBuyEndGraceArmed { get; set; }
+    /// <summary>
     /// Escalation: C2=31 combat bag already published this round (after C2=40 auto-plant gap).
     /// Cleared on PreStart / RoundEnd.
     /// </summary>

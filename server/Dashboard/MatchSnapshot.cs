@@ -23,6 +23,10 @@ public sealed class MatchSnapshot
     /// so Prep (Time=now) does not show a bogus 00:00 / Live clock.
     /// </summary>
     public DateTime PhaseEndsUtc { get; init; }
+    /// <summary>
+    /// Allies buy: true while host is holding <c>BuyEndGrace</c> after client-zero (before Live).
+    /// </summary>
+    public bool AlliesBuyEndGraceArmed { get; init; }
     public IReadOnlyList<MatchActorSnapshot> Actors { get; init; } = Array.Empty<MatchActorSnapshot>();
 }
 

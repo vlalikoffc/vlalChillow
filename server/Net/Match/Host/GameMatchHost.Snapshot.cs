@@ -76,6 +76,7 @@ public sealed partial class GameMatchHost
                 IsDeathMatch = isDm,
                 TimeDeadline = timeDeadline,
                 PhaseEndsUtc = room.Flow.PhaseEndsUtc,
+                AlliesBuyEndGraceArmed = room.Flow.AlliesBuyEndGraceArmed,
                 Actors = actors,
             };
         }

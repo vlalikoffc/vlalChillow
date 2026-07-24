@@ -343,7 +343,7 @@ public static class AlliesFlowParams
     /// C2=22 buy — host waits until client-visible countdown hits 0 (ServerTime now+10s).
     /// Wire <c>Time</c> uses <see cref="BuyClientClockPad"/> so the client shows ~10s
     /// (bare now+10 → ~19). Live−wireTime ≈ pad by construction — host wait is BuyPhase, not pad.
-    /// After client-zero, hold <see cref="BuyEndGrace"/> then enter Live.
+    /// After client-zero, host arms a separate <see cref="BuyEndGrace"/> deadline then Live.
     /// </summary>
     public static readonly TimeSpan BuyPhase = TimeSpan.FromSeconds(10);
     /// <summary>
@@ -352,8 +352,8 @@ public static class AlliesFlowParams
     /// </summary>
     public static readonly double BuyClientClockPad = 9.0;
     /// <summary>
-    /// After buy UI would hit 0, wait this long before Live C2=101 so host/client both
-    /// reach 00:00 (Ceil last second shows 00:01 until remain≈0).
+    /// After buy UI hits 0, host re-arms <c>PhaseEndsUtc</c> for this long before Live C2=101
+    /// (<c>TryArmOrPassAlliesBuyEndGrace</c> — not baked into the buy deadline).
     /// </summary>
     public static readonly TimeSpan BuyEndGrace = TimeSpan.FromMilliseconds(200);
     /// <summary>Alias — C2=22 buy.</summary>
