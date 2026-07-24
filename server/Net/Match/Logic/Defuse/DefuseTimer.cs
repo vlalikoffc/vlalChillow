@@ -55,8 +55,9 @@ public static class DefuseTimer
         nowServerSec + buyPhase.TotalSeconds - clientClockPadSec;
 
     /// <summary>
-    /// Absolute ServerTime when the client-visible buy countdown hits 0
-    /// (= now + buyPhase; independent of pad).
+    /// Absolute ServerTime when the client-visible buy countdown hits 0.
+    /// With pad: <c>wireDeadline + clientClockPad</c> (= bag now + buyPhase).
+    /// Without pad: <c>now + buyPhase</c> (= wire deadline). Host Live must wait for this.
     /// </summary>
     public static double BuyClientZeroSec(double nowServerSec, TimeSpan buyPhase) =>
         nowServerSec + buyPhase.TotalSeconds;
@@ -75,10 +76,14 @@ public static class DefuseTimer
     }
 
     /// <summary>
-    /// Two-step post-zero grace (Allies buy→Live checkpoint). First call after client-zero:
-    /// sets <paramref name="graceArmed"/>, re-arms <paramref name="phaseEndsUtc"/> for
-    /// <paramref name="grace"/>, returns false. Second call after that deadline: returns true.
-    /// Escalation has no equivalent — omit or pass <see cref="TimeSpan.Zero"/> only if needed.
+    /// Two-step post-zero grace (Allies buy→Live). Wall-clock wait that cannot pass same-tick:
+    /// <list type="bullet">
+    /// <item>Not armed → arm, set <paramref name="phaseEndsUtc"/> = now+grace, return false.</item>
+    /// <item>Armed but <c>now &lt; phaseEndsUtc</c> → return false (must wait).</item>
+    /// <item>Armed and deadline reached → return true.</item>
+    /// </list>
+    /// Do not early-return true on <paramref name="graceArmed"/> alone — that skips the wait
+    /// when a second call lands in the same poll/tick right after arming.
     /// </summary>
     public static bool TryArmOrPassPostZeroGrace(
         ref bool graceArmed,
@@ -86,12 +91,18 @@ public static class DefuseTimer
         TimeSpan grace,
         DateTime? nowUtc = null)
     {
-        if (graceArmed)
-            return true;
+        var now = nowUtc ?? DateTime.UtcNow;
+        if (!graceArmed)
+        {
+            graceArmed = true;
+            phaseEndsUtc = now + grace;
+            return false;
+        }
 
-        graceArmed = true;
-        phaseEndsUtc = (nowUtc ?? DateTime.UtcNow) + grace;
-        return false;
+        if (now < phaseEndsUtc)
+            return false;
+
+        return true;
     }
 }
 

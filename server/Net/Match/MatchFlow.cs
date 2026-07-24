@@ -97,6 +97,12 @@ public sealed class MatchFlowState
     /// </summary>
     public bool AlliesBuyEndGraceArmed { get; set; }
     /// <summary>
+    /// Allies C2=22: absolute <c>ServerTimeSeconds</c> when the padded buy UI hits 0
+    /// (<c>wireDeadline + BuyClientClockPad</c> = bag now + BuyPhase). Live / C2=101 must
+    /// not TX while <c>ServerTimeSeconds() &lt; AlliesBuyClientZeroSec</c>. 0 = unset.
+    /// </summary>
+    public double AlliesBuyClientZeroSec { get; set; }
+    /// <summary>
     /// Escalation: C2=31 combat bag already published this round (after C2=40 auto-plant gap).
     /// Cleared on PreStart / RoundEnd.
     /// </summary>
