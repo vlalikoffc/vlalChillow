@@ -27,10 +27,8 @@ original/
 *.dat
 *.unity3d
 
-# IDE / agent tooling
-.cursor/*
-!.cursor/rules/
-!.cursor/rules/**
+# IDE / agent tooling (local only — not published)
+.cursor/
 
 # OS junk
 .DS_Store
