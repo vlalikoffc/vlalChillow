@@ -237,15 +237,15 @@ public sealed partial class GameMatchHost
         ClearBombAuthority(room, $"Allies buy C2=22 round={round} bomberId={bomberId}");
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
-        // Client showed ~19s when Time=now+10 (bfqt lag ≈9s). Pad so UI ≈10s; host still waits 10s wall.
+        // latest.log: Time=now+10 → client UI ~19s (bfqt ≈9s behind). Wire now+10−pad.
+        // Do NOT fall back to now+10 — that undid the pad (wireDeadline≈now+1 tripped <=now+1).
         var wireDeadline = nowSec + dur.TotalSeconds - AlliesFlowParams.BuyClientClockPad;
-        if (wireDeadline <= nowSec + 1.0)
-            wireDeadline = nowSec + dur.TotalSeconds;
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(wireDeadline)),
             (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
-            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
+            // Equal to Time so client cannot stack (Time−RST)+(Time−now).
+            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(wireDeadline)),
             (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmupWillFinish)),
         ], reason: $"Allies buy C2=22 round={round}", phaseDeadlineSec: wireDeadline);
@@ -255,8 +255,8 @@ public sealed partial class GameMatchHost
         DestroyTrackedRoundEntities(room, reason: "Allies buy C2=22");
         Console.WriteLine(
             $"[match-host] allies: buy C2=22 round={round} bomberId={bomberId} " +
-            $"wall={dur.TotalSeconds:0}s RST={nowSec:0.###} Time={wireDeadline:0.###} " +
-            $"(pad={AlliesFlowParams.BuyClientClockPad:0}s → UI~10s; then Live C2=101)");
+            $"wall={dur.TotalSeconds:0}s Time=RST={wireDeadline:0.###} " +
+            $"(pad={AlliesFlowParams.BuyClientClockPad:0} vs hostNow={nowSec:0.###}; UI~10s → Live C2=101)");
         PostServerDebugChat($"Закуп · раунд {round} (10s)");
     }
 
