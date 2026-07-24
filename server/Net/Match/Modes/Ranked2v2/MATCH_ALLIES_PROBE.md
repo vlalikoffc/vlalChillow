@@ -1,9 +1,78 @@
 # Allies / Ranked2v2 probe — Sandstone 2x2
 
 **Source:** ConnectAsClient `allies-probe` as Tr (`--team tr`) against phone host  
-**Sessions:** `run-20260723_215727` (lobby) / `run-20260723_2206…` (match)  
-**Captures:** `server/bin/Release/net8.0/captures/20260723_2157*` / `2206*`  
-**Decode tool:** `server/tools/decode_allies_probe.py` (SetProperties C2 + stime deltas)
+**Sessions:** `run-20260723_215727` (lobby) / `run-20260723_2206…` (match); **+ full open `run-20260724_091723` / `latest.log`**  
+**Captures:** `server/bin/Release/net8.0/captures/20260723_2157*` / `2206*`; **+ `20260724_0217*` … `20260724_0229*`**  
+**Decode tool:** `server/tools/decode_allies_probe.py` (SetProperties C2 + stime deltas; hard-coded patterns still 20260723 — decode 20260724 via `collect_events` + `20260724_02*` globs)
+
+## Gold notes — 2026-07-24 full open (`20260724_0217*` / `022*`, phone Ranked2v2 / Sandstone 2x2)
+
+Evidence-only from this ConnectAsClient run (phone host `192.168.1.73`). Do **not** invent Live C2 or round-clock bags.
+
+### Phase sequence (R1 open → loop)
+
+- **R1:** `10 → 11 → 21 → 22 → 31 → (no room C2 bag) → 40? → 101(+WinTeam)`
+- **R2+:** `22 → 31 → (no room C2 bag) → 40? → 101(+WinTeam)`
+- After R7: `101 → 111 → 112 → 113 → 22` (half-time), then same loop until first-to-8 → `201` → `255`
+- **No Live `C2=101` without `WinTeam`.** Every `C2=101` bag in this run is len≈151 with `WinTeam` (round end). Combat does **not** get a separate Live C2.
+- Wire room `C2` stays at **31** from Prep TX until plant `40` or round-end `101`. First R1 kill (`DestroyWorldObject` + `round_kills`) at **+12190 ms** after C2=31; R1 31→101 ≈ **110383 ms** with **zero** intervening room SetProperties.
+
+### C2=22 bag
+
+- Keys: `Time`, `Round`, `RoundStartTime`, `bomberId`, `C2` (len=77)
+- **`Time == RoundStartTime`** every round (`ΔTime-RST = 0.000`)
+- Both ≈ `stime/1000` (**fresh now**, not a future deadline)
+
+### C2=22 → C2=31 (exact stime Δ ms / ΔTime s)
+
+| Round | Δstime ms | ΔTime s |
+|------:|----------:|--------:|
+| R1 | 10170 | 10.192 |
+| R2 | 10169 | 10.193 |
+| R3 | 10180 | 10.204 |
+| R4 | 10170 | 10.195 |
+| R5 | 10166 | 10.192 |
+| R6 | 10009 | 10.028 |
+| R7 | 10178 | 10.197 |
+| R8 | 10171 | 10.198 |
+| R9 | 10176 | 10.199 |
+| R10 | 10168 | 10.195 |
+| R11 | 10170 | 10.192 |
+
+≈ **10.0–10.2 s** host wait (R6 slightly short).
+
+### C2=31 bag
+
+- Keys: `Time`, `Ct_RoundStartPlayersCount`, `Tr_RoundStartPlayersCount`, `C2` (len=90)
+- `Time` ≈ `stime/1000` (**fresh now**, **not** `now+90` / **not** a far-future deadline on wire)
+- Kills / pawn destroy happen while room C2 is still **31** (see R1 +12.19 s)
+
+### Round clock on wire
+
+- Phone host does **not** TX a Live bag with `Time=now+90` (or any future Live clock).
+- All room `Time` values in this run are ≈ now (`Time − stime/1000` within ~±40 ms).
+- Round timer during combat is **absent on wire** (local / not refreshed by host SetProperties).
+
+### Bomb plant / defuse / explode (BombManager Rpc + C2=40)
+
+- Round-start / reset: `BombManager` **field=1** len≈48 payload≈28B (near C2=22/31)
+- Plant: **field=3** len=41 payload=21B → within **~8–188 ms** room **`C2=40` len=14, keys=`C2` only** (no `Time`)
+- During planted (observed):
+  - **field=4** len=28 payload=8B
+  - **field=5** len=24 payload=4B
+  - **field=6** len=26 payload=6B
+- Correlated ends (this run):
+  - Explode ≈ **+40006 ms** after field=3 → field=6 + `C2=101` `WinTeam` mvpCode=`PlantingBomb` (R6)
+  - Defuse path: field=4 then field=6+field=5 → `C2=101` mvpCode=`DefusingBomb` (R5, R10)
+  - Plant then wipe: field=4/5 activity, **no** field=6 before `C2=101` mvpCode=`MostEliminations` (R7)
+
+### Why dedicated bugs match this gold
+
+| Symptom | Gold explanation |
+|---------|------------------|
+| Timer stuck ~1:50 | Client may show a local Ranked clock; phone sends **no** Live `Time` refresh. Inventing `C2=101` Live + `Time=now+90` is **not** phone behavior and poisons round-end (`101` = WinTeam only). |
+| Plant ignored | Gold plant = **field=3 Rpc** + **C2=40 C2-only**. Missing Rpc fan-out or requiring Live/`Time` on C2=40 diverges. |
+| “Unreal” Time | Phone `Time` is always **≈ now**. `Time=now+N` deadlines on 22/31/Live are invented vs this capture. |
 
 ## Lobby / match selection
 
