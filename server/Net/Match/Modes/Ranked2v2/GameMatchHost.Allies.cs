@@ -204,8 +204,10 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// C2=22 = buy. Host waits <see cref="AlliesFlowParams.BuyPhase"/> (10s wall).
-    /// Wire <c>Time</c> = now+10−pad so client UI shows ~10s (not ~19). Then Live C2=101.
+    /// C2=22 = buy. Host waits until client UI hits 0 (ServerTime now+BuyPhase), then
+    /// <see cref="AlliesFlowParams.BuyEndGrace"/>, then Live C2=101. Wire <c>Time</c> =
+    /// now+10−pad so client UI shows ~10s (not ~19). Do not arm PhaseEndsUtc from wire
+    /// deadline (≈now+1) — that ends buy ~1s after TX.
     /// </summary>
     private void EnterAlliesPreStart(MatchRoom room)
     {
@@ -239,8 +241,11 @@ public sealed partial class GameMatchHost
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
         // latest.log: Time=now+10 → client UI ~19s (bfqt ≈9s behind). Wire now+10−pad.
-        // Do NOT fall back to now+10 — that undid the pad (wireDeadline≈now+1 tripped <=now+1).
+        // Do NOT fall back to now+10 — that undid the pad (wireDeadline≈now+1).
         var wireDeadline = nowSec + dur.TotalSeconds - AlliesFlowParams.BuyClientClockPad;
+        // Absolute ServerTime when padded client UI hits 0 (same epoch as the bag).
+        // Live−wireTime equals pad by construction — host wait is BuyPhase, not pad.
+        var clientZeroSec = nowSec + dur.TotalSeconds;
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(wireDeadline)),
@@ -250,19 +255,25 @@ public sealed partial class GameMatchHost
             (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmupWillFinish)),
         ], reason: $"Allies buy C2=22 round={round}", phaseDeadlineSec: wireDeadline);
+
+        // Arm on the same TX tick as the bag: wait until client-zero, then BuyEndGrace.
+        var remainToClientZero = clientZeroSec - ServerTimeSeconds();
+        if (remainToClientZero < 0.05)
+            remainToClientZero = dur.TotalSeconds;
+        var wallToLive = TimeSpan.FromSeconds(remainToClientZero) + AlliesFlowParams.BuyEndGrace;
+        lock (_roomGate)
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow + wallToLive;
+
         if (round <= 1)
             SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
         ClearFighterDeathFlags(room);
         DestroyTrackedRoundEntities(room, reason: "Allies buy C2=22");
 
-        // Start host buy wait only after the bag is on the wire (match client 10s).
-        lock (_roomGate)
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow + dur;
-
         Console.WriteLine(
             $"[match-host] allies: buy C2=22 round={round} bomberId={bomberId} " +
-            $"wall={dur.TotalSeconds:0}s from TX Time=RST={wireDeadline:0.###} " +
-            $"(pad={AlliesFlowParams.BuyClientClockPad:0}; UI~10s → Live C2=101)");
+            $"wall={remainToClientZero:0.###}s+grace={AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms " +
+            $"zeroSec={clientZeroSec:0.###} Time=RST={wireDeadline:0.###} " +
+            $"(pad={AlliesFlowParams.BuyClientClockPad:0}; UI~10s→0 → Live C2=101)");
         PostServerDebugChat($"Закуп · раунд {round} (10s)");
     }
 
@@ -377,10 +388,11 @@ public sealed partial class GameMatchHost
             return false;
 
         // Equip Rpc at buy start — ignore until 2s into the 10s buy window.
+        // PhaseEndsUtc = buyStart + BuyPhase + BuyEndGrace.
         DateTime ends;
         lock (_roomGate)
             ends = room.Flow.PhaseEndsUtc;
-        var buyStart = ends - AlliesFlowParams.BuyPhase;
+        var buyStart = ends - AlliesFlowParams.BuyPhase - AlliesFlowParams.BuyEndGrace;
         return DateTime.UtcNow >= buyStart + TimeSpan.FromSeconds(2);
     }
 
@@ -561,7 +573,8 @@ public sealed partial class GameMatchHost
             if (room.Flow.PrepSpawnExtensionUsed)
                 return false;
             room.Flow.PrepSpawnExtensionUsed = true;
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow + TimeSpan.FromSeconds(5)
+                + AlliesFlowParams.BuyEndGrace;
             if (room.Flow.BomberActorNr <= 0)
             {
                 var pick = PickBomberActorNr(room);

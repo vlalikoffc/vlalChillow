@@ -31,6 +31,7 @@ public sealed class GameNetHost : IDisposable
     private long _unconnected;
     private int _captureIndex;
     private bool _matchStarted;
+    private int _disposed;
 
     private readonly Action? _onRosterChanged;
     private readonly Action? _onMatchStarted;
@@ -999,10 +1000,14 @@ public sealed class GameNetHost : IDisposable
 
     public void Dispose()
     {
-        _cts.Cancel();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        try { _cts.Cancel(); } catch { /* ignore */ }
         try { Task.WhenAll(_tasks).Wait(800); } catch { /* ignore */ }
-        _manager.Stop();
+        // Disconnect peers + PollEvents so LiteNetLib sends close packets before Stop.
+        LiteNetGracefulStop.DisconnectFlushAndStop(_manager);
         _match.Dispose();
-        _cts.Dispose();
+        try { _cts.Dispose(); } catch { /* ignore */ }
     }
 }

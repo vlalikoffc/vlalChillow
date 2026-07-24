@@ -1,4 +1,5 @@
 ﻿using System.Net;
+using System.Runtime.InteropServices;
 using StandChillow.LanServer;
 using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Lan;
@@ -221,10 +222,52 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
     // Command handler shared by the dashboard input line and the plain stdin loop.
     // Feedback goes to the dashboard notice/chat area when active, else to the console.
     CliDashboard? dashboard = null;
+    using var shutdownCts = new CancellationTokenSource();
+    PosixSignalRegistration? sigTermReg = null;
+
     void Feedback(string text)
     {
         if (dashboard is not null) dashboard.PostLocalNotice(text);
         else Console.WriteLine(text);
+    }
+
+    void RequestGracefulShutdown(string reason)
+    {
+        Console.WriteLine($"[main] {reason} — graceful shutdown (same as quit)…");
+        try { shutdownCts.Cancel(); } catch { /* ignore */ }
+        dashboard?.RequestQuit();
+
+        // Plain Console.ReadLine does not unblock when CancelKeyPress sets e.Cancel=true.
+        // Dispose hosts (idempotent) so LiteNetLib disconnects flush, then Exit.
+        if (!useDashboard && !Console.IsInputRedirected)
+        {
+            try { pluginTickCts.Cancel(); } catch { /* ignore */ }
+            try { game.Dispose(); } catch { /* ignore */ }
+            try
+            {
+                discovery.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2));
+            }
+            catch { /* ignore */ }
+            Environment.Exit(0);
+        }
+    }
+
+    void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
+    {
+        e.Cancel = true;
+        RequestGracefulShutdown("CTRL+C / CancelKeyPress");
+    }
+
+    Console.CancelKeyPress += OnCancelKeyPress;
+    try
+    {
+        sigTermReg = PosixSignalRegistration.Create(
+            PosixSignal.SIGTERM,
+            _ => RequestGracefulShutdown("SIGTERM"));
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[main] SIGTERM registration skipped: {ex.Message}");
     }
 
     bool HandleCommand(string line)
@@ -459,8 +502,9 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
             {
                 if (Console.IsInputRedirected)
                 {
-                    // No keyboard, but keep the live dashboard on screen until SIGTERM.
-                    await Task.Delay(Timeout.Infinite);
+                    // No keyboard, but keep the live dashboard on screen until SIGTERM/CTRL+C.
+                    try { await Task.Delay(Timeout.Infinite, shutdownCts.Token); }
+                    catch (OperationCanceledException) { /* graceful shutdown */ }
                 }
                 else
                 {
@@ -479,12 +523,13 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
         }
         else if (Console.IsInputRedirected)
         {
-            Console.WriteLine("[main] stdin redirected — running until SIGTERM");
-            await Task.Delay(Timeout.Infinite);
+            Console.WriteLine("[main] stdin redirected — running until SIGTERM/CTRL+C");
+            try { await Task.Delay(Timeout.Infinite, shutdownCts.Token); }
+            catch (OperationCanceledException) { /* graceful shutdown */ }
         }
         else
         {
-            while (true)
+            while (!shutdownCts.IsCancellationRequested)
             {
                 var line = Console.ReadLine();
                 if (line is null || !HandleCommand(line))
@@ -494,6 +539,8 @@ static async Task RunDedicatedHostAsync(string[] args, bool useDashboard)
     }
     finally
     {
+        Console.CancelKeyPress -= OnCancelKeyPress;
+        try { sigTermReg?.Dispose(); } catch { /* ignore */ }
         pluginTickCts.Cancel();
         try { await pluginTick.WaitAsync(TimeSpan.FromSeconds(2)); }
         catch { /* ignore */ }

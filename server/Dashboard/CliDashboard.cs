@@ -98,6 +98,22 @@ public sealed class CliDashboard : IDisposable
         catch (InvalidOperationException) { return null; }
     }
 
+    /// <summary>
+    /// Same path as typing <c>quit</c>: enqueue quit and wake <see cref="NextCommand"/>.
+    /// Used by CTRL+C / SIGTERM so the main loop exits and <c>using</c> disposes hosts.
+    /// </summary>
+    public void RequestQuit()
+    {
+        try
+        {
+            if (!_commands.IsAddingCompleted)
+                _commands.Add("quit");
+        }
+        catch (InvalidOperationException) { /* closed / disposed */ }
+
+        try { _cts.Cancel(); } catch { /* ignore */ }
+    }
+
     /// <summary>Current input buffer contents (for the caller to inspect if needed).</summary>
     public void PostLocalNotice(string text) =>
         DashboardHub.PostChat("dash", text, fromServer: true);
@@ -107,6 +123,9 @@ public sealed class CliDashboard : IDisposable
         if (!_running && !_started) return;
         _running = false;
         try { _cts.Cancel(); } catch { /* ignore */ }
+
+        Console.CancelKeyPress -= OnCancelKey;
+        AppDomain.CurrentDomain.ProcessExit -= OnProcessExit;
 
         DashboardHub.Chat -= OnChat;
         DashboardHub.Death -= OnDeath;
@@ -171,8 +190,9 @@ public sealed class CliDashboard : IDisposable
 
     private void OnCancelKey(object? sender, ConsoleCancelEventArgs e)
     {
-        // Ctrl+C: restore terminal, then let default terminate.
-        Stop();
+        // Refuse immediate process death — same graceful path as typing quit.
+        e.Cancel = true;
+        RequestQuit();
     }
 
     private void OnProcessExit(object? sender, EventArgs e) => Stop();
@@ -501,15 +521,26 @@ public sealed class CliDashboard : IDisposable
         // C2=31 is anchor-only post-buy). Fall back to room Time for modes with a wire
         // round/fuse clock (Ranked Live, TDM) — never for Allies RoundLive (silent combat).
         double remain = 0;
+        var alliesBuy = allies && snap.Phase == MatchFlowPhase.WarmupWillFinish;
         if (snap.PhaseEndsUtc > DateTime.MinValue && snap.PhaseEndsUtc < DateTime.MaxValue)
+        {
             remain = (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
+            // PhaseEndsUtc includes BuyEndGrace after client-zero — clock tracks buy UI to 00:00.
+            if (alliesBuy)
+                remain -= AlliesFlowParams.BuyEndGrace.TotalSeconds;
+        }
         else if (snap.TimeDeadline > 0
                  && snap.Phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted
                      or MatchFlowPhase.DeathMatchLive or MatchFlowPhase.DeathMatchWarmup
                  && !(allies && snap.Phase == MatchFlowPhase.RoundLive))
             remain = snap.TimeDeadline - Environment.TickCount / 1000.0;
 
-        var clock = remain > 0.5 ? $" {FormatClock(remain)}" : "";
+        // Ceil last second stays 00:01 until remain≈0; keep showing through 00:00 during
+        // Allies BuyEndGrace (remain≤0 while PhaseEndsUtc still in the future).
+        var showClock = remain > 0
+            || (alliesBuy && snap.PhaseEndsUtc > DateTime.UtcNow
+                && snap.PhaseEndsUtc < DateTime.MaxValue);
+        var clock = showClock ? $" {FormatClock(Math.Max(0, remain))}" : "";
         var label = snap.Phase switch
         {
             MatchFlowPhase.WaitingPlayers => "WAITING PLAYERS",
@@ -543,8 +574,11 @@ public sealed class CliDashboard : IDisposable
     private static string FormatClock(double seconds)
     {
         if (seconds < 0) seconds = 0;
-        var m = (int)(seconds / 60);
-        var s = (int)(seconds % 60);
+        // Ceil: 9.01s → 00:10 like the client buy countdown. Floor made 10s wall show 00:09.
+        var total = (int)Math.Ceiling(seconds - 1e-6);
+        if (total < 0) total = 0;
+        var m = total / 60;
+        var s = total % 60;
         return $"{m:00}:{s:00}";
     }
 

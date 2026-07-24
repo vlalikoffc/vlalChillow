@@ -86,6 +86,7 @@ public sealed partial class GameMatchHost : IDisposable
 
     private readonly int _listenPort;
     private volatile bool _acceptMatchConnections = true;
+    private int _disposed;
 
     /// <summary>
     /// Mid-match ChatManager text that looks like a lobby slash command (<c>/set start</c>, …).
@@ -739,15 +740,19 @@ public sealed partial class GameMatchHost : IDisposable
 
     public void Dispose()
     {
-        _cts.Cancel();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        try { _cts.Cancel(); } catch { /* ignore */ }
         foreach (var st in _peers.Values)
         {
             try { st.BootstrapTimeoutCts?.Cancel(); }
             catch { /* ignore */ }
         }
         try { Task.WhenAll(_tasks).Wait(800); } catch { /* ignore */ }
-        _manager.Stop();
-        _cts.Dispose();
+        // Disconnect peers + PollEvents so LiteNetLib sends close packets before Stop.
+        LiteNetGracefulStop.DisconnectFlushAndStop(_manager);
+        try { _cts.Dispose(); } catch { /* ignore */ }
     }
 }
 

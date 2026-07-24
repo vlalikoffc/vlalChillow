@@ -340,15 +340,22 @@ public static class AlliesFlowParams
     /// <summary>C2=21 WarmUp (first round only) — gold RX 407472265→407475405 ≈3.1s.</summary>
     public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
     /// <summary>
-    /// C2=22 buy — host wall wait 10s. Wire <c>Time</c> uses <see cref="BuyClientClockPad"/> so
-    /// the client shows ~10s (latest.log: bare now+10 displayed as ~19 → pad 9s).
+    /// C2=22 buy — host waits until client-visible countdown hits 0 (ServerTime now+10s).
+    /// Wire <c>Time</c> uses <see cref="BuyClientClockPad"/> so the client shows ~10s
+    /// (bare now+10 → ~19). Live−wireTime ≈ pad by construction — host wait is BuyPhase, not pad.
+    /// After client-zero, hold <see cref="BuyEndGrace"/> then enter Live.
     /// </summary>
     public static readonly TimeSpan BuyPhase = TimeSpan.FromSeconds(10);
     /// <summary>
     /// Client bfqt lag vs host <c>ServerTimeSeconds</c> on this LAN build (19−10 from live log).
-    /// Wire deadline = now + BuyPhase − pad → UI starts at ~10s.
+    /// Wire deadline = now + BuyPhase − pad → UI starts at ~10s; host still waits BuyPhase.
     /// </summary>
     public static readonly double BuyClientClockPad = 9.0;
+    /// <summary>
+    /// After buy UI would hit 0, wait this long before Live C2=101 so host/client both
+    /// reach 00:00 (Ceil last second shows 00:01 until remain≈0).
+    /// </summary>
+    public static readonly TimeSpan BuyEndGrace = TimeSpan.FromMilliseconds(200);
     /// <summary>Alias — C2=22 buy.</summary>
     public static TimeSpan PreStart => BuyPhase;
     /// <summary>Unused — C2=31 skipped.</summary>
