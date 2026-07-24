@@ -212,14 +212,15 @@ public sealed partial class GameMatchHost
         int round;
         int bomberId;
         var dur = AlliesFlowParams.BuyPhase;
-        var ends = DateTime.UtcNow + dur;
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex + 1;
             if (round < 1) round = 1;
             room.Flow.RoundIndex = round;
             room.Flow.Phase = MatchFlowPhase.WarmupWillFinish;
-            room.Flow.PhaseEndsUtc = ends;
+            // PhaseEndsUtc set after buy bag TX — starting it here made host ~1s early
+            // (setup+broadcast) while client still showed full 10s.
+            room.Flow.PhaseEndsUtc = DateTime.MaxValue;
             room.Flow.PendingEndReason = null;
             room.Flow.PrepSpawnExtensionUsed = false;
             room.Flow.DeadActors.Clear();
@@ -253,10 +254,15 @@ public sealed partial class GameMatchHost
             SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
         ClearFighterDeathFlags(room);
         DestroyTrackedRoundEntities(room, reason: "Allies buy C2=22");
+
+        // Start host buy wait only after the bag is on the wire (match client 10s).
+        lock (_roomGate)
+            room.Flow.PhaseEndsUtc = DateTime.UtcNow + dur;
+
         Console.WriteLine(
             $"[match-host] allies: buy C2=22 round={round} bomberId={bomberId} " +
-            $"wall={dur.TotalSeconds:0}s Time=RST={wireDeadline:0.###} " +
-            $"(pad={AlliesFlowParams.BuyClientClockPad:0} vs hostNow={nowSec:0.###}; UI~10s → Live C2=101)");
+            $"wall={dur.TotalSeconds:0}s from TX Time=RST={wireDeadline:0.###} " +
+            $"(pad={AlliesFlowParams.BuyClientClockPad:0}; UI~10s → Live C2=101)");
         PostServerDebugChat($"Закуп · раунд {round} (10s)");
     }
 
