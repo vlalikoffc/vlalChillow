@@ -16,7 +16,8 @@ public static class MatchHostSettings
     private static int _warmupSeconds = 3;
     // C2=22 / _roundStartingTime ≈3s freeze (MATCH_PHASES_TIMERS) — not Prep's 10s.
     private static int _preStartSeconds = 3;
-    private static int _prepSeconds = 5;
+    // Allies gold 22→31 ≈10s; Ranked Prep C2=31 uses the same knob.
+    private static int _prepSeconds = 10;
     private static int _roundSeconds = 90;
     private static int _roundEndPauseSeconds = 6;
     private static int _bombFuseSeconds = 40;
@@ -167,7 +168,7 @@ public static class MatchHostSettings
           /set team <t>      ct|tr|t|spectator — себе в матче (SetProperty team)
           /set money <N>     деньги на старт раунда (0–16000)
           /set fuse <сек>    таймер бомбы
-          /set prep <сек>    Allies C2=22 buy + C2=31 post-buy (default 5s each); Ranked Prep C2=31
+          /set prep <сек>    Allies C2=22→31 buy wall (default 10s); Ranked Prep C2=31
           /set prestart <сек> Ranked PreStart C2=22 (Allies buy uses /set prep)
           /set warmup <сек>  WarmUp C2=21 (первый раунд)
           /set roundtime <сек> длительность live

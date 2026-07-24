@@ -248,9 +248,16 @@ public sealed partial class GameMatchHost
             // only on decisive events (plant/defuse/explode) — damage attribution logs inside
             // NoteDeathMatchDamage on accept/ignore, not every hit here.
             var dropRelay = false;
-            if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
+            var alliesRoom = IsAlliesRoom(st.Room);
+            // Allies gold plant = field=3; field=1 near C2=22/31 is round-start reset (relay only).
+            // Ranked/Escalation carry plant = field=1/2.
+            var isAlliesPlantField = alliesRoom
+                && parsed.Field == MatchFlowTestParams.BombManagerFieldEscalationAutoPlant;
+            var isRankedPlantField = !alliesRoom
                 && parsed.Field is MatchFlowTestParams.BombManagerFieldPlantNyo
-                    or MatchFlowTestParams.BombManagerFieldPlantNyu)
+                    or MatchFlowTestParams.BombManagerFieldPlantNyu;
+            if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
+                && (isAlliesPlantField || isRankedPlantField))
             {
                 MatchFlowPhase plantPhase;
                 bool alreadyPlanted;
@@ -272,11 +279,12 @@ public sealed partial class GameMatchHost
                 }
                 else if (!IsAlliesPlantablePhase(st.Room, plantPhase))
                 {
-                    // Early C2=22 equip — do not invent C2=40; still relay pose to peers.
+                    // Allies: PurchasePhase (C2=31) only. Ranked: RoundLive.
+                    // Early equip/reset — relay pose, do not invent C2=40.
                     Console.WriteLine(
                         $"[observe] BombManager plant field={parsed.Field} " +
                         $"from actor={st.ActorNr} not-authority phase={plantPhase} " +
-                        "(equip grace / not plantable — relay only)");
+                        "(not plantable — relay only)");
                     dropRelay = false;
                 }
                 else
@@ -303,7 +311,7 @@ public sealed partial class GameMatchHost
                         {
                             dropRelay = true;
                         }
-                        else if (IsAlliesRoom(st.Room))
+                        else if (alliesRoom)
                         {
                             // Always exceptSender-relay in addition to fan-out — peers often
                             // miss host-rebuilt Rpc; planter already applied locally.
@@ -315,6 +323,16 @@ public sealed partial class GameMatchHost
                         }
                     }
                 }
+            }
+            else if (alliesRoom
+                     && parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
+                     && parsed.Field is MatchFlowTestParams.BombManagerFieldPlantNyo
+                         or MatchFlowTestParams.BombManagerFieldPlantNyu)
+            {
+                // Gold field=1 near C2=22/31 = round-start reset — relay only, never C2=40.
+                Console.WriteLine(
+                    $"[observe] Allies BombManager field={parsed.Field} " +
+                    $"from actor={st.ActorNr} (reset/equip — relay only, not plant)");
             }
             else if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
                      && parsed.Field == MatchFlowTestParams.BombManagerFieldNzu)

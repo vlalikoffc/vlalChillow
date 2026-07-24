@@ -281,8 +281,8 @@ public static class MatchFlowTestParams
     public const short BombManagerFieldPlantNyo = 1;
     public const short BombManagerFieldPlantNyu = 2;
     /// <summary>
-    /// Escalation host auto-plant — phone gold field=3 every round ~8.1s after C2=22
-    /// (<c>MATCH_ESCALATION_PROBE.md</c>). Not Ranked carry plant field=1/2.
+    /// Escalation host auto-plant + Allies Ranked2v2 manual plant (gold 2026-07-24 field=3).
+    /// Allies field=1 near C2=22/31 is round-start reset — not a plant. Not Ranked carry 1/2.
     /// </summary>
     public const short BombManagerFieldEscalationAutoPlant = 3;
     /// <summary>Escalation/Ranked defuse pose progress — observe+relay (gold field=4).</summary>
@@ -321,11 +321,10 @@ public static class EscalationFlowParams
 
 /// <summary>
 /// Allies / Ranked2v2 («союзники») — first-to-<see cref="MatchHostSettings.WinsNeeded"/> wins
-/// (default 8), half-time team swap after round 7. Gold stime deltas:
-/// <c>allies-probe</c> run-20260723_215727 RX captures — see
-/// <c>MATCH_ALLIES_PROBE.md</c>. Distinct from generic <see cref="MatchFlowTestParams"/> /
-/// Escalation — do not copy Ranked 3s PreStart or 90s round clock onto Allies.
-/// Shared fuse/buy pad/grace math: <c>Logic/Defuse/DefuseTimer</c> (constants stay here).
+/// (default 8), half-time team swap after round 7. Gold 2026-07-24:
+/// C2=22 Time=RST=now → ~10s → C2=31 combat (stay) → field=3 plant → C2=40 → C2=101 WinTeam.
+/// See <c>MATCH_ALLIES_PROBE.md</c>. Do not invent Live C2=101 / BuyClientClockPad / 1s C2=31 flash.
+/// Shared fuse math: <c>Logic/Defuse/DefuseTimer</c> (constants stay here).
 /// </summary>
 public static class AlliesFlowParams
 {
@@ -342,38 +341,21 @@ public static class AlliesFlowParams
     /// <summary>C2=21 WarmUp (first round only) — gold RX 407472265→407475405 ≈3.1s.</summary>
     public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
     /// <summary>
-    /// C2=22 buy — host waits until client-visible countdown hits 0 (ServerTime now+10s).
-    /// Wire <c>Time</c> uses <see cref="BuyClientClockPad"/> via
-    /// <c>DefuseTimer.BuyWireDeadlineSec</c> so the client shows ~10s (bare now+10 → ~19).
-    /// After client-zero, host arms a separate <see cref="BuyEndGrace"/> deadline then C2=31.
+    /// C2=22 → C2=31 host wall — gold stime Δ ≈ 10.0–10.2s. Wire <c>Time == RoundStartTime ≈ now</c>
+    /// (anchor); never a future deadline / BuyClientClockPad. Overridable via <c>/set prep</c>.
     /// </summary>
-    public static readonly TimeSpan BuyPhase = TimeSpan.FromSeconds(10);
-    /// <summary>
-    /// Optional <c>DefuseTimer</c> clientClockPadSec — bfqt lag on this LAN build (19−10).
-    /// Escalation uses pad=0; do not drop this for Allies UI on 2.06 OBT F1.
-    /// </summary>
-    public static readonly double BuyClientClockPad = 9.0;
-    /// <summary>
-    /// After client-zero, hold before C2=31: <c>AlliesBuyLiveNotBeforeUtc</c> = host-zero + this.
-    /// Phone buy UI 0 ≈ host-zero + ~500ms — 500ms grace ≈ align to phone zero, then post-buy.
-    /// </summary>
-    public static readonly TimeSpan BuyEndGrace = TimeSpan.FromMilliseconds(500);
-    /// <summary>Alias — C2=22 buy.</summary>
+    public static TimeSpan BuyPhase => MatchHostSettings.Prep;
+    /// <summary>Alias — C2=22 buy wall.</summary>
     public static TimeSpan PreStart => BuyPhase;
-    /// <summary>
-    /// C2=31 post-buy — host wait + wire <c>Time</c> deadline (Ranked <c>EnterPurchasePhase</c>
-    /// bag shape). After buy-zero + <see cref="BuyEndGrace"/>, lasts 1s then Live C2=101.
-    /// </summary>
-    public static readonly TimeSpan PostBuyPhase = TimeSpan.FromSeconds(1);
-    /// <summary>Alias — C2=22 buy wall (not C2=31).</summary>
+    /// <summary>Alias — C2=22 buy wall (combat starts at C2=31).</summary>
     public static TimeSpan Prep => BuyPhase;
     /// <summary>Silent pause after C2=101 round-end WinTeam bag — gold RX 101→22 ≈6.0s.</summary>
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);
-    /// <summary>Bomb fuse after manual plant C2=40 — gold family ≈40s.</summary>
+    /// <summary>Bomb fuse after plant C2=40 — gold family ≈40s.</summary>
     public static TimeSpan BombFuse => MatchHostSettings.BombFuse;
     /// <summary>
-    /// Host-only Live round timeout (no Live <c>Time</c> TX) — default via
-    /// <see cref="MatchHostSettings.RoundDuration"/> (90s). Ends round so client 00:00 cannot hang.
+    /// Host-only combat round timeout while wire stays on C2=31 (no Live <c>Time</c> TX) —
+    /// default via <see cref="MatchHostSettings.RoundDuration"/> (90s).
     /// </summary>
     public static TimeSpan RoundDuration => MatchHostSettings.RoundDuration;
 

@@ -496,8 +496,8 @@ public sealed partial class GameMatchHost
         {
             Console.WriteLine(
                 "[match-host] match-flow: EnterRoundLive BLOCKED for Allies — " +
-                "use EnterAlliesLive (no C2=101 / no round clock on wire)");
-            EnterAlliesLive(room);
+                "use EnterAlliesCombat (C2=31 stay; no Live C2=101)");
+            EnterAlliesCombat(room);
             return;
         }
 
@@ -586,7 +586,7 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Plant authority. Allies: buy/Live after equip grace; Ranked: RoundLive only.
+    /// Plant authority. Allies: field=3 during C2=31 combat; Ranked: field=1/2 RoundLive only.
     /// Returns Allies fan-out peer count (0 if no payload / non-Allies; -1 if rejected).
     /// </summary>
     private int TryEnterBombPlanted(

@@ -517,28 +517,23 @@ public sealed class CliDashboard : IDisposable
     private string DescribePhase(MatchSnapshot snap)
     {
         var allies = IsAlliesLike(snap);
-        // Prefer host Flow.PhaseEndsUtc (Allies C2=22 buy + C2=31 post-buy deadlines).
+        // Prefer host Flow.PhaseEndsUtc (Allies C2=22 buy wall + C2=31 host round clock).
         // Fall back to room Time for modes with a wire
-        // round/fuse clock (Ranked Live, TDM) — never for Allies RoundLive (silent combat).
+        // round/fuse clock (Ranked Live, TDM) — never invent Allies Live Time.
         double remain = 0;
         var alliesBuy = allies && snap.Phase == MatchFlowPhase.WarmupWillFinish;
         if (snap.PhaseEndsUtc > DateTime.MinValue && snap.PhaseEndsUtc < DateTime.MaxValue)
         {
-            // Buy PhaseEndsUtc stays at client-zero wall (grace uses AlliesBuyLiveNotBeforeUtc).
             remain = (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
         }
         else if (snap.TimeDeadline > 0
                  && snap.Phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted
                      or MatchFlowPhase.DeathMatchLive or MatchFlowPhase.DeathMatchWarmup
-                 && !(allies && snap.Phase == MatchFlowPhase.RoundLive))
+                 && !(allies && snap.Phase is MatchFlowPhase.RoundLive
+                     or MatchFlowPhase.PurchasePhase))
             remain = snap.TimeDeadline - Environment.TickCount / 1000.0;
 
-        // Safety: if PhaseEndsUtc were ever grace-rewritten, Ceil(~0.5s) would show 00:01
-        // during LIVE HOLD — pin clock to 00:00 while hold is armed.
-        if (alliesBuy && snap.AlliesBuyEndGraceArmed)
-            remain = 0;
         var showClock = remain > 0
-            || (alliesBuy && snap.AlliesBuyEndGraceArmed)
             || (alliesBuy && snap.PhaseEndsUtc > DateTime.UtcNow
                 && snap.PhaseEndsUtc < DateTime.MaxValue);
         var clock = showClock ? $" {FormatClock(Math.Max(0, remain))}" : "";
@@ -547,17 +542,15 @@ public sealed class CliDashboard : IDisposable
             MatchFlowPhase.WaitingPlayers => "WAITING PLAYERS",
             MatchFlowPhase.AlliesPreWarmup => allies ? "FREE-FOR-ALL · C2=11" : snap.Phase.ToString(),
             MatchFlowPhase.Warmup => allies ? $"WARM-UP · Round {Math.Max(1, snap.Round)}" : "WARM-UP",
-            // Allies: C2=22 is the real buy/prep (visible timer). Generic Ranked keeps MATCH STARTING.
+            // Allies: C2=22 buy wall (Time=RST=now on wire); generic Ranked keeps MATCH STARTING.
             MatchFlowPhase.WarmupWillFinish => allies
-                ? (snap.AlliesBuyEndGraceArmed
-                    ? $"PREP · Round {snap.Round} · C2=22 · LIVE HOLD"
-                    : $"PREP · Round {snap.Round} · C2=22")
+                ? $"PREP · Round {snap.Round} · C2=22"
                 : "MATCH STARTING",
             MatchFlowPhase.PurchasePhase => allies
-                ? $"POST-BUY · Round {snap.Round} · C2=31"
+                ? $"LIVE · Round {snap.Round} · C2=31"
                 : $"PREP · Round {snap.Round} · C2=31",
             MatchFlowPhase.RoundLive => allies
-                ? $"LIVE · Round {snap.Round} (no round clock)"
+                ? $"LIVE · Round {snap.Round}"
                 : $"LIVE · Round {snap.Round}",
             MatchFlowPhase.BombPlanted => $"BOMB PLANTED · Round {snap.Round}",
             MatchFlowPhase.RoundEndPause => $"ROUND END · Round {snap.Round}",

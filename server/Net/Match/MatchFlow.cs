@@ -90,28 +90,15 @@ public sealed class MatchFlowState
     /// <summary>One 5s prep extension when a living fighter picked team but has no pawn yet.</summary>
     public bool PrepSpawnExtensionUsed { get; set; }
     /// <summary>
-    /// Allies C2=22: true after client-zero while waiting for
-    /// <see cref="AlliesBuyLiveNotBeforeUtc"/> (dashboard / logs). Cleared on PreStart / Live.
+    /// Legacy Allies buy-pad gate fields — cleared on PreStart/combat; unused on gold path
+    /// (C2=22 Time=RST=now → stay on C2=31). Kept so older snapshots/deserializers stay stable.
     /// </summary>
     public bool AlliesBuyEndGraceArmed { get; set; }
-    /// <summary>
-    /// Allies C2=22: wall-clock earliest moment Live/C2=101 may TX —
-    /// set at buy bag to <c>zeroUtc + BuyEndGrace</c> (never <c>UtcNow+grace</c> at TX —
-    /// that expires during the 10s buy and makes post-zero wait a no-op). Independent of
-    /// <see cref="PhaseEndsUtc"/> so buy-zero and post-zero grace cannot share one deadline.
-    /// <see cref="DateTime.MinValue"/> = unset (must not pass the Live gate).
-    /// </summary>
+    /// <summary>Legacy — unused on gold Allies path. Cleared on PreStart / combat.</summary>
     public DateTime AlliesBuyLiveNotBeforeUtc { get; set; } = DateTime.MinValue;
-    /// <summary>
-    /// Allies C2=22: UTC wall when host buy-zero deadline was armed (<see cref="PhaseEndsUtc"/>
-    /// at bag TX). Used for <c>sinceZeroMs</c> Live logs. Cleared on PreStart / Live.
-    /// </summary>
+    /// <summary>Legacy — unused on gold Allies path. Cleared on PreStart / combat.</summary>
     public DateTime AlliesBuyZeroUtc { get; set; } = DateTime.MinValue;
-    /// <summary>
-    /// Allies C2=22: absolute <c>ServerTimeSeconds</c> when the padded buy UI hits 0
-    /// (<c>wireDeadline + BuyClientClockPad</c> = bag now + BuyPhase). Live / C2=101 must
-    /// not TX while <c>ServerTimeSeconds() &lt; AlliesBuyClientZeroSec</c>. 0 = unset.
-    /// </summary>
+    /// <summary>Legacy — unused on gold Allies path. Cleared on PreStart / combat.</summary>
     public double AlliesBuyClientZeroSec { get; set; }
     /// <summary>
     /// Escalation: C2=31 combat bag already published this round (after C2=40 auto-plant gap).
@@ -155,20 +142,23 @@ public static class MatchFlowRules
 
     /// <summary>
     /// Phases where a bare <c>DestroyWorldObject</c> may indicate a combat elimination.
-    /// Warmup/PreStart/Prep clients Destroy+Create their pawn on every phase transition
-    /// (respawn — the phone host does the same: gold <c>run-20260722_100157</c> Destroy id then
-    /// Create id, no round end), so a Destroy there is never a kill. Only during a live round
-    /// does a Destroy with no respawn mean the fighter was eliminated.
+    /// Warmup/PreStart clients Destroy+Create on phase transition (respawn). Combat:
+    /// RoundLive / BombPlanted / TDM Live / Allies+Escalation C2=31 PurchasePhase.
+    /// Generic Ranked Prep (PurchasePhase, not Allies) keeps Destroy as respawn —
+    /// pass <paramref name="purchasePhaseIsCombat"/> for Allies Ranked2v2.
     /// </summary>
-    public static bool DestroyMayBeCombatDeath(MatchFlowPhase phase, bool bombPlanted = false) =>
+    public static bool DestroyMayBeCombatDeath(
+        MatchFlowPhase phase,
+        bool bombPlanted = false,
+        bool purchasePhaseIsCombat = false) =>
         phase is MatchFlowPhase.RoundLive
             or MatchFlowPhase.BombPlanted
             // TDM: a pawn Destroy during live with no respawn is a fallback kill signal
             // (primary is the actor death prop). Warmup Destroys are respawns, never kills.
             or MatchFlowPhase.DeathMatchLive
-            // Escalation combat is C2=31 PurchasePhase with bomb already planted — Destroy
-            // there is a kill (MATCH_ESCALATION_PROBE). Ranked Prep keeps bombPlanted=false.
-            || (phase == MatchFlowPhase.PurchasePhase && bombPlanted);
+            // Escalation: C2=31 with bomb planted. Allies: C2=31 combat before/after plant.
+            // Ranked Prep: PurchasePhase + purchasePhaseIsCombat=false → respawn only.
+            || (phase == MatchFlowPhase.PurchasePhase && (bombPlanted || purchasePhaseIsCombat));
 
     public static bool IsActorDead(
         MatchFlowState flow,
