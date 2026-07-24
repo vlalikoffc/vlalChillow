@@ -345,7 +345,7 @@ public static class AlliesFlowParams
     /// C2=22 buy — host waits until client-visible countdown hits 0 (ServerTime now+10s).
     /// Wire <c>Time</c> uses <see cref="BuyClientClockPad"/> via
     /// <c>DefuseTimer.BuyWireDeadlineSec</c> so the client shows ~10s (bare now+10 → ~19).
-    /// After client-zero, host arms a separate <see cref="BuyEndGrace"/> deadline then Live.
+    /// After client-zero, host arms a separate <see cref="BuyEndGrace"/> deadline then C2=31.
     /// </summary>
     public static readonly TimeSpan BuyPhase = TimeSpan.FromSeconds(10);
     /// <summary>
@@ -354,16 +354,18 @@ public static class AlliesFlowParams
     /// </summary>
     public static readonly double BuyClientClockPad = 9.0;
     /// <summary>
-    /// Hold Live until <c>AlliesBuyLiveNotBeforeUtc</c> = host-zero + this span.
-    /// Phone buy UI 0 ≈ host-zero + ~500ms; hold after phone 0 ≈ this − 500ms
-    /// (2500ms → ~0.5s align + ~2.0s sit on 0 before Live).
+    /// After client-zero, hold before C2=31: <c>AlliesBuyLiveNotBeforeUtc</c> = host-zero + this.
+    /// Phone buy UI 0 ≈ host-zero + ~500ms — 500ms grace ≈ align to phone zero, then post-buy.
     /// </summary>
-    public static readonly TimeSpan BuyEndGrace = TimeSpan.FromMilliseconds(2500);
+    public static readonly TimeSpan BuyEndGrace = TimeSpan.FromMilliseconds(500);
     /// <summary>Alias — C2=22 buy.</summary>
     public static TimeSpan PreStart => BuyPhase;
-    /// <summary>Unused — C2=31 skipped.</summary>
-    public static readonly TimeSpan PostBuyPhase = TimeSpan.FromMilliseconds(1);
-    /// <summary>Alias.</summary>
+    /// <summary>
+    /// C2=31 post-buy — host wait + wire <c>Time</c> deadline (Ranked <c>EnterPurchasePhase</c>
+    /// bag shape). After buy-zero + <see cref="BuyEndGrace"/>, lasts 1s then Live C2=101.
+    /// </summary>
+    public static readonly TimeSpan PostBuyPhase = TimeSpan.FromSeconds(1);
+    /// <summary>Alias — C2=22 buy wall (not C2=31).</summary>
     public static TimeSpan Prep => BuyPhase;
     /// <summary>Silent pause after C2=101 round-end WinTeam bag — gold RX 101→22 ≈6.0s.</summary>
     public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(6);

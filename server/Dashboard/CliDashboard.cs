@@ -517,8 +517,8 @@ public sealed class CliDashboard : IDisposable
     private string DescribePhase(MatchSnapshot snap)
     {
         var allies = IsAlliesLike(snap);
-        // Prefer host Flow.PhaseEndsUtc (Allies C2=22 buy uses wire Time deadline;
-        // C2=31 is anchor-only post-buy). Fall back to room Time for modes with a wire
+        // Prefer host Flow.PhaseEndsUtc (Allies C2=22 buy + C2=31 post-buy deadlines).
+        // Fall back to room Time for modes with a wire
         // round/fuse clock (Ranked Live, TDM) — never for Allies RoundLive (silent combat).
         double remain = 0;
         var alliesBuy = allies && snap.Phase == MatchFlowPhase.WarmupWillFinish;
