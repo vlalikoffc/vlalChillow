@@ -55,7 +55,7 @@ public sealed partial class GameMatchHost
     /// </summary>
     private void ApplyRoundEndEconomy(MatchRoom room, MatchTeam winner, string reason)
     {
-        if (IsDeathMatchRoom(room) || IsEscalationRoom(room))
+        if (IsDeathMatchRoom(room) || IsEscalationRoom(room) || IsDuelRoom(room))
             return;
 
         int coLossesTr, coLossesCt;
@@ -111,7 +111,7 @@ public sealed partial class GameMatchHost
     /// </summary>
     private void ApplyPlantEconomy(MatchRoom room, byte planterActorNr)
     {
-        if (IsDeathMatchRoom(room) || IsEscalationRoom(room))
+        if (IsDeathMatchRoom(room) || IsEscalationRoom(room) || IsDuelRoom(room))
             return;
 
         List<byte> terrorists;
@@ -133,7 +133,7 @@ public sealed partial class GameMatchHost
 
     private void ApplyDefuseEconomy(MatchRoom room, byte defuserActorNr)
     {
-        if (IsDeathMatchRoom(room) || IsEscalationRoom(room))
+        if (IsDeathMatchRoom(room) || IsEscalationRoom(room) || IsDuelRoom(room))
             return;
         if (defuserActorNr == 0 || defuserActorNr == MatchHostActor.ActorNr)
             return;
@@ -144,7 +144,7 @@ public sealed partial class GameMatchHost
 
     private void ApplyKillEconomy(MatchRoom room, byte killerActorNr, byte weaponId)
     {
-        if (IsDeathMatchRoom(room) || IsEscalationRoom(room))
+        if (IsDeathMatchRoom(room) || IsEscalationRoom(room) || IsDuelRoom(room))
             return;
         if (killerActorNr == 0 || killerActorNr == MatchHostActor.ActorNr)
             return;

@@ -11,7 +11,7 @@ public sealed partial class GameMatchHost
 
     private bool NeedsAlliesHalfTime(MatchRoom room, int roundIndex)
     {
-        if (IsEscalationRoom(room) || IsDeathMatchRoom(room))
+        if (IsEscalationRoom(room) || IsDeathMatchRoom(room) || IsDuelRoom(room))
             return false;
         lock (_roomGate)
         {

@@ -139,7 +139,7 @@ public static class MatchHostSettings
     {
         wins = gameModeId switch
         {
-            "Ranked2v2" or "Ranked2v2Alt" or "RankedDefuse" => 8,
+            "Ranked2v2" or "Ranked2v2Alt" or "RankedDefuse" or "Duel" => 8,
             "Defuse" => 6,
             _ => 0,
         };

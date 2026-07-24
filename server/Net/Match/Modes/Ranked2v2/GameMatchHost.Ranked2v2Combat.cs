@@ -22,8 +22,8 @@ public sealed partial class GameMatchHost
         {
             phase = room.Flow.Phase;
             bombPlanted = room.Flow.BombPlanted;
-            var alliesCombat = IsAlliesRoom(room);
-            if (!MatchFlowRules.DestroyMayBeCombatDeath(phase, bombPlanted, alliesCombat))
+            var purchaseCombat = IsAlliesRoom(room) || IsDuelRoom(room);
+            if (!MatchFlowRules.DestroyMayBeCombatDeath(phase, bombPlanted, purchaseCombat))
             {
                 // Phase-transition respawn window — Destroy is not a kill; drop any stale arm.
                 room.Flow.PendingCombatDestroy.Remove(owner);
@@ -53,7 +53,8 @@ public sealed partial class GameMatchHost
             if (room.Flow.PendingCombatDestroy.Count == 0)
                 return;
             if (!MatchFlowRules.DestroyMayBeCombatDeath(
-                    room.Flow.Phase, room.Flow.BombPlanted, IsAlliesRoom(room)))
+                    room.Flow.Phase, room.Flow.BombPlanted,
+                    IsAlliesRoom(room) || IsDuelRoom(room)))
             {
                 room.Flow.PendingCombatDestroy.Clear();
                 return;

@@ -112,8 +112,7 @@ public sealed partial class GameMatchHost
 
     private void TickMatchFlowRoom(MatchRoom room)
     {
-        // Branch by GameModeId (C0): DeathMatch/TDM has its own single-round flow
-        // (Modes/DeathMatch/); everything below is the Ranked2v2 / Allies bomb loop.
+        // Branch by GameModeId (C0): DeathMatch/TDM, Escalation, Duel, Allies bomb family.
         if (IsDeathMatchRoom(room))
         {
             TickDeathMatchFlowRoom(room);
@@ -123,6 +122,12 @@ public sealed partial class GameMatchHost
         if (IsEscalationRoom(room))
         {
             TickEscalationFlowRoom(room);
+            return;
+        }
+
+        if (IsDuelRoom(room))
+        {
+            TickDuelFlowRoom(room);
             return;
         }
 

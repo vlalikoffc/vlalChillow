@@ -116,6 +116,7 @@ public sealed partial class GameMatchHost
         // room SetProperties: Time, {Tr|Ct}Score, {loser}CoLosses, {winner}CoLosses, WinTeam, C2=101.
         // Dedicated also always includes BOTH TrScore+CtScore in the bag so stay-in clients
         // cannot stick on a prior 1:0 after a CT win (gold bag alone only carries winner key).
+        // Duel gold: GameRpcHelper field=1 then Time + winner score + WinTeam + C2=101 (no CoLosses).
         if (mvpNr != 0)
         {
             var mvpPkt = MatchCodec.BuildSetProperty(
@@ -125,14 +126,20 @@ public sealed partial class GameMatchHost
                 $"[match-host] match-flow TX SetProperty actor={mvpNr} mvp={mvpCount}");
         }
 
+        if (IsDuelRoom(room))
+            BroadcastDuelGameRpcHelperRoundEnd(room);
+
         var nowSec = ServerTimeSeconds();
         var winTeamProps = BuildWinTeamProps(winner, mvpNr, mvpCode);
-        var roomProps = IsAlliesRoom(room)
-            ? BuildAlliesRoundEndRoomProps(
-                nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps)
-            : BuildRoundEndRoomProps(
-                nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps);
-        var logTag = IsAlliesRoom(room) ? "allies" : "match-flow";
+        var duel = IsDuelRoom(room);
+        var roomProps = duel
+            ? BuildDuelRoundEndRoomProps(nowSec, winner, scoreTr, scoreCt, winTeamProps)
+            : IsAlliesRoom(room)
+                ? BuildAlliesRoundEndRoomProps(
+                    nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps)
+                : BuildRoundEndRoomProps(
+                    nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps);
+        var logTag = duel ? "duel" : IsAlliesRoom(room) ? "allies" : "match-flow";
         // Gold bag (both scores + WinTeam + C2=101) to all room peers — no exceptSender.
         BroadcastRoomProps(room, roomProps, reason: $"RoundEnd {reason} round={round}");
         // Explicit TrScore+CtScore SetProperty to ALL connected match peers so stay-in
@@ -143,7 +150,9 @@ public sealed partial class GameMatchHost
             $"[match-host] {logTag}: RoundEnd C2={MatchC2States.MatchStarted} round={round} " +
             $"winner={winner} reason={reason} " +
             $"TrScore={scoreTr} CtScore={scoreCt} " +
-            $"TrCoLosses={coLossesTr} CtCoLosses={coLossesCt} " +
+            (duel
+                ? ""
+                : $"TrCoLosses={coLossesTr} CtCoLosses={coLossesCt} ") +
             $"mvpPlayer={mvpNr} mvpCode={mvpCode} " +
             $"pause={pause.TotalSeconds:0}s src=MATCH_WORLD silent " +
             $"(WinTeam bag + both score SetProperty to all peers; then {pause.TotalSeconds:0}s " +

@@ -25,7 +25,7 @@ public sealed partial class GameMatchHost
 
     private bool IsAlliesRoom(MatchRoom room)
     {
-        if (IsEscalationRoom(room) || IsDeathMatchRoom(room))
+        if (IsEscalationRoom(room) || IsDeathMatchRoom(room) || IsDuelRoom(room))
             return false;
         lock (_roomGate)
         {
@@ -62,7 +62,9 @@ public sealed partial class GameMatchHost
     }
 
     private TimeSpan RoundEndPauseFor(MatchRoom room) =>
-        IsAlliesRoom(room) ? AlliesFlowParams.RoundEndPause : MatchFlowTestParams.RoundEndPause;
+        IsDuelRoom(room) ? DuelFlowParams.RoundEndPause
+        : IsAlliesRoom(room) ? AlliesFlowParams.RoundEndPause
+        : MatchFlowTestParams.RoundEndPause;
 
     /// <summary>
     /// Allies / Ranked2v2 — phone gold <c>MATCH_ALLIES_PROBE.md</c> (2026-07-24):

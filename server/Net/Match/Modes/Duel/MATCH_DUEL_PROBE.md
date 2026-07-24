@@ -213,17 +213,17 @@ After FinalHud + `RemoteConnectionClose`:
 
 ---
 
-## Dedicated Duel stub — implement later (gold checklist)
+## Dedicated Duel — gold checklist
 
 Short list from this capture only:
 
-- [ ] Identity: `C0=Duel`, map `C1`, `game_type=2`; scene set **without** BombManager  
-- [ ] Open: `C2=10` → `C2=11` (FFA, `Time≈now`) → score wipe → `C2=21` (`Time≈now`)  
-- [ ] Round: `ReCreateSceneManager`×2 → `C2=22` (`Time==RST≈now`, Round, loadout **or** modifier+used list) → wait **~5 s** → `C2=31` combat (`Time≈now`)  
-- [ ] Eliminate → `GameRpcHelper` field=1 → `C2=101` + WinTeam + TrScore/CtScore (`Time≈now`); pause **~5 s** → next 22  
-- [ ] First-to-8 → `C2=201` FinalHud (`FinalWinTeam`, `FinalPlayers`) then teardown  
-- [ ] **Do not** TX C2=40 / BombManager; **do not** copy Allies ~10 s prep or Live C2=101 clock  
-- [ ] Support forced `current_loadout` + observed modifiers (`OnlyKnifes` / `OnlyHeadshots` / `OnlyGrenades` + `used_round_modifier_ids`)
+- [x] Identity: `C0=Duel`, map `C1`, `game_type=2`; scene set **without** BombManager (Radar also omitted)
+- [x] Open: `C2=10` → `C2=11` (FFA, `Time≈now`) → score wipe → `C2=21` (`Time≈now`)
+- [x] Round: `ReCreateSceneManager`×2 → `C2=22` (`Time==RST≈now`, Round) → wait **~5 s** → `C2=31` combat (`Time≈now`)
+- [x] Eliminate → `GameRpcHelper` field=1 → `C2=101` + WinTeam + TrScore/CtScore (`Time≈now`); pause **~5 s** → next 22
+- [x] First-to-8 → `C2=201` FinalHud (`FinalWinTeam`, `FinalPlayers`) then teardown / lobby return
+- [x] **Do not** TX C2=40 / BombManager; **do not** copy Allies ~10 s prep or Live C2=101 clock
+- [ ] Support forced `current_loadout` + observed modifiers (`OnlyKnifes` / `OnlyHeadshots` / `OnlyGrenades` + `used_round_modifier_ids`) — **TODO**: no codec builder yet; Escalation-style leave to clients (omit invented bags)
 
 ---
 

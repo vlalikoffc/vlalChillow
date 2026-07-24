@@ -372,6 +372,39 @@ public static class AlliesFlowParams
 }
 
 /// <summary>
+/// Duel — first-to-<see cref="MatchHostSettings.WinsNeeded"/> (default 8). Gold
+/// <c>MATCH_DUEL_PROBE.md</c> (<c>20260724_041*</c>): C2=11 FFA → wipe → C2=21 →
+/// C2=22 (~5s) → C2=31 combat → C2=101 WinTeam → C2=201 FinalHud. No bomb / C2=40.
+/// </summary>
+public static class DuelFlowParams
+{
+    /// <summary>C2=11 FFA PreWarmup — gold stime Δ ≈ 20.0s.</summary>
+    public static readonly TimeSpan PreWarmup = TimeSpan.FromSeconds(20);
+    /// <summary>C2=21 WarmUp after FFA wipe — gold 21→22 ≈ 3.1s.</summary>
+    public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
+    /// <summary>C2=22 → C2=31 freeze — gold stime Δ ≈ 5.0–5.2s.</summary>
+    public static readonly TimeSpan Freeze = TimeSpan.FromSeconds(5);
+    /// <summary>Silent pause after C2=101 — gold 101→22 / 101→201 ≈ 5.2s.</summary>
+    public static readonly TimeSpan RoundEndPause = TimeSpan.FromSeconds(5);
+    /// <summary>Brief FinalHud (C2=201) before lobby return — gold 201→disconnect ≈2s; hold a few.</summary>
+    public static readonly TimeSpan FinalHudPause = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// Host-only combat safety timeout while wire stays on C2=31 (eliminate ends earlier).
+    /// Reuses <see cref="MatchHostSettings.RoundDuration"/> (default 109s).
+    /// </summary>
+    public static TimeSpan RoundDuration => MatchHostSettings.RoundDuration;
+    /// <summary>
+    /// ReCreateSceneManager ×2 on every C2=22 — WeaponDrop=4, Grenade=5
+    /// (Duel gold scene set has no BombManager / Radar).
+    /// </summary>
+    public static readonly short[] RecreateSceneManagerIds = [4, 5];
+    /// <summary>GameRpcHelper bootstrap id — gold field=1 round-end Rpc.</summary>
+    public const short GameRpcHelperObjectId = 1;
+    /// <summary>GameRpcHelper field=1 empty-payload round-end signal (gold every scored round).</summary>
+    public const short GameRpcHelperFieldRoundEnd = 1;
+}
+
+/// <summary>
 /// RankedDefuse / casual Defuse / Ranked2v2Alt — same Allies gold timers and C2 bags
 /// (MATCH_ALLIES_PROBE.md). Win target differs: RankedDefuse/Alt = 8, Defuse = 6
 /// (<see cref="MatchHostSettings.TryDefaultWinsForMode"/>). Host combat timeout = 109s.

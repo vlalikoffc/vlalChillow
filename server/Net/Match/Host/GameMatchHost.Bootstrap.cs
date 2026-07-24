@@ -173,8 +173,14 @@ public sealed partial class GameMatchHost
         SetHostProp(MatchRoomPropKeys.Ping, LobbyVariant.FromInt(0));
 
         // 2) Scene managers (lens 25,34,36,86,83,24,23,23 — byte-matched to phone).
+        // Duel gold: no BombManager / no RadarManager (Chat stays dedicated id=7).
+        var duelBootstrap = IsDuelRoom(room);
         foreach (var mgr in MatchSceneManagers.Bootstrap)
         {
+            if (duelBootstrap
+                && (mgr.Id == MatchFlowTestParams.BombManagerObjectId
+                    || mgr.Id == MatchSceneManagers.RadarManagerObjectId))
+                continue;
             byte[]? trailing = null;
             if (mgr.CatalogIds is { } ids)
                 trailing = MatchCodec.BuildDropCatalogPayload(ids);
@@ -219,7 +225,8 @@ public sealed partial class GameMatchHost
         Console.WriteLine(
             $"[match-host] TX world bootstrap for joiner={joinerActorNr} " +
             $"(hostIdentity+avatar={avatarJpeg.Length}B " +
-            $"managers={MatchSceneManagers.Bootstrap.Length} C2={MatchHostActor.C2AfterManagers} " +
+            $"managers={(duelBootstrap ? "Duel(no Bomb/Radar)" : MatchSceneManagers.Bootstrap.Length.ToString())} " +
+            $"C2={MatchHostActor.C2AfterManagers} " +
             $"host={MatchHostActor.ActorNr}/'{MatchHostActor.Name}' team=Spectator; " +
             $"INIT unlocked — await team SetProperty then joiner CreateWorldObject echo)");
 
