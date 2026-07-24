@@ -22,9 +22,15 @@
 
 ## Weapons / modifiers
 
-Escalation-style: host does **not** TX `current_loadout` or `OnlyKnifes`/`OnlyHeadshots`/`OnlyGrenades`
-schedules — no known codec builder (gold phone host did send them). Clients pick/view weapons.
-TODO when loadout/modifier builders are reversed.
+Host TX from `DuelConfig` dump (`DuelLoadouts.cs`):
+
+- Non-modifier C2=22: random preset from 23 `_loadouts` → `current_loadout` + `current_round_modifier_id=null`
+- Modifier C2=22 (~p=1/3): uniform among **enabled** mods → `current_round_modifier_id` + `used_round_modifier_ids`; **omit** `current_loadout` (client applies definition loadout)
+- C2=10 WaitingPlayers: random preset + null modifier
+- **OnlyGrenades** fully defined (HE loadout + infinite-HE flag) but **gated off** RNG until grenades work
+- Knife: client default — host does not put Knife* in primary
+
+See `MATCH_DUEL_PROBE.md` + `decompiled/DUEL_MODIFIERS_LOADOUTS.md`.
 
 ## Bots
 

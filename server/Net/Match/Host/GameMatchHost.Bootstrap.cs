@@ -198,14 +198,31 @@ public sealed partial class GameMatchHost
         // 3) C2=FF0A — InitWaiting unlock (phone *_SetProperties_len14.bin).
         // Peer-local only: do NOT clobber room.RoomC2 if match-flow already advanced
         // (late / GIP join must keep live C2 for snapshots + other peers).
-        SendAndDump(peer, MatchCodec.BuildSetProperties(
-            NextServerTime(),
-            actorNr: 0,
-            [(MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchHostActor.C2AfterManagers))]));
-        lock (_roomGate)
+        // Duel gold C2=10 bag also carries current_loadout + null modifier (len≈114).
+        if (duelBootstrap)
         {
-            if (room.Flow.Phase == MatchFlowPhase.WaitingPlayers && room.RoomC2 < MatchC2States.WarmUp)
-                room.RoomC2 = MatchHostActor.C2AfterManagers;
+            var duelWaitProps = BuildDuelWaitingPlayersRoomProps(room);
+            SendAndDump(peer, MatchCodec.BuildSetProperties(
+                NextServerTime(), actorNr: 0, duelWaitProps));
+            lock (_roomGate)
+            {
+                foreach (var (k, v) in duelWaitProps)
+                    room.ActorProps[(0, k)] = v;
+                if (room.Flow.Phase == MatchFlowPhase.WaitingPlayers && room.RoomC2 < MatchC2States.WarmUp)
+                    room.RoomC2 = MatchHostActor.C2AfterManagers;
+            }
+        }
+        else
+        {
+            SendAndDump(peer, MatchCodec.BuildSetProperties(
+                NextServerTime(),
+                actorNr: 0,
+                [(MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchHostActor.C2AfterManagers))]));
+            lock (_roomGate)
+            {
+                if (room.Flow.Phase == MatchFlowPhase.WaitingPlayers && room.RoomC2 < MatchC2States.WarmUp)
+                    room.RoomC2 = MatchHostActor.C2AfterManagers;
+            }
         }
 
         // 4) Phone: host money after C2. Dedicated: then Server Spectator (no fighting pawn).

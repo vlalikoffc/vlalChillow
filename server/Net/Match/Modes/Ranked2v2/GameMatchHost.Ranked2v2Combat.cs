@@ -23,7 +23,10 @@ public sealed partial class GameMatchHost
             phase = room.Flow.Phase;
             bombPlanted = room.Flow.BombPlanted;
             var purchaseCombat = IsAlliesRoom(room) || IsDuelRoom(room);
-            if (!MatchFlowRules.DestroyMayBeCombatDeath(phase, bombPlanted, purchaseCombat))
+            // Duel-only: C2=11 FFA Destroy is a combat death (respawn), not a phase-transition wipe.
+            var duelFfa = IsDuelRoom(room) && phase == MatchFlowPhase.AlliesPreWarmup;
+            if (!MatchFlowRules.DestroyMayBeCombatDeath(phase, bombPlanted, purchaseCombat)
+                && !duelFfa)
             {
                 // Phase-transition respawn window — Destroy is not a kill; drop any stale arm.
                 room.Flow.PendingCombatDestroy.Remove(owner);
@@ -33,7 +36,9 @@ public sealed partial class GameMatchHost
         }
         var dmTag = IsDeathMatchRoom(room)
             ? "[tdm-death] client-relayed Destroy path: "
-            : "";
+            : IsDuelRoom(room) && phase == MatchFlowPhase.AlliesPreWarmup
+                ? "[duel-ffa] client-relayed Destroy path: "
+                : "";
         Console.WriteLine(
             $"[match-host] match-flow: {dmTag}pawn Destroy owner={owner} in {phase} — armed " +
             "combat-death grace (await death prop or no-respawn; not an immediate wipe)");
@@ -54,7 +59,9 @@ public sealed partial class GameMatchHost
                 return;
             if (!MatchFlowRules.DestroyMayBeCombatDeath(
                     room.Flow.Phase, room.Flow.BombPlanted,
-                    IsAlliesRoom(room) || IsDuelRoom(room)))
+                    IsAlliesRoom(room) || IsDuelRoom(room))
+                // Duel-only: keep FFA Destroy-grace armed through C2=11.
+                && !(IsDuelRoom(room) && room.Flow.Phase == MatchFlowPhase.AlliesPreWarmup))
             {
                 room.Flow.PendingCombatDestroy.Clear();
                 return;
@@ -122,6 +129,15 @@ public sealed partial class GameMatchHost
                     ? $"убит actor={actorNr} ({DebugTeamTag(team)})"
                     : $"{dmName} ({DebugTeamTag(team)}) убит");
             AuthorDeathMatchDeath(room, victimActorNr: actorNr, killerActorNr: null, source: source);
+            return;
+        }
+
+        // Duel-only C2=11 FFA: cumulative death + respawn (not wipe). Gold Destroy+death++ then CWO.
+        if (IsDuelRoom(room) && phase == MatchFlowPhase.AlliesPreWarmup)
+        {
+            Console.WriteLine(
+                $"[duel-ffa] death actor={actorNr} team={team} via {source} → AuthorDuelFfaDeath");
+            AuthorDuelFfaDeath(room, victimActorNr: actorNr, killerActorNr: null, source: source);
             return;
         }
 

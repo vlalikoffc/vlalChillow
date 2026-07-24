@@ -223,7 +223,7 @@ Short list from this capture only:
 - [x] Eliminate → `GameRpcHelper` field=1 → `C2=101` + WinTeam + TrScore/CtScore (`Time≈now`); pause **~5 s** → next 22
 - [x] First-to-8 → `C2=201` FinalHud (`FinalWinTeam`, `FinalPlayers`) then teardown / lobby return
 - [x] **Do not** TX C2=40 / BombManager; **do not** copy Allies ~10 s prep or Live C2=101 clock
-- [ ] Support forced `current_loadout` + observed modifiers (`OnlyKnifes` / `OnlyHeadshots` / `OnlyGrenades` + `used_round_modifier_ids`) — **TODO**: no codec builder yet; Escalation-style leave to clients (omit invented bags)
+- [x] Support forced `current_loadout` + modifiers (`OnlyKnifes` / `OnlyHeadshots` / `NoScope`; `OnlyGrenades` defined but RNG-gated off) + `used_round_modifier_ids` — see `DuelLoadouts.cs` (p≈1/3 per round; modifier bags omit loadout)
 
 ---
 

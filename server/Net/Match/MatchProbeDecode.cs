@@ -14,9 +14,20 @@ public sealed class MatchProbeDecode
     private readonly Dictionary<byte, ActorInfo> _actors = new();
     private readonly Dictionary<short, ObjectInfo> _objects = new();
     private readonly Dictionary<string, string> _roomPropSnap = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LobbyVariant> _roomProps = new(StringComparer.Ordinal);
     private byte? _localActor;
 
     public void SetLocalActor(byte? actorNr) => _localActor = actorNr;
+
+    /// <summary>Latest room prop raw value (Found gap + SetProperties actor=0).</summary>
+    public bool TryGetRoomProp(string key, out LobbyVariant value) =>
+        _roomProps.TryGetValue(key, out value!);
+
+    /// <summary>Match <c>C1</c> SelectedLevels string when present.</summary>
+    public string? RoomMap =>
+        TryGetRoomProp(MatchRoomPropKeys.C1, out var v) && v.Kind == LobbyVariantKind.String
+            ? v.String
+            : null;
 
     public void NoteActor(byte nr, string? name = null, MatchTeam? team = null)
     {
@@ -367,6 +378,7 @@ public sealed class MatchProbeDecode
 
     private void NoteRoomProp(string key, LobbyVariant value)
     {
+        _roomProps[key] = value;
         _roomPropSnap[key] = DescribeVariantAnnotated(key, value);
     }
 

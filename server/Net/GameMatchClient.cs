@@ -43,9 +43,9 @@ public sealed class GameMatchClient : IDisposable
     /// <summary>Cap WorldObjectState .bin captures so long matches do not fill disk.</summary>
     private const int MaxWorldObjectStateCaptures = 12;
     /// <summary>
-    /// Spectator-only: if host bootstrap (C2=10) is slow/missing, still TX team=Spectator after this
-    /// delay. Fighting probes do NOT use a timer — they wait for a real peer pawn (see
-    /// <see cref="TryDetectPeerFighterFromCwo"/>).
+    /// If host bootstrap (C2=10) is slow/missing, still TX team (and fighter catalog spawn) after
+    /// this delay. Fighters prefer map+team catalog poses; peer CWO is only a fallback when the
+    /// current <c>C1</c> map is unknown (see <see cref="MatchSpawnCatalog"/>).
     /// </summary>
     private static readonly TimeSpan TeamAssignFallbackDelay = TimeSpan.FromSeconds(2.5);
     /// <summary>WorldObjectState tick while probe is a fighting pawn (killable).</summary>
@@ -94,12 +94,13 @@ public sealed class GameMatchClient : IDisposable
     private uint _probeStateSeq;
     private CancellationTokenSource? _probeStateCts;
     private int _sceneManagersSeen;
-    // Fighter probe waits for a REAL peer pawn on the same team, then copies its spawn pose.
+    // Peer same-team pawns: fallback pose source when MatchSpawnCatalog has no entry for C1+team.
     private readonly HashSet<short> _peerFighterPawnIds = new();
     private short _activePeerPawnId;
     private byte[]? _lastPeerCwoTrailing;
     private bool _probeRespawnPending;
     private byte _roomC2;
+    private string? _probeMap;
     private (float X, float Y, float Z) _probeSpawnPos;
     private (float X, float Y, float Z, float W) _probeSpawnQuat;
     private bool _probeSpawnPosKnown;
@@ -167,6 +168,7 @@ public sealed class GameMatchClient : IDisposable
             _lastPeerCwoTrailing = null;
             _probeRespawnPending = false;
             _roomC2 = 0;
+            _probeMap = null;
             _probeSpawnPosKnown = false;
             _lastRxUtc = DateTime.UtcNow;
             Console.WriteLine(
@@ -396,9 +398,10 @@ public sealed class GameMatchClient : IDisposable
             $"[match-net] still connected {peer.Address}:{peer.Port} " +
             $"joinOk={_joinSucceeded} joinAttempts={_joinAttempts} " +
             $"actor={_localActorNr?.ToString() ?? "-"} teamSent={_probeTeamSent} spawned={_probeSpawned} " +
-            $"probeTeam={_probeTeam} peerFighters={_peerFighterPawnIds.Count} " +
+            $"probeTeam={_probeTeam} map={_probeMap ?? _decode.RoomMap ?? "?"} " +
+            $"peerFighters={_peerFighterPawnIds.Count} " +
             $"rx={_rxLogged} postJoinRx={_postJoinRx} idle={idle.TotalSeconds:0.0}s " +
-            $"(fighter probe spawns only when a peer {_probeTeam} pawn appears)");
+            "(fighter: catalog map+team spawn; peer CWO = fallback if map unknown)");
     }
 
     /// <summary>
@@ -590,14 +593,17 @@ public sealed class GameMatchClient : IDisposable
                         $"WorldObjectState rate-limited (first {NoisyLogFirst} + every {NoisyLogEveryK}th). " +
                         $"probeTeam={_probeTeam} localActor={body.ActorNr?.ToString() ?? "(missing)"}");
                     Console.WriteLine(_decode.FormatRoster());
+                    NoteProbeMapFromDecode("JoinRoom Found");
                     if (_probeTeam is MatchTeam.Ct or MatchTeam.Tr)
+                    {
                         Console.WriteLine(
-                            $"[probe] waiting for peer {_probeTeam}… (will self-assign team + spawn a " +
-                            $"'{MatchCodec.PawnTypeNameForTeam(_probeTeam)}' pawn AT the first real peer " +
-                            "fighter's position — no blind bootstrap-timer spawn)");
+                            $"[probe] fighter team={_probeTeam} map={_probeMap ?? "?"} — will self-assign " +
+                            $"team + CreateWorldObject '{MatchCodec.PawnTypeNameForTeam(_probeTeam)}' at " +
+                            "catalog spawn (peer CWO only if map unknown)");
+                        ScheduleFighterOrSpectatorAssign(peer);
+                    }
                     else
-                        // Spectator has no pawn/visibility concern — assign team once bootstrap is ready.
-                        ScheduleSpectatorTeamAssign(peer);
+                        ScheduleFighterOrSpectatorAssign(peer);
                     break;
                 }
 
@@ -633,14 +639,14 @@ public sealed class GameMatchClient : IDisposable
                 if (_joinSucceeded)
                     Interlocked.Increment(ref _postJoinRx);
                 TryNoteRoomPropsFromSetProperties(peer, payload, bodyOffset, flags);
-                TrySendSpectatorTeam(peer, "after SetProperties");
+                TrySpawnProbePlayer(peer, "after SetProperties");
                 break;
             }
             case MatchOpcode.SetProperty:
             {
                 if (_joinSucceeded)
                     Interlocked.Increment(ref _postJoinRx);
-                TrySendSpectatorTeam(peer, "after SetProperty");
+                TrySpawnProbePlayer(peer, "after SetProperty");
                 break;
             }
             case MatchOpcode.CreateWorldObject:
@@ -650,9 +656,9 @@ public sealed class GameMatchClient : IDisposable
                 _sceneManagersSeen++;
                 if (_sceneManagersSeen >= MatchSceneManagers.Bootstrap.Length)
                     MarkBootstrapReady("scene managers");
-                // Fighter probe: detect a REAL peer pawn on our team + copy its spawn pose.
+                // Peer same-team CWO: fallback pose when catalog has no entry for C1+team.
                 TryDetectPeerFighterFromCwo(peer, payload);
-                TrySendSpectatorTeam(peer, "after CreateWorldObject");
+                TrySpawnProbePlayer(peer, "after CreateWorldObject");
                 break;
             }
             case MatchOpcode.WorldObjectState:
@@ -715,6 +721,12 @@ public sealed class GameMatchClient : IDisposable
                 return;
             foreach (var (key, value) in props)
             {
+                if (key == MatchRoomPropKeys.C1 && value.Kind == LobbyVariantKind.String
+                    && !string.IsNullOrWhiteSpace(value.String))
+                {
+                    _probeMap = value.String;
+                    Console.WriteLine($"[probe] room C1 map='{_probeMap}' (SetProperties)");
+                }
                 if (key != MatchRoomPropKeys.C2 || value.Kind != LobbyVariantKind.Byte)
                     continue;
                 if (value.Byte == MatchHostActor.C2AfterManagers)
@@ -733,11 +745,10 @@ public sealed class GameMatchClient : IDisposable
     /// real clients Destroy+Create (385→386→387) while a stale probe id=257 stayed orphaned
     /// ("alive" on team, no model/radar).
     /// <list type="bullet">
-    /// <item>WarmUp(21): peers often keep the same pawn id — force Destroy+Create with a fresh
-    /// view id at the last peer pose.</item>
+    /// <item>WarmUp(21): force Destroy+Create at catalog (or last) pose with a fresh view id.</item>
     /// <item>Live(30): peers Destroy+recreate — do <b>not</b> Destroy here (races when peer Create
     /// already arrived before this C2 bag). Follow <see cref="TryHandlePeerPawnDestroy"/> +
-    /// <see cref="TryDetectPeerFighterFromCwo"/> only.</item>
+    /// peer/catalog respawn only.</item>
     /// </list>
     /// </summary>
     private void TryHandleProbeRoomC2(NetPeer peer, byte newC2)
@@ -755,21 +766,19 @@ public sealed class GameMatchClient : IDisposable
 
         if (newC2 == MatchC2States.DeathMatchLive)
         {
-            // Peer Destroy+Create owns Live respawn. Setting pending+Destroy here orphaned the probe
-            // when peer Create raced ahead of the C2=30 SetProperties bag.
             Console.WriteLine(
-                $"[probe] phase C2 {prev}→{newC2} — await peer pawn Destroy+Create " +
-                $"(probe id={(_probeSpawned ? _probePawnObjectId.ToString() : "none")}, " +
-                $"peer id={_activePeerPawnId})");
+                $"[probe] phase C2 {prev}→{newC2} — await Destroy+Create " +
+                $"(probe id={(_probeSpawned ? _probePawnObjectId.ToString() : "none")})");
             return;
         }
 
-        // WarmUp: force a fresh view id even when the peer keeps the same object id.
+        // WarmUp: force a fresh view id.
         if (!_probeSpawned)
         {
             _probeRespawnPending = true;
             Console.WriteLine(
-                $"[probe] phase C2 {prev}→{newC2} — not spawned yet, will spawn on peer CWO");
+                $"[probe] phase C2 {prev}→{newC2} — not spawned yet, spawning from catalog/peer");
+            TrySpawnProbePlayer(peer, $"phase C2={newC2}");
             return;
         }
 
@@ -777,17 +786,7 @@ public sealed class GameMatchClient : IDisposable
             $"[probe] phase C2 {prev}→{newC2} — destroying pawn id={_probePawnObjectId} for WarmUp respawn");
         DestroyProbePawn(peer, $"phase C2={newC2}");
         _probeRespawnPending = true;
-
-        if (_probeSpawnPosKnown)
-        {
-            SpawnOrRespawnProbeAtPeer(
-                peer,
-                null,
-                _probeSpawnPos.X, _probeSpawnPos.Y, _probeSpawnPos.Z,
-                _probeSpawnQuat.X, _probeSpawnQuat.Y, _probeSpawnQuat.Z, _probeSpawnQuat.W,
-                _lastPeerCwoTrailing,
-                $"phase C2={newC2} at last peer pose (peer id={_activePeerPawnId})");
-        }
+        TrySpawnProbePlayer(peer, $"phase C2={newC2} respawn");
     }
 
     /// <summary>
@@ -865,7 +864,22 @@ public sealed class GameMatchClient : IDisposable
         Console.WriteLine($"[match-net] bootstrap ready ({reason}) — probe may TX team={_probeTeam}");
     }
 
-    private void ScheduleSpectatorTeamAssign(NetPeer peer)
+    private void NoteProbeMapFromDecode(string reason)
+    {
+        var map = _decode.RoomMap;
+        if (string.IsNullOrWhiteSpace(map))
+            return;
+        if (string.Equals(_probeMap, map, StringComparison.Ordinal))
+            return;
+        _probeMap = map;
+        Console.WriteLine($"[probe] room C1 map='{_probeMap}' ({reason})");
+    }
+
+    /// <summary>
+    /// After Found: wait briefly for scene managers / C2=10, then spawn (fighter) or assign
+    /// Spectator. Fighters use <see cref="MatchSpawnCatalog"/> when the map is known.
+    /// </summary>
+    private void ScheduleFighterOrSpectatorAssign(NetPeer peer)
     {
         _ = Task.Run(async () =>
         {
@@ -880,46 +894,70 @@ public sealed class GameMatchClient : IDisposable
 
             if (!_bootstrapReady)
                 MarkBootstrapReady($"fallback {TeamAssignFallbackDelay.TotalSeconds:0.#}s after Found");
-            TrySendSpectatorTeam(peer, "fallback timer");
+            NoteProbeMapFromDecode("fallback timer");
+            TrySpawnProbePlayer(peer, "fallback timer");
         });
     }
 
     /// <summary>
-    /// Spectator-only self-assign: after Found + bootstrap, TX <c>team=Spectator</c>. Spectators
-    /// have no pawn/model, so there is nothing to spawn and no peer to wait for. Fighting teams
-    /// go through <see cref="TryDetectPeerFighterFromCwo"/> → <see cref="SpawnOrRespawnProbeAtPeer"/> instead.
+    /// Spectator → identity+team only; fighter → identity+team + CreateWorldObject at catalog
+    /// map+team pose (peer CWO only if catalog miss).
     /// </summary>
-    private void TrySendSpectatorTeam(NetPeer peer, string reason)
+    private void TrySpawnProbePlayer(NetPeer peer, string reason)
     {
-        if (_probeTeam is MatchTeam.Ct or MatchTeam.Tr)
-            return; // fighters spawn only when a real peer pawn appears
-        if (_probeTeamSent || !_joinSucceeded || !_bootstrapReady)
+        NoteProbeMapFromDecode(reason);
+        if (!_joinSucceeded || !_bootstrapReady)
             return;
-        if (_localActorNr is not { } actor)
-        {
-            Console.WriteLine("[match-net] probe → Spectator deferred: Found had no actorNr");
-            return;
-        }
         if (peer.ConnectionState != ConnectionState.Connected)
             return;
+        if (_localActorNr is not { } actor)
+            return;
 
-        _probeTeamSent = true;
-        SendProbeIdentityAndTeam(peer, actor, reason);
-        Console.WriteLine("[probe] team=Spectator is non-fighting — no pawn/State");
+        if (_probeTeam is MatchTeam.Spectator)
+        {
+            if (_probeTeamSent)
+                return;
+            _probeTeamSent = true;
+            SendProbeIdentityAndTeam(peer, actor, reason);
+            Console.WriteLine("[probe] team=Spectator is non-fighting — no pawn/State");
+            return;
+        }
+
+        if (_probeTeam is not (MatchTeam.Ct or MatchTeam.Tr))
+            return;
+        if (_probeSpawned && !_probeRespawnPending)
+            return;
+
+        if (MatchSpawnCatalog.TryGet(_probeMap ?? _decode.RoomMap, _probeTeam, out var pose))
+        {
+            SpawnOrRespawnProbeAtPose(
+                peer,
+                pose.X, pose.Y, pose.Z,
+                pose.Qx, pose.Qy, pose.Qz, pose.Qw,
+                peerTrailing: null,
+                $"{reason} catalog map='{_probeMap ?? _decode.RoomMap}' ({pose.Source})");
+            return;
+        }
+
+        if (!_probeTeamSent)
+            Console.WriteLine(
+                $"[probe] map='{_probeMap ?? "?"}' has no catalog pose for {_probeTeam} — " +
+                "waiting for peer same-team CreateWorldObject (or known C1)");
     }
 
     /// <summary>
-    /// Fighter probe trigger: when a REAL peer's fighting pawn (<c>Ct_Ct</c>/<c>Tr_Tr</c>) for the
-    /// team we want appears via <c>CreateWorldObject</c>, copy its spawn pose from the CWO trailing
-    /// and spawn the probe's pawn AT that position. Without a live peer fighter to anchor on, no
-    /// model/radar blip ever appeared (blind bootstrap-timer spawn used the wrong-map Sandstone
-    /// pose and fired before any team pawn existed). Pose comes from the peer's own CWO — not invented.
+    /// Fallback when <see cref="MatchSpawnCatalog"/> has no entry: copy pose from a peer
+    /// fighting pawn on our team. Catalog maps skip this for first spawn.
     /// </summary>
     private void TryDetectPeerFighterFromCwo(NetPeer peer, byte[] payload)
     {
         if (!_joinSucceeded)
             return;
         if (_probeTeam is not (MatchTeam.Ct or MatchTeam.Tr))
+            return;
+        var map = _probeMap ?? _decode.RoomMap;
+        var catalogOwns = MatchSpawnCatalog.TryGet(map, _probeTeam, out _);
+        if (catalogOwns && !_probeRespawnPending)
             return;
         try
         {
@@ -931,7 +969,6 @@ public sealed class GameMatchClient : IDisposable
             var wantType = MatchCodec.PawnTypeNameForTeam(_probeTeam);
             if (!string.Equals(cwo.TypeName, wantType, StringComparison.Ordinal))
                 return;
-            // Ignore our own future pawn (owner == our actor); accept any other owner.
             if (cwo.OwnerActorNr is { } owner && _localActorNr is { } self && owner == self)
                 return;
 
@@ -947,23 +984,20 @@ public sealed class GameMatchClient : IDisposable
                     $"[probe] peer {_probeTeam} pawn CWO id={cwo.ObjectId} owner=" +
                     $"{cwo.OwnerActorNr?.ToString() ?? "-"} trail={cwo.Trailing.Length}B");
 
-            // Respawn when: first spawn, WarmUp pending, or peer Destroy+recreate (new object id).
+            if (catalogOwns)
+                return;
+
             var needSpawn = !_probeSpawned || _probeRespawnPending || isNewPeerPawn;
             if (!needSpawn)
                 return;
-
-            if (isNewPeerPawn && _probeSpawned)
-                Console.WriteLine(
-                    $"[probe] peer pawn recreated id={cwo.ObjectId} — Destroy+re-Create probe " +
-                    $"(was id={_probePawnObjectId})");
 
             if (MatchCodec.TryParsePawnSpawnTrailing(
                     cwo.Trailing,
                     out var x, out var y, out var z,
                     out var qx, out var qy, out var qz, out var qw))
             {
-                SpawnOrRespawnProbeAtPeer(
-                    peer, cwo.OwnerActorNr, x, y, z, qx, qy, qz, qw,
+                SpawnOrRespawnProbeAtPose(
+                    peer, x, y, z, qx, qy, qz, qw,
                     cwo.Trailing.Length > 0 ? cwo.Trailing.ToArray() : null,
                     $"peer CWO id={cwo.ObjectId} type={cwo.TypeName}");
             }
@@ -995,6 +1029,9 @@ public sealed class GameMatchClient : IDisposable
             return;
         if (!_probeRespawnPending && _probeSpawned)
             return;
+        // Catalog owns spawn when map is known — do not teleport to peer State.
+        if (MatchSpawnCatalog.TryGet(_probeMap ?? _decode.RoomMap, _probeTeam, out _))
+            return;
         try
         {
             if (!MatchCodec.TryOpenBody(payload, out _, out var opcode, out _, out var body)
@@ -1013,15 +1050,22 @@ public sealed class GameMatchClient : IDisposable
             var x = r.ReadFloat();
             var y = r.ReadFloat();
             var z = r.ReadFloat();
-            // Skip an all-zero (uninitialised) pose — wait for a real position tick.
             if (x == 0f && y == 0f && z == 0f)
                 return;
-            // No orientation in the standing-State header we decode — face the team default.
-            var q = _probeTeam == MatchTeam.Ct
-                ? MatchSceneManagers.PawnSpawn.SandstoneQuatCt
-                : MatchSceneManagers.PawnSpawn.SandstoneQuatTr;
-            SpawnOrRespawnProbeAtPeer(
-                peer, null, x, y, z, q.X, q.Y, q.Z, q.W,
+            float qx, qy, qz, qw;
+            if (MatchSpawnCatalog.TryGet(_probeMap ?? _decode.RoomMap, _probeTeam, out var cat))
+            {
+                qx = cat.Qx; qy = cat.Qy; qz = cat.Qz; qw = cat.Qw;
+            }
+            else
+            {
+                var q = _probeTeam == MatchTeam.Ct
+                    ? MatchSceneManagers.PawnSpawn.SandstoneQuatCt
+                    : MatchSceneManagers.PawnSpawn.SandstoneQuatTr;
+                qx = q.X; qy = q.Y; qz = q.Z; qw = q.W;
+            }
+            SpawnOrRespawnProbeAtPose(
+                peer, x, y, z, qx, qy, qz, qw,
                 _lastPeerCwoTrailing,
                 $"peer State id={id}");
         }
@@ -1034,9 +1078,8 @@ public sealed class GameMatchClient : IDisposable
     /// then spawn RPC (<c>rpc=localActor</c>) + State loop. Phase transitions and peer pawn
     /// Destroy+recreate must bump k — reusing id=257 across Live left an orphaned invisible pawn.
     /// </summary>
-    private void SpawnOrRespawnProbeAtPeer(
+    private void SpawnOrRespawnProbeAtPose(
         NetPeer peer,
-        byte? peerActor,
         float px, float py, float pz,
         float qx, float qy, float qz, float qw,
         byte[]? peerTrailing,
@@ -1066,8 +1109,8 @@ public sealed class GameMatchClient : IDisposable
         _probeSpawnPosKnown = true;
 
         Console.WriteLine(
-            $"[probe] peer seen actor={peerActor?.ToString() ?? "?"} " +
-            $"pos=({px:0.##},{py:0.##},{pz:0.##}) — spawning here " +
+            $"[probe] spawning pos=({_probeSpawnPos.X:0.##},{_probeSpawnPos.Y:0.##},{_probeSpawnPos.Z:0.##}) " +
+            $"quat=({_probeSpawnQuat.X:0.###},{_probeSpawnQuat.Y:0.###},{_probeSpawnQuat.Z:0.###},{_probeSpawnQuat.W:0.###}) " +
             $"(team={_probeTeam}, source={source})");
 
         if (firstSpawn)
@@ -1170,8 +1213,7 @@ public sealed class GameMatchClient : IDisposable
         _probeStateCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         var loopCts = _probeStateCts;
         var objectId = _probePawnObjectId;
-        // Peer-anchored position (copied from the real teammate we spawned next to). Falls back to
-        // the Sandstone pose only if, somehow, we spawned without a known pose.
+        // Catalog / peer-anchored position. Falls back to Sandstone only if somehow unknown.
         var pos = _probeSpawnPosKnown
             ? _probeSpawnPos
             : (_probeTeam == MatchTeam.Ct
@@ -1182,8 +1224,7 @@ public sealed class GameMatchClient : IDisposable
             Console.WriteLine(
                 $"[probe] State loop START id={objectId} pos=({pos.X:0.##},{pos.Y:0.##},{pos.Z:0.##}) " +
                 $"interval={FightingStateInterval.TotalMilliseconds:0}ms " +
-                "(thin standing pose at the peer's coords — the fat avatar/aim State layout is still " +
-                "opaque, so radar tracking may lag; the pawn appears at the peer-anchored spawn)");
+                "(thin standing pose — fat avatar State still opaque)");
             while (!loopCts.Token.IsCancellationRequested
                    && peer.ConnectionState == ConnectionState.Connected
                    && _joinSucceeded

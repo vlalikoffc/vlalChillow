@@ -120,7 +120,9 @@ public sealed partial class GameMatchHost
                 // fighter counts alive. DeathMatch/TDM: death is a CUMULATIVE deaths counter
                 // (phone gold increments 1,2,3… and never resets on respawn) — leave it so the
                 // next master-authored death produces a real change the client can detect.
-                if (!IsDeathMatchRoom(room)
+                // Duel-only: C2=11 FFA death is also cumulative (wipe resets before WarmUp;
+                // scored rounds clear via ClearFighterDeathFlags on C2=22) — same leave-as-is.
+                if (!IsDeathMatchRoom(room) && !IsDuelRoom(room)
                     && room.ActorProps.TryGetValue((owner, MatchRoomPropKeys.Death), out var deadProp)
                     && !(deadProp.Kind == LobbyVariantKind.Int && deadProp.Int == 0))
                 {
@@ -360,15 +362,37 @@ public sealed partial class GameMatchHost
             {
                 // Attribution only for living fighter pawns — exclude WeaponDropManager (id=4)
                 // and other scene managers that also use field=5.
+                // Non-Duel modes: unchanged (relay always when living; attribution via shared path).
+                // Duel-only: still relay living pawns (WaitingPlayers warmup kills); drop field=5
+                // only after master Destroy removed the pawn (corpse HP spam); attribute via
+                // NoteDuelPawnDamage (FFA C2=11 + scored wipe phases).
                 bool isLivingPawn;
+                bool duelRoom;
                 lock (_roomGate)
+                {
                     isLivingPawn = st.Room.LivingPawns.ContainsKey(parsed.ObjectId);
-                if (isLivingPawn)
+                    duelRoom = IsDuelRoom(st.Room);
+                }
+
+                if (duelRoom)
+                {
+                    if (!isLivingPawn)
+                        dropRelay = true;
+                    else
+                        NoteDuelPawnDamage(
+                            st.Room,
+                            attackerActorNr: st.ActorNr,
+                            victimPawnId: parsed.ObjectId,
+                            damagePayload: parsed.Payload);
+                }
+                else if (isLivingPawn)
+                {
                     NoteDeathMatchDamage(
                         st.Room,
                         attackerActorNr: st.ActorNr,
                         victimPawnId: parsed.ObjectId,
                         damagePayload: parsed.Payload);
+                }
             }
 
             if (dropRelay)

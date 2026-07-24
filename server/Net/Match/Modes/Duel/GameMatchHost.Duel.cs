@@ -2,6 +2,7 @@ using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
 using StandChillow.LanServer.Net.Match.Logic.Defuse;
+using StandChillow.LanServer.Net.Match.Modes.Duel;
 
 namespace StandChillow.LanServer.Net;
 
@@ -10,8 +11,8 @@ namespace StandChillow.LanServer.Net;
 /// C2=10 → C2=11 FFA (~20s) → score wipe → C2=21 → per round
 /// ReCreate×2 → C2=22 (~5s freeze) → C2=31 combat → wipe → GameRpcHelper field=1 →
 /// C2=101 WinTeam → ~5s → next 22; first-to-8 → C2=201 FinalHud.
-/// No BombManager / C2=40. Weapons: Escalation-style — clients own loadout; host does
-/// <b>not</b> invent <c>current_loadout</c> / modifier schedule (no known builder).
+/// No BombManager / C2=40. Forced <c>current_loadout</c> / round modifiers from
+/// <c>DuelConfig</c> dump (<c>DuelLoadouts</c>); modifier rounds omit loadout on wire.
 /// </summary>
 public sealed partial class GameMatchHost
 {
@@ -166,6 +167,9 @@ public sealed partial class GameMatchHost
             room.Flow.ScoreCt = 0;
             room.Flow.CoLossesTr = 0;
             room.Flow.CoLossesCt = 0;
+            ClearDuelRoundLoadoutState(room.Flow);
+            room.Flow.DuelUsedRoundModifierIds.Clear();
+            room.Flow.DuelLobbyLoadout = null;
         }
         MatchHostSettings.MatchStartArmed = false;
         BroadcastRoomProps(room,
@@ -255,14 +259,18 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// C2=22 freeze — gold: ReCreateSceneManager ×2, <c>Time == RoundStartTime ≈ now</c>,
-    /// Round. Host waits ~5s then C2=31. No <c>current_loadout</c> / modifiers (no builder;
-    /// Escalation also leaves weapons to clients).
+    /// Round + loadout or modifier bag. Host waits ~5s then C2=31.
+    /// Non-modifier: <c>current_loadout</c> + <c>current_round_modifier_id=null</c>.
+    /// Modifier: <c>current_round_modifier_id</c> + <c>used_round_modifier_ids</c>, omit loadout
+    /// (client applies definition <c>_loadout</c> from wire id — probe gold).
     /// </summary>
     private void EnterDuelPreStart(MatchRoom room)
     {
         int round;
         var dur = DuelFlowParams.Freeze;
         var ends = DefuseTimer.ArmDeadline(dur);
+        DuelLoadouts.RoundPick pick;
+        IReadOnlyList<string> usedMods;
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex + 1;
@@ -280,28 +288,140 @@ public sealed partial class GameMatchHost
                 if (a.Nr != MatchHostActor.ActorNr)
                     room.ActorProps[(a.Nr, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(0);
             }
+
+            // p=1/3 per round (see DuelLoadouts.ModifierChancePerRound); OnlyGrenades gated off.
+            pick = DuelLoadouts.RollRound(Random.Shared);
+            ApplyDuelRoundPick(room.Flow, pick);
+            usedMods = room.Flow.DuelUsedRoundModifierIds.ToArray();
         }
 
         BroadcastDuelReCreateSceneManagers(room);
         ResetDuelRoundKills(room);
         var nowSec = ServerTimeSeconds();
-        // Gold: Time == RoundStartTime == now. Omit loadout/modifier keys until builder known.
-        BroadcastRoomProps(room,
-        [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
-            (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
-            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
-            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmupWillFinish)),
-        ], reason: $"Duel freeze C2=22 round={round}");
+        var props = BuildDuelFreezeRoomProps(nowSec, round, pick, usedMods);
+        BroadcastRoomProps(room, props, reason: $"Duel freeze C2=22 round={round}");
+        if (pick.HasModifier)
+        {
+            // Gold omits current_loadout on modifier bags — drop stale key from room snapshot.
+            lock (_roomGate)
+                room.ActorProps.Remove((0, MatchRoomPropKeys.CurrentLoadout));
+        }
 
         ClearFighterDeathFlags(room);
         DestroyTrackedRoundEntities(room, reason: "Duel freeze C2=22");
 
+        var loadoutTag = pick.HasModifier
+            ? $"mod={pick.Modifier!.WireId} (omit current_loadout; def loadout " +
+              $"{pick.ActiveLoadout.Name} PW={pick.ActiveLoadout.PrimaryWeapon} " +
+              $"SW={pick.ActiveLoadout.SecondaryWeapon})"
+            : $"loadout={pick.ActiveLoadout.Name} PW={pick.ActiveLoadout.PrimaryWeapon} " +
+              $"SW={pick.ActiveLoadout.SecondaryWeapon} " +
+              $"slots=[{string.Join(",", pick.ActiveLoadout.OtherSlots)}]";
         Console.WriteLine(
             $"[match-host] duel: freeze C2={MatchC2States.WarmupWillFinish} " +
             $"Time=RST={nowSec:0.###} wall={dur.TotalSeconds:0}s → C2=31 combat " +
-            $"(round={round}; no current_loadout TX — client weapons / TODO modifiers)");
-        PostServerDebugChat($"Заморозка · раунд {round} ({dur.TotalSeconds:0}s)");
+            $"(round={round}; {loadoutTag})");
+        PostServerDebugChat(
+            pick.HasModifier
+                ? $"Заморозка · раунд {round} · {pick.Modifier!.WireId}"
+                : $"Заморозка · раунд {round} · {pick.ActiveLoadout.Name}");
+    }
+
+    /// <summary>Apply rolled pick onto flow (modifier history + OnlyGrenades infinite-HE flag).</summary>
+    private static void ApplyDuelRoundPick(MatchFlowState flow, DuelLoadouts.RoundPick pick)
+    {
+        flow.DuelActiveLoadout = pick.ActiveLoadout;
+        if (pick.HasModifier && pick.Modifier is { } mod)
+        {
+            flow.DuelActiveModifierId = mod.WireId;
+            if (!flow.DuelUsedRoundModifierIds.Contains(mod.WireId))
+                flow.DuelUsedRoundModifierIds.Add(mod.WireId);
+            flow.DuelInfiniteHeGrenades = mod.InfiniteHeGrenades;
+        }
+        else
+        {
+            flow.DuelActiveModifierId = null;
+            flow.DuelInfiniteHeGrenades = false;
+        }
+    }
+
+    private static void ClearDuelRoundLoadoutState(MatchFlowState flow)
+    {
+        flow.DuelActiveLoadout = null;
+        flow.DuelActiveModifierId = null;
+        flow.DuelInfiniteHeGrenades = false;
+    }
+
+    /// <summary>
+    /// Gold C2=22 bag keys. Modifier rounds omit <c>current_loadout</c>
+    /// (<c>MATCH_DUEL_PROBE.md</c> rounds 3/6/9).
+    /// </summary>
+    private static List<(string Key, LobbyVariant Value)> BuildDuelFreezeRoomProps(
+        double nowSec,
+        int round,
+        DuelLoadouts.RoundPick pick,
+        IReadOnlyList<string> usedMods)
+    {
+        var props = new List<(string Key, LobbyVariant Value)>
+        {
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
+            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
+        };
+
+        if (pick.HasModifier && pick.Modifier is { } mod)
+        {
+            props.Add((MatchRoomPropKeys.CurrentRoundModifierId, LobbyVariant.FromString(mod.WireId)));
+            props.Add((MatchRoomPropKeys.UsedRoundModifierIds, LobbyVariant.FromStrings(usedMods)));
+        }
+        else
+        {
+            props.Add((MatchRoomPropKeys.CurrentLoadout, BuildDuelCurrentLoadoutVariant(pick.ActiveLoadout)));
+            props.Add((MatchRoomPropKeys.CurrentRoundModifierId, LobbyVariant.Null()));
+        }
+
+        props.Add((MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmupWillFinish)));
+        return props;
+    }
+
+    /// <summary>
+    /// Nested <c>current_loadout</c> — PrimaryWeapon/SecondaryWeapon Byte, OtherSlots ByteArray
+    /// (probe gold; gpy ids from dump).
+    /// </summary>
+    internal static LobbyVariant BuildDuelCurrentLoadoutVariant(DuelLoadouts.Loadout loadout) =>
+        LobbyVariant.FromProps(
+        [
+            (DuelLoadouts.LoadoutKeys.PrimaryWeapon, LobbyVariant.FromByte(loadout.PrimaryWeapon)),
+            (DuelLoadouts.LoadoutKeys.SecondaryWeapon, LobbyVariant.FromByte(loadout.SecondaryWeapon)),
+            (DuelLoadouts.LoadoutKeys.OtherSlots, LobbyVariant.FromBytes(loadout.OtherSlots)),
+        ]);
+
+    /// <summary>
+    /// WaitingPlayers C2=10 bag extras — gold: random preset loadout + null modifier.
+    /// Called from world bootstrap for Duel rooms.
+    /// </summary>
+    private List<(string Key, LobbyVariant Value)> BuildDuelWaitingPlayersRoomProps(MatchRoom room)
+    {
+        DuelLoadouts.Loadout loadout;
+        lock (_roomGate)
+        {
+            if (room.Flow.DuelLobbyLoadout is not { } existing)
+            {
+                existing = DuelLoadouts.PickRandomPreset(Random.Shared);
+                room.Flow.DuelLobbyLoadout = existing;
+            }
+            loadout = existing;
+            room.Flow.DuelActiveLoadout = loadout;
+            room.Flow.DuelActiveModifierId = null;
+            room.Flow.DuelInfiniteHeGrenades = false;
+        }
+
+        return
+        [
+            (MatchRoomPropKeys.CurrentLoadout, BuildDuelCurrentLoadoutVariant(loadout)),
+            (MatchRoomPropKeys.CurrentRoundModifierId, LobbyVariant.Null()),
+            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WaitingPlayers)),
+        ];
     }
 
     private void ResetDuelRoundKills(MatchRoom room)

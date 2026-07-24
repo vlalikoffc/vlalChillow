@@ -132,6 +132,25 @@ public sealed class MatchFlowState
     public byte LastBombPlantField { get; set; }
     public byte LastBombPlantRpcId { get; set; } = 2;
     public double LastBombPlantTimeValue { get; set; }
+
+    /// <summary>
+    /// Duel: loadout chosen for WaitingPlayers C2=10 bag (random preset; null modifier).
+    /// Cleared on PreWarmup / rematch.
+    /// </summary>
+    public Modes.Duel.DuelLoadouts.Loadout? DuelLobbyLoadout { get; set; }
+    /// <summary>Duel: active round loadout (preset or modifier's own).</summary>
+    public Modes.Duel.DuelLoadouts.Loadout? DuelActiveLoadout { get; set; }
+    /// <summary>Duel: active <c>current_round_modifier_id</c> wire string, or null.</summary>
+    public string? DuelActiveModifierId { get; set; }
+    /// <summary>
+    /// Duel: cumulative <c>used_round_modifier_ids</c> for this match (probe accumulates).
+    /// </summary>
+    public List<string> DuelUsedRoundModifierIds { get; } = new();
+    /// <summary>
+    /// Duel OnlyGrenades round: infinite HE semantics when grenade throw path exists
+    /// (return on throw; drops still remove). Set only when that modifier is selected.
+    /// </summary>
+    public bool DuelInfiniteHeGrenades { get; set; }
 }
 
 /// <summary>Shared wipe / spawn / alive-count rules for match flow.</summary>

@@ -104,7 +104,9 @@ public sealed partial class GameMatchHost
             {
                 Console.WriteLine(
                     $"[observe] SetProperty death actor={actorNr} value={value} (same-tick wipe)");
-                NoteActorDeath(room, actorNr, value, source: "SetProperty");
+                // Duel FFA: AuthorDuelFfaDeath (Ranked2v2 NoteActorDeath ignores PreWarmup).
+                if (!TryHandleDuelDeathProp(room, actorNr, value, source: "SetProperty"))
+                    NoteActorDeath(room, actorNr, value, source: "SetProperty");
             }
 
             // Killer client owns kills — increment = confirmed elimination. Room master must
@@ -116,10 +118,8 @@ public sealed partial class GameMatchHost
                     $"[observe] SetProperty kills++ actor={actorNr} " +
                     $"{(hadPrev ? VariantAsInt(prevValue) : 0)}→{VariantAsInt(value)} " +
                     "(same-tick master death + wipe)");
-                if (IsDeathMatchRoom(room))
-                    NoteDeathMatchKillByKiller(room, actorNr);
-                else
-                    NoteBombModeKillByKiller(room, actorNr);
+                // Duel FFA branches inside; TDM / Allies / bomb paths unchanged vs HEAD.
+                RouteConfirmedKillByKiller(room, actorNr);
             }
         }
         catch (Exception ex)
@@ -223,16 +223,14 @@ public sealed partial class GameMatchHost
                 }
             }
 
-            // kills++ in a bag = confirmed kill — master-author victim death (TDM or bomb modes).
+            // kills++ = confirmed kill. Duel FFA branches in RouteConfirmedKillByKiller;
+            // TDM / Allies / Escalation / Defuse paths unchanged.
             if (killsIncreased)
             {
                 Console.WriteLine(
                     $"[observe] SetProperties kills++ actor={actorNr} " +
                     "(same-tick master death + wipe)");
-                if (IsDeathMatchRoom(room))
-                    NoteDeathMatchKillByKiller(room, actorNr);
-                else
-                    NoteBombModeKillByKiller(room, actorNr);
+                RouteConfirmedKillByKiller(room, actorNr);
             }
         }
         catch (Exception ex)
@@ -262,7 +260,10 @@ public sealed partial class GameMatchHost
             or MatchRoomPropKeys.CtRoundStartPlayersCount
             or MatchRoomPropKeys.TrRoundStartPlayersCount
             or MatchRoomPropKeys.FinalWinTeam
-            or MatchRoomPropKeys.MvpPlayer;
+            or MatchRoomPropKeys.MvpPlayer
+            or MatchRoomPropKeys.CurrentLoadout
+            or MatchRoomPropKeys.CurrentRoundModifierId
+            or MatchRoomPropKeys.UsedRoundModifierIds;
 
     /// <summary>
     /// Verbose [tdm-death] trace for the combat counters that drive the master-death path

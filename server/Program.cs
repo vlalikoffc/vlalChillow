@@ -467,7 +467,7 @@ static async Task RunConnectAsClientAsync(string[] args)
     Console.WriteLine("      Lobby pick: default auto-joins first lobby (never hangs); --pick = interactive; --index N = force.");
     Console.WriteLine("      Skip discovery: --ip <phone> --port 7778");
     Console.WriteLine("      Force match IP: --match-ip <lan-ip> (keeps op9 port, usually 7777)");
-    Console.WriteLine("      Fighting probe: --team ct|tr  (default Spectator; Ct/Tr spawn killable pawn)");
+    Console.WriteLine("      Fighting probe: --team ct|tr  (default Spectator; Ct/Tr spawn at catalog map pose)");
     Console.WriteLine();
 
     var profileName = "probe";
@@ -650,7 +650,7 @@ static async Task RunConnectAsClientAsync(string[] args)
     Console.WriteLine(
         $"Logging host ops. probeTeam={probeTeam}" +
         (probeTeam is MatchTeam.Ct or MatchTeam.Tr
-            ? " — after Found: team + Ct_Ct/Tr_Tr pawn + State (killable)."
+            ? " — after Found: team + catalog map spawn Ct_Ct/Tr_Tr + State (killable)."
             : " — after Found: Spectator.") +
         " On Play → follow op9 → Handshake → JoinRoom(Dedik).");
     Console.WriteLine("After Found: leave running — capture post-Found match RX. Captures → bin/.../captures/");

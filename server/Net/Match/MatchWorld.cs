@@ -70,6 +70,21 @@ public static class MatchRoomPropKeys
     /// (<c>allies-probe</c> run-20260723_215727). Bool <c>true</c> once per match.
     /// </summary>
     public const string SwappedTeam = "swapped_team";
+    /// <summary>
+    /// Duel forced loadout — nested PropertiesRecord
+    /// (<c>PrimaryWeapon</c>/<c>SecondaryWeapon</c>/<c>OtherSlots</c> bytes). Gold on C2=10
+    /// and non-modifier C2=22; omitted on modifier C2=22 (<c>MATCH_DUEL_PROBE.md</c>).
+    /// </summary>
+    public const string CurrentLoadout = "current_loadout";
+    /// <summary>
+    /// Duel active round modifier wire id (asset <c>m_Name</c>) or null.
+    /// Gold on C2=10 (null) and every C2=22.
+    /// </summary>
+    public const string CurrentRoundModifierId = "current_round_modifier_id";
+    /// <summary>
+    /// Duel cumulative used modifier ids (StringArray). Gold on modifier C2=22 bags only.
+    /// </summary>
+    public const string UsedRoundModifierIds = "used_round_modifier_ids";
 
     // bbo — actor props on SetProperty / SetProperties
     public const string Team = "team"; // <c>bbo.caav</c> / <c>cux</c> byte

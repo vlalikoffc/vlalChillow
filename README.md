@@ -8,13 +8,34 @@ Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engi
 
 ## What works
 
-- **Lobby** — LiteNetLib on UDP **7778** (join, roster, chat, mode/map selection)
+- **Lobby** — LiteNetLib on UDP **7778** (join, full roster, chat, mode/map selection, `/end`)
 - **Auto-discovery** — Bonjour V2 probe/reply on UDP **5056**; when phones search LAN lobbies, this host appears automatically (same as a phone-hosted lobby)
-- **Escalation on Prison** — the only fully playable match mode today: `/mode escalation`, `/map Prison`, then `/play` → match on UDP **7777** (WarmUp → rounds → defuse/wipe/explode)
+- **Match channel** — after `play`, clients move to UDP **7777**
+- **CLI dashboard** — TTY console + phone chat slash commands (`/mode`, `/map`, `/set start`, `/play`, `/end`, …)
+- **Graceful shutdown** — CTRL+C tears down cleanly; rematch via `play` again
+- **ConnectAsClient probe** — optional learning client (`--client`) can observe a real phone host or spawn a visible CT/Tr fighter from the map spawn catalog (see `server/Net/PROBE_README.md`)
 
-Console/chat commands (`/mode`, `/map`, `/set start`, `/play`, …) and the CLI dashboard (TTY) support the above.
+### Playable modes (from phone-host gold probes)
 
-**Not ready:** Ranked 2v2, Defuse, DeathMatch, and other modes are registered in the catalog but stub or partial — no reliable playable match yet. See each mode's README under `server/Net/Match/Modes/`.
+| Mode | How to start | Notes |
+|------|----------------|-------|
+| **Escalation** | `mode escalation` + map e.g. `Prison` | Bomb rounds; auto-plant → combat → round end. Verified on Prison. |
+| **Ranked2v2 (Allies)** | `mode ranked2v2` + `* 2x2` map | First-to-8, half-time after round 7, ~10s buy (C2=22), plant/defuse, **109s** host combat timeout |
+| **Ranked2v2Alt** | `mode ranked2v2alt` | Same Allies FSM; Alt map half |
+| **RankedDefuse** | `mode rankeddefuse` | Same Allies bomb-round flow; first-to-8 |
+| **Defuse** | `mode defuse` | Same Allies flow; casual first-to-**6** |
+| **DeathMatch (TDM)** | `mode deathmatch` | WarmUp → continuous ~5 min live → end by team kills; respawns |
+| **Duel** | `mode duel` + map e.g. `Block` | First-to-8 eliminate rounds; host rolls loadouts / round modifiers |
+
+Mode FSMs are driven from ConnectAsClient captures and decompile — not invented. Per-mode notes live under `server/Net/Match/Modes/<Mode>/`.
+
+### Honest limits
+
+- **Bots** — reverse dump / research only; dedicated host is **human-only** (no `/bot` runtime yet)
+- **Duel OnlyGrenades** — modifier fully defined in `DuelLoadouts`, but **RNG-gated off** until host grenade throw works
+- **TDM weapon buy** — client-side `WeaponBuyHud` / match settings; host relays buy props and pawn loadout trailing, does **not** invent a TDM loadout bag
+- **ArmsRace / FreeForAll** — catalog stubs; refuse wire drive
+- Maps: use each mode’s `SelectedLevels` list; Escalation is the best-tested on Prison
 
 ## Screenshots
 
@@ -54,23 +75,24 @@ Phones: open StandChillow → LAN → your lobby should appear → join → chat
 Two steps matter:
 
 1. **`play`** (or phone **`/play`**) — creates the match channel and moves clients to UDP 7777. Use again for rematch (tears down the previous match).
-2. **`set start`** / **`start`** / **`/set start`** — arms WarmUp once both teams have at least one player. Without this, the match stays in waiting (C2=10).
+2. **`set start`** / **`start`** / **`/set start`** — arms WarmUp / waiting exit once both teams have at least one player. Without this, the match stays in waiting (C2=10).
 
-Typical flow: everyone joins lobby → host runs `mode escalation` and `map Prison` → host runs `play` → both teams pick CT/T → host runs `set start` → WarmUp → live rounds.
+Typical flow: everyone joins lobby → host picks `mode` + `map` → host runs `play` → both teams pick CT/T → host runs `set start` → WarmUp / buy → live rounds.
 
 ### Useful console commands
 
 ```
-mode escalation          # only mode with a full match loop today
-map Prison               # Escalation is verified on Prison only
-set start                # arm WarmUp when both teams ready
+mode escalation          # or ranked2v2, defuse, deathmatch, duel, …
+map Prison               # pick a map from that mode’s SelectedLevels
+set start                # arm when both teams ready
 play                     # launch / rematch
+end                      # end match / return path
 status                   # lobby + match summary
 plugins                  # list loaded plugins
 quit
 ```
 
-Phone chat accepts the same slash commands (`/mode`, `/map`, `/set start`, `/play`, …).
+Phone chat accepts the same slash commands (`/mode`, `/map`, `/set start`, `/play`, `/end`, …).
 
 Optional lobby title as first argument:
 
@@ -84,7 +106,11 @@ Sniff a **real phone host** to learn protocol — do not use for production host
 
 ```bash
 dotnet run -c Release -- --client
+dotnet run -c Release -- --client --team ct    # visible fighter at catalog spawn
+dotnet run -c Release -- --client --team tr
 ```
+
+Captures are for analysis only — never replayed as host replies. See `server/Net/PROBE_README.md`.
 
 ## Plugins
 
@@ -102,6 +128,7 @@ Plugins are admin/display sidecars only — they must not invent wire protocol o
 
 ```
 server/           # Dedicated host (build & run here)
+server/Net/Match/Modes/   # Per-mode FSM + probe docs
 server/Plugins/   # Plugin API + loader
 server/plugins-src/   # Plugin source (Telegram)
 ARCHITECTURE.md   # Internal module map for contributors
