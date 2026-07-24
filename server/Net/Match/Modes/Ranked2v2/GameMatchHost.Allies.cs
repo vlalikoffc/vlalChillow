@@ -275,7 +275,7 @@ public sealed partial class GameMatchHost
         var liveNotBefore = zeroUtc + AlliesFlowParams.BuyEndGrace;
         // Clamp: LiveNotBefore must be strictly after zero wall.
         if (liveNotBefore <= zeroUtc)
-            liveNotBefore = zeroUtc + TimeSpan.FromMilliseconds(500);
+            liveNotBefore = zeroUtc + AlliesFlowParams.BuyEndGrace;
         lock (_roomGate)
         {
             room.Flow.AlliesBuyClientZeroSec = clientZeroSec;
@@ -294,7 +294,9 @@ public sealed partial class GameMatchHost
             $"[match-host] allies: buy armed zeroSec={clientZeroSec:0.###} " +
             $"wallToZero={remainToClientZero:0.###}s Time=RST={wireDeadline:0.###} " +
             $"pad={AlliesFlowParams.BuyClientClockPad:0} " +
-            $"LiveNotBeforeUtc={liveNotBefore:O} (zero+{AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms) " +
+            $"LiveNotBeforeUtc={liveNotBefore:O} " +
+            $"(host-zero+{AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms grace; " +
+            $"phone 0≈host-zero+~500ms; hold after phone≈{AlliesFlowParams.BuyEndGrace.TotalMilliseconds - 500:0}ms) " +
             $"zeroUtc={zeroUtc:O} → Live C2=101 (round={round} bomberId={bomberId})");
         PostServerDebugChat($"Закуп · раунд {round} (10s)");
     }
@@ -359,7 +361,9 @@ public sealed partial class GameMatchHost
             if (justArmed)
             {
                 Console.WriteLine(
-                    $"[match-host] allies: buy zero reached; delayLeftMs={delayLeftMs:0.###} " +
+                    $"[match-host] allies: host-zero reached; delayLeftMs={delayLeftMs:0.###} " +
+                    $"(grace from host-zero; phone 0≈host-zero+~500ms; " +
+                    $"hold after phone≈{AlliesFlowParams.BuyEndGrace.TotalMilliseconds - 500:0}ms) " +
                     $"LiveNotBeforeUtc={liveNotBefore:O} zeroUtc={zeroUtc:O} " +
                     $"zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###}");
             }
@@ -370,7 +374,9 @@ public sealed partial class GameMatchHost
             ? (now - zeroUtc).TotalMilliseconds
             : (now - (liveNotBefore - AlliesFlowParams.BuyEndGrace)).TotalMilliseconds;
         Console.WriteLine(
-            $"[match-host] allies: Live allowed after sinceZeroMs={sinceZeroMs:0.###} " +
+            $"[match-host] allies: Live allowed afterZeroMs={sinceZeroMs:0.###} " +
+            $"(grace from host-zero; phone 0≈host-zero+~500ms; " +
+            $"hold after phone≈{AlliesFlowParams.BuyEndGrace.TotalMilliseconds - 500:0}ms) " +
             $"zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###} " +
             $"LiveNotBeforeUtc={liveNotBefore:O}");
         return true;
@@ -471,11 +477,13 @@ public sealed partial class GameMatchHost
         ], reason: $"Allies Live C2=101 round={round} (no WinTeam)", phaseDeadlineSec: deadline);
 
         Console.WriteLine(
-            $"[match-host] allies: Live TX; sinceZeroMs={sinceZeroMs:0.###} " +
+            $"[match-host] allies: Live TX; afterZeroMs={sinceZeroMs:0.###} " +
+            $"(grace from host-zero; phone 0≈host-zero+~500ms; " +
+            $"hold after phone≈{AlliesFlowParams.BuyEndGrace.TotalMilliseconds - 500:0}ms) " +
             $"C2=101 round={round} bomberId={bomberId} " +
             $"zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###} " +
             $"RST={nowSec:0.###} Time={deadline:0.###} dur={roundDur.TotalSeconds:0}s " +
-            "(only after client buy UI 0 + grace; round-end WinTeam is separate C2=101)");
+            "(only after host-zero + BuyEndGrace; round-end WinTeam is separate C2=101)");
         PostServerDebugChat($"Live · раунд {round}");
     }
 
