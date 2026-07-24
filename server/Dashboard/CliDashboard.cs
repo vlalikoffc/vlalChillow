@@ -524,10 +524,9 @@ public sealed class CliDashboard : IDisposable
         var alliesBuy = allies && snap.Phase == MatchFlowPhase.WarmupWillFinish;
         if (snap.PhaseEndsUtc > DateTime.MinValue && snap.PhaseEndsUtc < DateTime.MaxValue)
         {
-            // Buy PhaseEndsUtc = client-zero; after zero, AlliesBuyEndGraceArmed holds Live.
-            remain = snap.AlliesBuyEndGraceArmed
-                ? 0
-                : (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
+            // Buy PhaseEndsUtc = client-zero; after zero, grace re-arms PhaseEndsUtc to LiveNotBefore.
+            // Show real remain during hold (do not force 0 — that hid the post-zero wait on CLI).
+            remain = (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
         }
         else if (snap.TimeDeadline > 0
                  && snap.Phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted
@@ -548,7 +547,9 @@ public sealed class CliDashboard : IDisposable
             MatchFlowPhase.Warmup => allies ? $"WARM-UP · Round {Math.Max(1, snap.Round)}" : "WARM-UP",
             // Allies: C2=22 is the real buy/prep (visible timer). Generic Ranked keeps MATCH STARTING.
             MatchFlowPhase.WarmupWillFinish => allies
-                ? $"PREP · Round {snap.Round} · C2=22"
+                ? (snap.AlliesBuyEndGraceArmed
+                    ? $"PREP · Round {snap.Round} · C2=22 · LIVE HOLD"
+                    : $"PREP · Round {snap.Round} · C2=22")
                 : "MATCH STARTING",
             MatchFlowPhase.PurchasePhase => allies
                 ? $"POST-BUY · Round {snap.Round} · C2=31"

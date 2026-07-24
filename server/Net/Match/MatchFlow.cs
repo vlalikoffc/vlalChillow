@@ -96,11 +96,17 @@ public sealed class MatchFlowState
     public bool AlliesBuyEndGraceArmed { get; set; }
     /// <summary>
     /// Allies C2=22: wall-clock earliest moment Live/C2=101 may TX —
-    /// set at buy bag to <c>clientZeroUtc + BuyEndGrace</c>. Independent of
+    /// set at buy bag to <c>zeroUtc + BuyEndGrace</c> (never <c>UtcNow+grace</c> at TX —
+    /// that expires during the 10s buy and makes post-zero wait a no-op). Independent of
     /// <see cref="PhaseEndsUtc"/> so buy-zero and post-zero grace cannot share one deadline.
-    /// <see cref="DateTime.MinValue"/> = unset.
+    /// <see cref="DateTime.MinValue"/> = unset (must not pass the Live gate).
     /// </summary>
     public DateTime AlliesBuyLiveNotBeforeUtc { get; set; } = DateTime.MinValue;
+    /// <summary>
+    /// Allies C2=22: UTC wall when host buy-zero deadline was armed (<see cref="PhaseEndsUtc"/>
+    /// at bag TX). Used for <c>sinceZeroMs</c> Live logs. Cleared on PreStart / Live.
+    /// </summary>
+    public DateTime AlliesBuyZeroUtc { get; set; } = DateTime.MinValue;
     /// <summary>
     /// Allies C2=22: absolute <c>ServerTimeSeconds</c> when the padded buy UI hits 0
     /// (<c>wireDeadline + BuyClientClockPad</c> = bag now + BuyPhase). Live / C2=101 must
