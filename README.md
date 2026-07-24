@@ -19,23 +19,21 @@ Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engi
 
 | Mode | How to start | Notes |
 |------|----------------|-------|
-| **Escalation** | `mode escalation` + map e.g. `Prison` | Bomb rounds; auto-plant → combat → round end. Verified on Prison. |
+| **Escalation** | `mode escalation` + `map Prison` | Bomb rounds; auto-plant → combat → round end. **Prison only** for now. |
 | **Ranked2v2 (Allies)** | `mode ranked2v2` + `* 2x2` map | First-to-8, half-time after round 7, ~10s buy (C2=22), plant/defuse, **109s** host combat timeout |
 | **Ranked2v2Alt** | `mode ranked2v2alt` | Same Allies FSM; Alt map half |
 | **RankedDefuse** | `mode rankeddefuse` | Same Allies bomb-round flow; first-to-8 |
 | **Defuse** | `mode defuse` | Same Allies flow; casual first-to-**6** |
-| **DeathMatch (TDM)** | `mode deathmatch` | WarmUp → continuous ~5 min live → end by team kills; respawns |
 | **Duel** | `mode duel` + map e.g. `Block` | First-to-8 eliminate rounds; host rolls loadouts / round modifiers |
 
 Mode FSMs are driven from ConnectAsClient captures and decompile — not invented. Per-mode notes live under `server/Net/Match/Modes/<Mode>/`.
 
 ### Honest limits
 
-- **Bots** — reverse dump / research only; dedicated host is **human-only** (no `/bot` runtime yet)
+- **Escalation** — only **Prison** is a working map right now (other Escalation maps untested / not ready)
 - **Duel OnlyGrenades** — modifier fully defined in `DuelLoadouts`, but **RNG-gated off** until host grenade throw works
-- **TDM weapon buy** — client-side `WeaponBuyHud` / match settings; host relays buy props and pawn loadout trailing, does **not** invent a TDM loadout bag
-- **ArmsRace / FreeForAll** — catalog stubs; refuse wire drive
-- Maps: use each mode’s `SelectedLevels` list; Escalation is the best-tested on Prison
+- **ArmsRace / FreeForAll / DeathMatch** — catalog stubs or not listed as playable; refuse or incomplete wire drive
+- Maps: use each mode’s `SelectedLevels` list where the mode is playable
 
 ## Screenshots
 
@@ -82,8 +80,8 @@ Typical flow: everyone joins lobby → host picks `mode` + `map` → host runs `
 ### Useful console commands
 
 ```
-mode escalation          # or ranked2v2, defuse, deathmatch, duel, …
-map Prison               # pick a map from that mode’s SelectedLevels
+mode escalation          # or ranked2v2, defuse, duel, …
+map Prison               # Escalation: Prison only for now; other modes: SelectedLevels
 set start                # arm when both teams ready
 play                     # launch / rematch
 end                      # end match / return path
