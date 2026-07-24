@@ -158,16 +158,16 @@ public sealed partial class GameMatchHost
                 EnterAlliesPreStart(room);
                 break;
             case MatchFlowPhase.WarmupWillFinish:
-                // Buy (C2=22) → Live only after client-zero AND BuyEndGrace (two-step).
+                // Buy (C2=22) → Live only after client-zero AND LiveNotBeforeUtc.
                 if (TryExtendAlliesBuyForAwaitingSpawn(room))
                     break;
-                if (!TryArmOrPassAlliesBuyEndGrace(room))
+                if (!TryPassAlliesBuyLiveGate(room))
                     break;
                 EnterAlliesLive(room);
                 break;
             case MatchFlowPhase.PurchasePhase:
-                // Dead path for Allies (C2=31 skipped); still require post-zero grace.
-                if (!TryArmOrPassAlliesBuyEndGrace(room))
+                // Dead path for Allies (C2=31 skipped); still require LiveNotBeforeUtc.
+                if (!TryPassAlliesBuyLiveGate(room))
                     break;
                 EnterAlliesLive(room);
                 break;
@@ -213,9 +213,9 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// C2=22 = buy. Arm <see cref="MatchFlowState.PhaseEndsUtc"/> to client UI zero only
-    /// (BuyPhase wall). Live is gated later by <see cref="TryArmOrPassAlliesBuyEndGrace"/>
-    /// (+<see cref="AlliesFlowParams.BuyEndGrace"/>). Wire <c>Time</c> = now+10−pad so UI
-    /// shows ~10s. Do not arm PhaseEndsUtc from wire deadline (≈now+1).
+    /// (BuyPhase wall). Live is gated by <see cref="MatchFlowState.AlliesBuyLiveNotBeforeUtc"/>
+    /// (= zero wall + <see cref="AlliesFlowParams.BuyEndGrace"/>). Wire <c>Time</c> =
+    /// now+10−pad so UI shows ~10s. Do not arm PhaseEndsUtc from wire deadline (≈now+1).
     /// </summary>
     private void EnterAlliesPreStart(MatchRoom room)
     {
@@ -232,6 +232,7 @@ public sealed partial class GameMatchHost
             // (setup+broadcast) while client still showed full 10s.
             room.Flow.PhaseEndsUtc = DateTime.MaxValue;
             room.Flow.AlliesBuyEndGraceArmed = false;
+            room.Flow.AlliesBuyLiveNotBeforeUtc = DateTime.MinValue;
             room.Flow.AlliesBuyClientZeroSec = 0;
             room.Flow.PendingEndReason = null;
             room.Flow.PrepSpawnExtensionUsed = false;
@@ -267,12 +268,18 @@ public sealed partial class GameMatchHost
 
         // Step 1: wall until client-zero (ServerTime epoch matching padded UI → 0).
         // Do NOT arm PhaseEndsUtc from wireDeadline (≈now+1) — that TX Live while UI still runs.
+        // LiveNotBefore = zeroUtc + BuyEndGrace — separate field so tick cannot confuse
+        // buy-end with grace-end on the same PhaseEndsUtc.
         var remainToClientZero = DefuseTimer.RemainToClientZeroSec(
             clientZeroSec, ServerTimeSeconds(), dur);
+        var zeroUtc = DefuseTimer.ArmDeadline(TimeSpan.FromSeconds(remainToClientZero));
+        var liveNotBefore = zeroUtc + AlliesFlowParams.BuyEndGrace;
         lock (_roomGate)
         {
             room.Flow.AlliesBuyClientZeroSec = clientZeroSec;
-            room.Flow.PhaseEndsUtc = DefuseTimer.ArmDeadline(TimeSpan.FromSeconds(remainToClientZero));
+            room.Flow.PhaseEndsUtc = zeroUtc;
+            room.Flow.AlliesBuyLiveNotBeforeUtc = liveNotBefore;
+            room.Flow.AlliesBuyEndGraceArmed = false;
         }
 
         if (round <= 1)
@@ -283,62 +290,62 @@ public sealed partial class GameMatchHost
         Console.WriteLine(
             $"[match-host] allies: buy armed zeroSec={clientZeroSec:0.###} " +
             $"wallToZero={remainToClientZero:0.###}s Time=RST={wireDeadline:0.###} " +
-            $"pad={AlliesFlowParams.BuyClientClockPad:0} then grace=" +
-            $"{AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms → Live C2=101 " +
+            $"pad={AlliesFlowParams.BuyClientClockPad:0} liveNotBefore={liveNotBefore:O} " +
+            $"grace={AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms → Live C2=101 " +
             $"(round={round} bomberId={bomberId})");
         PostServerDebugChat($"Закуп · раунд {round} (10s)");
     }
 
     /// <summary>
-    /// Buy→Live gate: (1) <c>ServerTime &gt;= AlliesBuyClientZeroSec</c> (padded UI at 0),
-    /// (2) post-zero <see cref="DefuseTimer.TryArmOrPassPostZeroGrace"/> wall that cannot
-    /// pass same-tick (<c>armed &amp;&amp; UtcNow &gt;= PhaseEndsUtc</c>, not armed alone).
+    /// Buy→Live gate after <see cref="MatchFlowState.PhaseEndsUtc"/> (client-zero) elapses:
+    /// if <c>UtcNow &lt; AlliesBuyLiveNotBeforeUtc</c>, re-point PhaseEndsUtc to that deadline
+    /// and return false (outer tick waits). Else return true → EnterAlliesLive.
     /// </summary>
-    private bool TryArmOrPassAlliesBuyEndGrace(MatchRoom room)
+    private bool TryPassAlliesBuyLiveGate(MatchRoom room)
     {
         var nowSec = ServerTimeSeconds();
         double clientZeroSec;
+        DateTime liveNotBefore;
         lock (_roomGate)
+        {
             clientZeroSec = room.Flow.AlliesBuyClientZeroSec;
+            liveNotBefore = room.Flow.AlliesBuyLiveNotBeforeUtc;
+        }
 
-        // Hard rule: never arm grace / Live while client buy UI epoch is still in the future.
+        // Hard rule: never Live while client buy UI epoch is still in the future.
         if (clientZeroSec > 0 && nowSec < clientZeroSec)
             return false;
 
-        bool armed;
-        bool justArmed;
-        DateTime ends;
-        DateTime now;
-        lock (_roomGate)
+        var now = DateTime.UtcNow;
+        if (liveNotBefore > DateTime.MinValue && now < liveNotBefore)
         {
-            var graceArmed = room.Flow.AlliesBuyEndGraceArmed;
-            ends = room.Flow.PhaseEndsUtc;
-            var wasArmed = graceArmed;
-            now = DateTime.UtcNow;
-            armed = DefuseTimer.TryArmOrPassPostZeroGrace(
-                ref graceArmed, ref ends, AlliesFlowParams.BuyEndGrace, now);
-            justArmed = !wasArmed && graceArmed;
-            room.Flow.AlliesBuyEndGraceArmed = graceArmed;
-            room.Flow.PhaseEndsUtc = ends;
-        }
+            bool justArmed;
+            lock (_roomGate)
+            {
+                justArmed = !room.Flow.AlliesBuyEndGraceArmed;
+                room.Flow.AlliesBuyEndGraceArmed = true;
+                // Outer tick: if (UtcNow < PhaseEndsUtc) return — wait until LiveNotBefore.
+                room.Flow.PhaseEndsUtc = liveNotBefore;
+            }
 
-        if (justArmed)
-        {
-            Console.WriteLine(
-                $"[match-host] allies: BuyEndGrace START zeroSec={clientZeroSec:0.###} " +
-                $"nowSec={nowSec:0.###} hold=" +
-                $"{AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms until={ends:O}");
+            if (justArmed)
+            {
+                var holdMs = (liveNotBefore - now).TotalMilliseconds;
+                Console.WriteLine(
+                    $"[match-host] allies: grace armed until={liveNotBefore:O} " +
+                    $"holdMs={holdMs:0.###} zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###}");
+            }
             return false;
         }
 
-        if (!armed)
-            return false;
-
-        var armUtc = ends - AlliesFlowParams.BuyEndGrace;
-        var elapsedMs = (now - armUtc).TotalMilliseconds;
+        var zeroUtc = liveNotBefore > DateTime.MinValue
+            ? liveNotBefore - AlliesFlowParams.BuyEndGrace
+            : now;
+        var waitMs = (now - zeroUtc).TotalMilliseconds;
         Console.WriteLine(
-            $"[match-host] allies: BuyEndGrace COMPLETE elapsed={elapsedMs:0.###}ms " +
-            $"zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###} → Live");
+            $"[match-host] allies: Live allowed after waitMs={waitMs:0.###} " +
+            $"zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###} " +
+            $"liveNotBefore={liveNotBefore:O}");
         return true;
     }
 
@@ -357,7 +364,7 @@ public sealed partial class GameMatchHost
                 && room.Flow.BombPlantedUtc != DateTime.MinValue
                 && room.Flow.Phase == MatchFlowPhase.BombPlanted)
                 return;
-            // Hard gate: never TX Live/C2=101 from buy until client-zero + grace wall.
+            // Hard gate: never TX Live/C2=101 from buy until LiveNotBeforeUtc.
             if (room.Flow.Phase is MatchFlowPhase.WarmupWillFinish or MatchFlowPhase.PurchasePhase)
             {
                 var zeroSec = room.Flow.AlliesBuyClientZeroSec;
@@ -369,13 +376,14 @@ public sealed partial class GameMatchHost
                         $"nowSec={nowSecGate:0.###} zeroSec={zeroSec:0.###}");
                     return;
                 }
-                if (!room.Flow.AlliesBuyEndGraceArmed
-                    || DateTime.UtcNow < room.Flow.PhaseEndsUtc)
+                var liveNotBefore = room.Flow.AlliesBuyLiveNotBeforeUtc;
+                if (liveNotBefore > DateTime.MinValue && DateTime.UtcNow < liveNotBefore)
                 {
+                    room.Flow.AlliesBuyEndGraceArmed = true;
+                    room.Flow.PhaseEndsUtc = liveNotBefore;
                     Console.WriteLine(
-                        "[match-host] allies: EnterAlliesLive BLOCKED — BuyEndGrace " +
-                        $"armed={room.Flow.AlliesBuyEndGraceArmed} " +
-                        $"ends={room.Flow.PhaseEndsUtc:O} now={DateTime.UtcNow:O}");
+                        "[match-host] allies: EnterAlliesLive BLOCKED — LiveNotBefore " +
+                        $"until={liveNotBefore:O} now={DateTime.UtcNow:O}");
                     return;
                 }
             }
@@ -406,6 +414,7 @@ public sealed partial class GameMatchHost
             room.Flow.PhaseEndsUtc = ends;
             room.Flow.AlliesBuyClientZeroSec = 0;
             room.Flow.AlliesBuyEndGraceArmed = false;
+            room.Flow.AlliesBuyLiveNotBeforeUtc = DateTime.MinValue;
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
             room.Flow.PendingCombatDestroy.Clear();
@@ -672,9 +681,11 @@ public sealed partial class GameMatchHost
             if (room.Flow.PrepSpawnExtensionUsed)
                 return false;
             room.Flow.PrepSpawnExtensionUsed = true;
-            // Extend client-zero only; BuyEndGrace still applies via DefuseTimer post-zero grace.
+            // Extend client-zero + LiveNotBefore; grace still BuyEndGrace after new zero.
             room.Flow.AlliesBuyEndGraceArmed = false;
-            room.Flow.PhaseEndsUtc = DefuseTimer.ArmDeadline(TimeSpan.FromSeconds(5));
+            var zeroUtc = DefuseTimer.ArmDeadline(TimeSpan.FromSeconds(5));
+            room.Flow.PhaseEndsUtc = zeroUtc;
+            room.Flow.AlliesBuyLiveNotBeforeUtc = zeroUtc + AlliesFlowParams.BuyEndGrace;
             if (room.Flow.BomberActorNr <= 0)
             {
                 var pick = PickBomberActorNr(room);

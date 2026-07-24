@@ -354,10 +354,10 @@ public static class AlliesFlowParams
     /// </summary>
     public static readonly double BuyClientClockPad = 9.0;
     /// <summary>
-    /// After buy UI hits 0, host re-arms <c>PhaseEndsUtc</c> for this long before Live C2=101
-    /// (<c>DefuseTimer.TryArmOrPassPostZeroGrace</c> — not baked into the buy deadline).
+    /// After buy UI hits 0, host holds Live until <c>AlliesBuyLiveNotBeforeUtc</c>
+    /// (= client-zero wall + this span). Observed client lag ≈0.5s after host zero.
     /// </summary>
-    public static readonly TimeSpan BuyEndGrace = TimeSpan.FromMilliseconds(200);
+    public static readonly TimeSpan BuyEndGrace = TimeSpan.FromMilliseconds(500);
     /// <summary>Alias — C2=22 buy.</summary>
     public static TimeSpan PreStart => BuyPhase;
     /// <summary>Unused — C2=31 skipped.</summary>

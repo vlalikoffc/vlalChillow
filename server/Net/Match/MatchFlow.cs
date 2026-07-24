@@ -90,12 +90,17 @@ public sealed class MatchFlowState
     /// <summary>One 5s prep extension when a living fighter picked team but has no pawn yet.</summary>
     public bool PrepSpawnExtensionUsed { get; set; }
     /// <summary>
-    /// Allies C2=22: set when buy <see cref="PhaseEndsUtc"/> (client-zero) elapses and the
-    /// host has armed <see cref="AlliesFlowParams.BuyEndGrace"/> via
-    /// <c>DefuseTimer.TryArmOrPassPostZeroGrace</c> before Live. Cleared on each
-    /// EnterAlliesPreStart. Live must not fire while this is false.
+    /// Allies C2=22: true after client-zero while waiting for
+    /// <see cref="AlliesBuyLiveNotBeforeUtc"/> (dashboard / logs). Cleared on PreStart / Live.
     /// </summary>
     public bool AlliesBuyEndGraceArmed { get; set; }
+    /// <summary>
+    /// Allies C2=22: wall-clock earliest moment Live/C2=101 may TX —
+    /// set at buy bag to <c>clientZeroUtc + BuyEndGrace</c>. Independent of
+    /// <see cref="PhaseEndsUtc"/> so buy-zero and post-zero grace cannot share one deadline.
+    /// <see cref="DateTime.MinValue"/> = unset.
+    /// </summary>
+    public DateTime AlliesBuyLiveNotBeforeUtc { get; set; } = DateTime.MinValue;
     /// <summary>
     /// Allies C2=22: absolute <c>ServerTimeSeconds</c> when the padded buy UI hits 0
     /// (<c>wireDeadline + BuyClientClockPad</c> = bag now + BuyPhase). Live / C2=101 must
