@@ -524,8 +524,7 @@ public sealed class CliDashboard : IDisposable
         var alliesBuy = allies && snap.Phase == MatchFlowPhase.WarmupWillFinish;
         if (snap.PhaseEndsUtc > DateTime.MinValue && snap.PhaseEndsUtc < DateTime.MaxValue)
         {
-            // Buy PhaseEndsUtc = client-zero; after zero, grace re-arms PhaseEndsUtc to LiveNotBefore.
-            // Show real remain during hold (do not force 0 — that hid the post-zero wait on CLI).
+            // Buy PhaseEndsUtc stays at client-zero wall (grace uses AlliesBuyLiveNotBeforeUtc).
             remain = (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
         }
         else if (snap.TimeDeadline > 0
@@ -534,7 +533,10 @@ public sealed class CliDashboard : IDisposable
                  && !(allies && snap.Phase == MatchFlowPhase.RoundLive))
             remain = snap.TimeDeadline - Environment.TickCount / 1000.0;
 
-        // Ceil last second stays 00:01 until remain≈0; keep showing 00:00 during BuyEndGrace.
+        // Safety: if PhaseEndsUtc were ever grace-rewritten, Ceil(~0.5s) would show 00:01
+        // during LIVE HOLD — pin clock to 00:00 while hold is armed.
+        if (alliesBuy && snap.AlliesBuyEndGraceArmed)
+            remain = 0;
         var showClock = remain > 0
             || (alliesBuy && snap.AlliesBuyEndGraceArmed)
             || (alliesBuy && snap.PhaseEndsUtc > DateTime.UtcNow

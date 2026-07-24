@@ -294,34 +294,41 @@ public sealed partial class GameMatchHost
             $"wallToZero={remainToClientZero:0.###}s Time=RST={wireDeadline:0.###} " +
             $"pad={AlliesFlowParams.BuyClientClockPad:0} " +
             $"LiveNotBeforeUtc={liveNotBefore:O} " +
-            $"(host-zero+{AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms grace; " +
-            $"phone 0≈host-zero+~500ms; hold after phone≈{AlliesFlowParams.BuyEndGrace.TotalMilliseconds - 500:0}ms) " +
+            $"(host-zero+{AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms BuyEndGrace) " +
             $"zeroUtc={zeroUtc:O} → C2=31 {AlliesFlowParams.PostBuyPhase.TotalSeconds:0}s → Live " +
             $"(round={round} bomberId={bomberId})");
         PostServerDebugChat($"Закуп · раунд {round} (10s)");
     }
 
     /// <summary>
-    /// Buy→post-buy gate after client-zero. First observation always floors
+    /// Buy→post-buy gate after client-zero. First observation floors
     /// <see cref="MatchFlowState.AlliesBuyLiveNotBeforeUtc"/> to at least
-    /// <c>UtcNow + BuyEndGrace</c> (covers expired/MinValue LiveNotBefore no-ops),
-    /// re-points <see cref="MatchFlowState.PhaseEndsUtc"/>, returns false.
+    /// <c>UtcNow + BuyEndGrace</c>, arms hold, returns false.
+    /// Does <b>not</b> rewrite <see cref="MatchFlowState.PhaseEndsUtc"/> to the grace
+    /// deadline — that left ~0.5s on the buy clock (dashboard Ceil → 00:01) while HOLD.
     /// C2=31 only when <c>UtcNow &gt;= AlliesBuyLiveNotBeforeUtc</c> after that arm.
     /// </summary>
     private bool TryPassAlliesBuyLiveGate(MatchRoom room)
     {
         var nowSec = ServerTimeSeconds();
         double clientZeroSec;
+        DateTime zeroUtc;
         lock (_roomGate)
+        {
             clientZeroSec = room.Flow.AlliesBuyClientZeroSec;
+            zeroUtc = room.Flow.AlliesBuyZeroUtc;
+        }
 
         // Hard rule: never leave buy while client buy UI epoch is still in the future.
         if (clientZeroSec > 0 && nowSec < clientZeroSec)
             return false;
 
         var now = DateTime.UtcNow;
+        // Buy wall must be at 0 — do not arm hold while PhaseEndsUtc/zeroUtc still has remain.
+        if (zeroUtc > DateTime.MinValue && now < zeroUtc)
+            return false;
+
         DateTime liveNotBefore;
-        DateTime zeroUtc;
         bool justArmed;
         double delayLeftMs;
         lock (_roomGate)
@@ -333,10 +340,7 @@ public sealed partial class GameMatchHost
             if (justArmed)
             {
                 // First buy-zero tick: guarantee a real wall-clock hold from NOW.
-                // No-op cases this kills:
-                //  - LiveNotBefore was UtcNow+grace at TX → already past when buy ends
-                //  - LiveNotBefore MinValue → old gate treated as pass
-                //  - poll jitter: now already >= precomputed LiveNotBefore
+                // Keep PhaseEndsUtc at buy-zero so the shared timer reads 00:00 during hold.
                 var floor = now + AlliesFlowParams.BuyEndGrace;
                 if (liveNotBefore < floor)
                     liveNotBefore = floor;
@@ -344,15 +348,11 @@ public sealed partial class GameMatchHost
                     liveNotBefore = zeroUtc + AlliesFlowParams.BuyEndGrace;
                 room.Flow.AlliesBuyLiveNotBeforeUtc = liveNotBefore;
                 room.Flow.AlliesBuyEndGraceArmed = true;
-                // Outer tick: if (UtcNow < PhaseEndsUtc) return — wait until LiveNotBefore.
-                room.Flow.PhaseEndsUtc = liveNotBefore;
                 delayLeftMs = (liveNotBefore - now).TotalMilliseconds;
             }
             else
             {
                 delayLeftMs = (liveNotBefore - now).TotalMilliseconds;
-                if (now < liveNotBefore)
-                    room.Flow.PhaseEndsUtc = liveNotBefore;
             }
         }
 
@@ -362,8 +362,7 @@ public sealed partial class GameMatchHost
             {
                 Console.WriteLine(
                     $"[match-host] allies: host-zero reached; delayLeftMs={delayLeftMs:0.###} " +
-                    $"(grace from host-zero; phone 0≈host-zero+~500ms; " +
-                    $"hold after phone≈{AlliesFlowParams.BuyEndGrace.TotalMilliseconds - 500:0}ms) " +
+                    $"(BuyEndGrace={AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms) " +
                     $"LiveNotBeforeUtc={liveNotBefore:O} zeroUtc={zeroUtc:O} " +
                     $"zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###}");
             }
@@ -375,8 +374,7 @@ public sealed partial class GameMatchHost
             : (now - (liveNotBefore - AlliesFlowParams.BuyEndGrace)).TotalMilliseconds;
         Console.WriteLine(
             $"[match-host] allies: post-buy allowed afterZeroMs={sinceZeroMs:0.###} " +
-            $"(grace from host-zero; phone 0≈host-zero+~500ms; " +
-            $"hold after phone≈{AlliesFlowParams.BuyEndGrace.TotalMilliseconds - 500:0}ms) " +
+            $"(BuyEndGrace={AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms) " +
             $"zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###} " +
             $"LiveNotBeforeUtc={liveNotBefore:O}");
         return true;
@@ -459,6 +457,7 @@ public sealed partial class GameMatchHost
                 var nowGate = DateTime.UtcNow;
                 var liveNotBefore = room.Flow.AlliesBuyLiveNotBeforeUtc;
                 // MinValue or still-future LiveNotBefore → block (never treat unset as pass).
+                // Do not rewrite PhaseEndsUtc to grace — keep buy-zero on the shared clock.
                 if (liveNotBefore == DateTime.MinValue || nowGate < liveNotBefore)
                 {
                     var floor = nowGate + AlliesFlowParams.BuyEndGrace;
@@ -466,7 +465,6 @@ public sealed partial class GameMatchHost
                         liveNotBefore = floor;
                     room.Flow.AlliesBuyLiveNotBeforeUtc = liveNotBefore;
                     room.Flow.AlliesBuyEndGraceArmed = true;
-                    room.Flow.PhaseEndsUtc = liveNotBefore;
                     Console.WriteLine(
                         "[match-host] allies: EnterAlliesLive BLOCKED — LiveNotBefore " +
                         $"until={liveNotBefore:O} now={nowGate:O}");
@@ -525,8 +523,7 @@ public sealed partial class GameMatchHost
 
         Console.WriteLine(
             $"[match-host] allies: Live TX; afterZeroMs={sinceZeroMs:0.###} " +
-            $"(grace from host-zero; phone 0≈host-zero+~500ms; " +
-            $"hold after phone≈{AlliesFlowParams.BuyEndGrace.TotalMilliseconds - 500:0}ms) " +
+            $"(BuyEndGrace={AlliesFlowParams.BuyEndGrace.TotalMilliseconds:0}ms) " +
             $"C2=101 round={round} bomberId={bomberId} " +
             $"zeroSec={clientZeroSec:0.###} nowSec={nowSec:0.###} " +
             $"RST={nowSec:0.###} Time={deadline:0.###} dur={roundDur.TotalSeconds:0}s " +
