@@ -1,6 +1,7 @@
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Logic.Defuse;
 
 namespace StandChillow.LanServer.Net;
 
@@ -91,9 +92,12 @@ public sealed partial class GameMatchHost
                 return;
             }
 
-            var fuseEnd = bombPlantedUtc + AlliesFlowParams.BombFuse;
+            // Shared DefuseTimer — same plantUtc+BombFuse rule as Escalation.
             var now = DateTime.UtcNow;
-            if (now < fuseEnd)
+            var tick = DefuseTimer.TickFuse(
+                bombPlantedUtc, now, out var fuseEnd, out var elapsed,
+                AlliesFlowParams.BombFuse);
+            if (tick == FuseTickResult.Running)
             {
                 if (ends != fuseEnd)
                 {
@@ -103,7 +107,6 @@ public sealed partial class GameMatchHost
                 return;
             }
 
-            var elapsed = (now - bombPlantedUtc).TotalSeconds;
             Console.WriteLine(
                 "[match-host] allies: bomb fuse expired → T win " +
                 $"(plantUtc={bombPlantedUtc:O} elapsed={elapsed:F1}s " +
@@ -181,7 +184,7 @@ public sealed partial class GameMatchHost
     private void EnterAlliesWarmUp(MatchRoom room)
     {
         var dur = AlliesFlowParams.WarmUp;
-        var ends = DateTime.UtcNow + dur;
+        var ends = DefuseTimer.ArmDeadline(dur);
         var nowSec = ServerTimeSeconds();
         lock (_roomGate)
         {
@@ -247,10 +250,10 @@ public sealed partial class GameMatchHost
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
         // latest.log: Time=now+10 → client UI ~19s (bfqt ≈9s behind). Wire now+10−pad.
-        // Do NOT fall back to now+10 — that undid the pad (wireDeadline≈now+1).
-        var wireDeadline = nowSec + dur.TotalSeconds - AlliesFlowParams.BuyClientClockPad;
-        // Absolute ServerTime when padded client UI hits 0 (same epoch as the bag).
-        var clientZeroSec = nowSec + dur.TotalSeconds;
+        // Pad is Allies-optional on DefuseTimer (Escalation uses pad=0).
+        var wireDeadline = DefuseTimer.BuyWireDeadlineSec(
+            nowSec, dur, AlliesFlowParams.BuyClientClockPad);
+        var clientZeroSec = DefuseTimer.BuyClientZeroSec(nowSec, dur);
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(wireDeadline)),
@@ -262,11 +265,10 @@ public sealed partial class GameMatchHost
         ], reason: $"Allies buy C2=22 round={round}", phaseDeadlineSec: wireDeadline);
 
         // Step 1 only: wait until client-zero. Grace is a separate PhaseEndsUtc re-arm.
-        var remainToClientZero = clientZeroSec - ServerTimeSeconds();
-        if (remainToClientZero < 0.05)
-            remainToClientZero = dur.TotalSeconds;
+        var remainToClientZero = DefuseTimer.RemainToClientZeroSec(
+            clientZeroSec, ServerTimeSeconds(), dur);
         lock (_roomGate)
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow + TimeSpan.FromSeconds(remainToClientZero);
+            room.Flow.PhaseEndsUtc = DefuseTimer.ArmDeadline(TimeSpan.FromSeconds(remainToClientZero));
 
         if (round <= 1)
             SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
@@ -282,20 +284,24 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Two-step buy→Live gate. First call after client-zero: arm
-    /// <see cref="AlliesFlowParams.BuyEndGrace"/> on <see cref="MatchFlowState.PhaseEndsUtc"/>
-    /// and return false (do not Live). Second call after that deadline: return true.
+    /// Two-step buy→Live gate via shared <see cref="DefuseTimer.TryArmOrPassPostZeroGrace"/>
+    /// (Allies <see cref="AlliesFlowParams.BuyEndGrace"/> — Escalation has no equivalent).
     /// </summary>
     private bool TryArmOrPassAlliesBuyEndGrace(MatchRoom room)
     {
+        bool armed;
         lock (_roomGate)
         {
-            if (room.Flow.AlliesBuyEndGraceArmed)
-                return true;
-
-            room.Flow.AlliesBuyEndGraceArmed = true;
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow + AlliesFlowParams.BuyEndGrace;
+            var graceArmed = room.Flow.AlliesBuyEndGraceArmed;
+            var ends = room.Flow.PhaseEndsUtc;
+            armed = DefuseTimer.TryArmOrPassPostZeroGrace(
+                ref graceArmed, ref ends, AlliesFlowParams.BuyEndGrace);
+            room.Flow.AlliesBuyEndGraceArmed = graceArmed;
+            room.Flow.PhaseEndsUtc = ends;
         }
+
+        if (armed)
+            return true;
 
         Console.WriteLine(
             $"[match-host] allies: buy at 0 — hold BuyEndGrace=" +
@@ -343,7 +349,7 @@ public sealed partial class GameMatchHost
         int round;
         int bomberId;
         var roundDur = AlliesFlowParams.RoundDuration;
-        var ends = DateTime.UtcNow + roundDur;
+        var ends = DefuseTimer.ArmDeadline(roundDur);
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex;
@@ -485,7 +491,7 @@ public sealed partial class GameMatchHost
             room.Flow.BombPlanted = true;
             room.Flow.BombPlantedUtc = plantUtc;
             room.Flow.Phase = MatchFlowPhase.BombPlanted;
-            room.Flow.PhaseEndsUtc = plantUtc + AlliesFlowParams.BombFuse;
+            room.Flow.PhaseEndsUtc = DefuseTimer.FuseEndsUtc(plantUtc, AlliesFlowParams.BombFuse);
         }
 
         DateTime plantedAt;
@@ -620,9 +626,9 @@ public sealed partial class GameMatchHost
             if (room.Flow.PrepSpawnExtensionUsed)
                 return false;
             room.Flow.PrepSpawnExtensionUsed = true;
-            // Extend client-zero only; BuyEndGrace still applies via TryArmOrPassAlliesBuyEndGrace.
+            // Extend client-zero only; BuyEndGrace still applies via DefuseTimer post-zero grace.
             room.Flow.AlliesBuyEndGraceArmed = false;
-            room.Flow.PhaseEndsUtc = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            room.Flow.PhaseEndsUtc = DefuseTimer.ArmDeadline(TimeSpan.FromSeconds(5));
             if (room.Flow.BomberActorNr <= 0)
             {
                 var pick = PickBomberActorNr(room);

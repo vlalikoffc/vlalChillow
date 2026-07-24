@@ -5,6 +5,7 @@ using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Logic.Defuse;
 
 namespace StandChillow.LanServer.Net;
 
@@ -205,9 +206,12 @@ public sealed partial class GameMatchHost
                 return;
             }
 
-            var fuseEnd = bombPlantedUtc + MatchFlowTestParams.BombFuse;
+            // Shared DefuseTimer — Escalation gold plantUtc+BombFuse (never invent plantUtc).
             var now = DateTime.UtcNow;
-            if (now < fuseEnd)
+            var tick = DefuseTimer.TickFuse(
+                bombPlantedUtc, now, out var fuseEnd, out var elapsed,
+                MatchFlowTestParams.BombFuse);
+            if (tick == FuseTickResult.Running)
             {
                 if (ends != fuseEnd)
                 {
@@ -217,7 +221,6 @@ public sealed partial class GameMatchHost
                 return;
             }
 
-            var elapsed = (now - bombPlantedUtc).TotalSeconds;
             Console.WriteLine(
                 "[match-host] match-flow: bomb fuse expired → T win " +
                 $"(plantUtc={bombPlantedUtc:O} explodeUtc={now:O} " +
@@ -633,7 +636,7 @@ public sealed partial class GameMatchHost
             room.Flow.BombPlanted = true;
             room.Flow.BombPlantedUtc = plantUtc;
             room.Flow.Phase = MatchFlowPhase.BombPlanted;
-            room.Flow.PhaseEndsUtc = plantUtc + MatchFlowTestParams.BombFuse;
+            room.Flow.PhaseEndsUtc = DefuseTimer.FuseEndsUtc(plantUtc, MatchFlowTestParams.BombFuse);
         }
 
         DateTime plantedAt;
@@ -641,7 +644,7 @@ public sealed partial class GameMatchHost
             plantedAt = room.Flow.BombPlantedUtc;
         var nowSec = ServerTimeSeconds();
         var fuseSec = MatchFlowTestParams.BombFuse.TotalSeconds;
-        var deadline = nowSec + fuseSec;
+        var deadline = DefuseTimer.FuseWireDeadlineSec(nowSec, MatchFlowTestParams.BombFuse);
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),

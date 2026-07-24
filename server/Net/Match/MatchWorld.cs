@@ -294,6 +294,7 @@ public static class MatchFlowTestParams
 /// <summary>
 /// Escalation phone-host timings — <c>MATCH_ESCALATION_PROBE.md</c> stime deltas
 /// (Prison ConnectAsClient 2026-07-23). Distinct from Ranked Prep→Live.
+/// Fuse/deadline math lives in <c>Logic/Defuse/DefuseTimer</c> (this class keeps durations).
 /// </summary>
 public static class EscalationFlowParams
 {
@@ -324,6 +325,7 @@ public static class EscalationFlowParams
 /// <c>allies-probe</c> run-20260723_215727 RX captures — see
 /// <c>MATCH_ALLIES_PROBE.md</c>. Distinct from generic <see cref="MatchFlowTestParams"/> /
 /// Escalation — do not copy Ranked 3s PreStart or 90s round clock onto Allies.
+/// Shared fuse/buy pad/grace math: <c>Logic/Defuse/DefuseTimer</c> (constants stay here).
 /// </summary>
 public static class AlliesFlowParams
 {
@@ -341,19 +343,19 @@ public static class AlliesFlowParams
     public static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(3);
     /// <summary>
     /// C2=22 buy — host waits until client-visible countdown hits 0 (ServerTime now+10s).
-    /// Wire <c>Time</c> uses <see cref="BuyClientClockPad"/> so the client shows ~10s
-    /// (bare now+10 → ~19). Live−wireTime ≈ pad by construction — host wait is BuyPhase, not pad.
+    /// Wire <c>Time</c> uses <see cref="BuyClientClockPad"/> via
+    /// <c>DefuseTimer.BuyWireDeadlineSec</c> so the client shows ~10s (bare now+10 → ~19).
     /// After client-zero, host arms a separate <see cref="BuyEndGrace"/> deadline then Live.
     /// </summary>
     public static readonly TimeSpan BuyPhase = TimeSpan.FromSeconds(10);
     /// <summary>
-    /// Client bfqt lag vs host <c>ServerTimeSeconds</c> on this LAN build (19−10 from live log).
-    /// Wire deadline = now + BuyPhase − pad → UI starts at ~10s; host still waits BuyPhase.
+    /// Optional <c>DefuseTimer</c> clientClockPadSec — bfqt lag on this LAN build (19−10).
+    /// Escalation uses pad=0; do not drop this for Allies UI on 2.06 OBT F1.
     /// </summary>
     public static readonly double BuyClientClockPad = 9.0;
     /// <summary>
     /// After buy UI hits 0, host re-arms <c>PhaseEndsUtc</c> for this long before Live C2=101
-    /// (<c>TryArmOrPassAlliesBuyEndGrace</c> — not baked into the buy deadline).
+    /// (<c>DefuseTimer.TryArmOrPassPostZeroGrace</c> — not baked into the buy deadline).
     /// </summary>
     public static readonly TimeSpan BuyEndGrace = TimeSpan.FromMilliseconds(200);
     /// <summary>Alias — C2=22 buy.</summary>

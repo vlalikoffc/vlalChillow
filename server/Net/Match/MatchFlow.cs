@@ -91,8 +91,9 @@ public sealed class MatchFlowState
     public bool PrepSpawnExtensionUsed { get; set; }
     /// <summary>
     /// Allies C2=22: set when buy <see cref="PhaseEndsUtc"/> (client-zero) elapses and the
-    /// host has armed <see cref="AlliesFlowParams.BuyEndGrace"/> before Live. Cleared on
-    /// each EnterAlliesPreStart. Live must not fire while this is false.
+    /// host has armed <see cref="AlliesFlowParams.BuyEndGrace"/> via
+    /// <c>DefuseTimer.TryArmOrPassPostZeroGrace</c> before Live. Cleared on each
+    /// EnterAlliesPreStart. Live must not fire while this is false.
     /// </summary>
     public bool AlliesBuyEndGraceArmed { get; set; }
     /// <summary>

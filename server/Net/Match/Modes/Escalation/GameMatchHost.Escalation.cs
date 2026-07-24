@@ -1,6 +1,7 @@
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Logic.Defuse;
 
 namespace StandChillow.LanServer.Net;
 
@@ -75,16 +76,18 @@ public sealed partial class GameMatchHost
         }
 
         // Fuse: only after auto-plant (plantUtc set). No RoundLive timeout fantasy.
+        // Shared DefuseTimer — Escalation gold plantUtc+BombFuse (Logic/Defuse).
         if (bombPlanted && bombPlantedUtc != DateTime.MinValue
             && (phase == MatchFlowPhase.BombPlanted || combatStarted))
         {
             if (combatStarted)
             {
-                var fuseEnd = bombPlantedUtc + EscalationFlowParams.BombFuse;
                 var now = DateTime.UtcNow;
-                if (now >= fuseEnd)
+                var tick = DefuseTimer.TickFuse(
+                    bombPlantedUtc, now, out var fuseEnd, out var elapsed,
+                    EscalationFlowParams.BombFuse);
+                if (tick == FuseTickResult.Expired)
                 {
-                    var elapsed = (now - bombPlantedUtc).TotalSeconds;
                     Console.WriteLine(
                         "[match-host] escalation: bomb fuse expired → T win " +
                         $"(plantUtc={bombPlantedUtc:O} elapsed={elapsed:F1}s " +
@@ -162,7 +165,7 @@ public sealed partial class GameMatchHost
         int round;
         byte bombSite;
         var dur = EscalationFlowParams.PreStart;
-        var ends = DateTime.UtcNow + dur;
+        var ends = DefuseTimer.ArmDeadline(dur);
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex + 1;
@@ -234,7 +237,7 @@ public sealed partial class GameMatchHost
             room.Flow.BombPlantedUtc = plantUtc;
             room.Flow.PendingBombPlant = false;
             room.Flow.Phase = MatchFlowPhase.BombPlanted;
-            room.Flow.PhaseEndsUtc = plantUtc + gap;
+            room.Flow.PhaseEndsUtc = DefuseTimer.ArmDeadline(gap, plantUtc);
             room.Flow.EscalationCombatStarted = false;
         }
 
@@ -243,7 +246,7 @@ public sealed partial class GameMatchHost
         var nPlant = BroadcastInitReady(room, plantPkt, tag: "match_tx_BombManager_autoPlant");
         var nowSec = ServerTimeSeconds();
         var fuseSec = EscalationFlowParams.BombFuse.TotalSeconds;
-        var deadline = nowSec + fuseSec;
+        var deadline = DefuseTimer.FuseWireDeadlineSec(nowSec, EscalationFlowParams.BombFuse);
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),
@@ -276,7 +279,7 @@ public sealed partial class GameMatchHost
             plantUtc = room.Flow.BombPlantedUtc;
             room.Flow.EscalationCombatStarted = true;
             room.Flow.Phase = MatchFlowPhase.PurchasePhase;
-            room.Flow.PhaseEndsUtc = plantUtc + EscalationFlowParams.BombFuse;
+            room.Flow.PhaseEndsUtc = DefuseTimer.FuseEndsUtc(plantUtc, EscalationFlowParams.BombFuse);
         }
 
         SyncDeadActorsFromDeathProps(room);
@@ -287,7 +290,8 @@ public sealed partial class GameMatchHost
         [
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.PurchasePhase)),
         ], reason: "Escalation combat C2=31");
-        var fuseRemain = (plantUtc + EscalationFlowParams.BombFuse - DateTime.UtcNow).TotalSeconds;
+        var fuseRemain = (DefuseTimer.FuseEndsUtc(plantUtc, EscalationFlowParams.BombFuse)
+            - DateTime.UtcNow).TotalSeconds;
         Console.WriteLine(
             $"[match-host] escalation: combat C2={MatchC2States.PurchasePhase} " +
             $"fuseRemaining≈{Math.Max(0, fuseRemain):F1}s " +
