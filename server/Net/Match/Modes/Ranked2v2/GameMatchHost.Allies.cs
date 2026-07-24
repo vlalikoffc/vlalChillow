@@ -204,9 +204,8 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// C2=22 = buy (live client). Wire: <c>Time == RoundStartTime == deadline</c> (both equal).
-    /// Unequal RST+Time stacked on this client as ~19s (Time−RST + Time−now). Host waits 10s
-    /// then Live — no C2=31 (proven no-op on this build).
+    /// C2=22 = buy. Host waits <see cref="AlliesFlowParams.BuyPhase"/> (10s wall).
+    /// Wire <c>Time</c> = now+10−pad so client UI shows ~10s (not ~19). Then Live C2=101.
     /// </summary>
     private void EnterAlliesPreStart(MatchRoom room)
     {
@@ -238,34 +237,35 @@ public sealed partial class GameMatchHost
         ClearBombAuthority(room, $"Allies buy C2=22 round={round} bomberId={bomberId}");
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
-        var deadline = nowSec + dur.TotalSeconds;
-        // CRITICAL: Time == RoundStartTime == deadline. Log 19→10 was Time=RST+10 with
-        // RST=now → client stacked (Time−RST)+(Time−now) ≈ 10+9.
+        // Client showed ~19s when Time=now+10 (bfqt lag ≈9s). Pad so UI ≈10s; host still waits 10s wall.
+        var wireDeadline = nowSec + dur.TotalSeconds - AlliesFlowParams.BuyClientClockPad;
+        if (wireDeadline <= nowSec + 1.0)
+            wireDeadline = nowSec + dur.TotalSeconds;
         BroadcastRoomProps(room,
         [
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(wireDeadline)),
             (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
-            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(deadline)),
+            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmupWillFinish)),
-        ], reason: $"Allies buy C2=22 round={round}", phaseDeadlineSec: deadline);
+        ], reason: $"Allies buy C2=22 round={round}", phaseDeadlineSec: wireDeadline);
         if (round <= 1)
             SetAllFightersMoney(room, MatchFlowTestParams.RoundStartMoney);
         ClearFighterDeathFlags(room);
         DestroyTrackedRoundEntities(room, reason: "Allies buy C2=22");
         Console.WriteLine(
             $"[match-host] allies: buy C2=22 round={round} bomberId={bomberId} " +
-            $"dur={dur.TotalSeconds:0}s Time=RST={deadline:0.###} (equal deadline — no 19s stack; " +
-            "skip C2=31 → Live)");
+            $"wall={dur.TotalSeconds:0}s RST={nowSec:0.###} Time={wireDeadline:0.###} " +
+            $"(pad={AlliesFlowParams.BuyClientClockPad:0}s → UI~10s; then Live C2=101)");
         PostServerDebugChat($"Закуп · раунд {round} (10s)");
     }
 
-    /// <summary>Unused — C2=31 skipped on dedicated (client no-op). Kept for call-site safety.</summary>
+    /// <summary>Unused — C2=31 skipped.</summary>
     private void EnterAlliesPostBuy(MatchRoom room) => EnterAlliesLive(room);
 
     /// <summary>
-    /// Live — gold: no room bag after Prep; combat after buy. C2=101 is round-end only.
-    /// No Live <c>Time</c> TX; host <see cref="MatchFlowState.PhaseEndsUtc"/> ends the round.
+    /// Live — TX C2=101 MatchStarted (no WinTeam) to leave C2=22 buy UI. Silent Live left
+    /// clients counting buy Time to 0 while host was already RoundLive.
     /// </summary>
     private void EnterAlliesLive(MatchRoom room)
     {
@@ -284,7 +284,6 @@ public sealed partial class GameMatchHost
 
         int round;
         int bomberId;
-        var txBomberFix = false;
         var roundDur = AlliesFlowParams.RoundDuration;
         var ends = DateTime.UtcNow + roundDur;
         lock (_roomGate)
@@ -294,10 +293,7 @@ public sealed partial class GameMatchHost
             {
                 var pick = PickBomberActorNr(room);
                 if (pick > 0)
-                {
                     room.Flow.BomberActorNr = pick;
-                    txBomberFix = true;
-                }
             }
             bomberId = room.Flow.BomberActorNr;
             room.Flow.Phase = MatchFlowPhase.RoundLive;
@@ -307,22 +303,22 @@ public sealed partial class GameMatchHost
             room.Flow.PendingCombatDestroy.Clear();
         }
 
-        if (txBomberFix && bomberId > 0)
-        {
-            BroadcastRoomProps(room,
-            [
-                (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
-            ], reason: $"Allies Live bomberId-fix={bomberId}");
-        }
+        var nowSec = ServerTimeSeconds();
+        var deadline = nowSec + roundDur.TotalSeconds;
+        BroadcastRoomProps(room,
+        [
+            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.MatchStarted)),
+            (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
+            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+            (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
+        ], reason: $"Allies Live C2=101 round={round} (no WinTeam)", phaseDeadlineSec: deadline);
 
-        byte wireC2;
-        lock (_roomGate)
-            wireC2 = room.RoomC2;
         Console.WriteLine(
-            $"[match-host] allies: Live round={round} bomberId={bomberId} " +
-            $"(silent wire — no C2/Time TX; wire C2={wireC2}; host timeout " +
-            $"{roundDur.TotalSeconds:0}s → CT; C2=101 WinTeam only on round end)");
-        PostServerDebugChat($"Live · раунд {round} (таймаут {roundDur.TotalSeconds:0}s)");
+            $"[match-host] allies: Live C2=101 round={round} bomberId={bomberId} " +
+            $"RST={nowSec:0.###} Time={deadline:0.###} dur={roundDur.TotalSeconds:0}s " +
+            "(ends C2=22 buy; round-end WinTeam is separate C2=101 bag)");
+        PostServerDebugChat($"Live · раунд {round}");
     }
 
     private void ContinueAfterRoundEndAllies(MatchRoom room)
