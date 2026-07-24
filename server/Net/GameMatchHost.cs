@@ -336,8 +336,18 @@ public sealed partial class GameMatchHost : IDisposable
             _matchSelectedLevel = selectedLevel.Trim();
         }
 
-        Console.WriteLine(
-            $"[match-host] match selection C0='{_matchGameModeId}' C1='{_matchSelectedLevel}'");
+        if (MatchHostSettings.TryDefaultWinsForMode(_matchGameModeId, out var wins))
+        {
+            MatchHostSettings.WinsNeeded = wins;
+            Console.WriteLine(
+                $"[match-host] match selection C0='{_matchGameModeId}' C1='{_matchSelectedLevel}' " +
+                $"wins=first-to-{wins}");
+        }
+        else
+        {
+            Console.WriteLine(
+                $"[match-host] match selection C0='{_matchGameModeId}' C1='{_matchSelectedLevel}'");
+        }
     }
 
     public (string GameModeId, string SelectedLevel) GetMatchSelection()

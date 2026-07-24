@@ -328,8 +328,11 @@ public static class EscalationFlowParams
 /// </summary>
 public static class AlliesFlowParams
 {
-    /// <summary>Round index after which half-time 111→112→113 runs (not match end).</summary>
-    public const int HalfTimeAfterRound = 7;
+    /// <summary>
+    /// Round index after which half-time 111→112→113 runs (not match end).
+    /// Allies first-to-8 → 7; follows <see cref="MatchHostSettings.HalfTimeAfterRound"/>.
+    /// </summary>
+    public static int HalfTimeAfterRound => MatchHostSettings.HalfTimeAfterRound;
     /// <summary>ReCreateSceneManager ids on every PreStart C2=22 (same as Escalation gold).</summary>
     public static readonly short[] RecreateSceneManagerIds = EscalationFlowParams.RecreateSceneManagerIds;
 
@@ -355,7 +358,8 @@ public static class AlliesFlowParams
     public static TimeSpan BombFuse => MatchHostSettings.BombFuse;
     /// <summary>
     /// Host-only combat round timeout while wire stays on C2=31 (no Live <c>Time</c> TX) —
-    /// default via <see cref="MatchHostSettings.RoundDuration"/> (90s).
+    /// default via <see cref="MatchHostSettings.RoundDuration"/> (109s / client 1:49).
+    /// Do not invent wire Live <c>Time=now+109</c> — phone gold omits combat Time refresh.
     /// </summary>
     public static TimeSpan RoundDuration => MatchHostSettings.RoundDuration;
 
@@ -365,6 +369,27 @@ public static class AlliesFlowParams
     public static readonly TimeSpan HalfTimeSwapHold = TimeSpan.FromSeconds(1);
     /// <summary>C2=113 → round 8 PreStart C2=22 — gold RX ≈7.0s.</summary>
     public static readonly TimeSpan HalfTimeTransition = TimeSpan.FromSeconds(7);
+}
+
+/// <summary>
+/// RankedDefuse / casual Defuse / Ranked2v2Alt — same Allies gold timers and C2 bags
+/// (MATCH_ALLIES_PROBE.md). Win target differs: RankedDefuse/Alt = 8, Defuse = 6
+/// (<see cref="MatchHostSettings.TryDefaultWinsForMode"/>). Host combat timeout = 109s.
+/// </summary>
+public static class DefuseFlowParams
+{
+    public static readonly short[] RecreateSceneManagerIds = AlliesFlowParams.RecreateSceneManagerIds;
+    public static TimeSpan BuyPhase => AlliesFlowParams.BuyPhase;
+    public static TimeSpan PreStart => AlliesFlowParams.PreStart;
+    public static TimeSpan Prep => AlliesFlowParams.Prep;
+    public static TimeSpan WarmUp => AlliesFlowParams.WarmUp;
+    public static TimeSpan RoundEndPause => AlliesFlowParams.RoundEndPause;
+    public static TimeSpan BombFuse => AlliesFlowParams.BombFuse;
+    public static TimeSpan RoundDuration => AlliesFlowParams.RoundDuration;
+    public static int HalfTimeAfterRound => AlliesFlowParams.HalfTimeAfterRound;
+    public static TimeSpan HalfTimeIntro => AlliesFlowParams.HalfTimeIntro;
+    public static TimeSpan HalfTimeSwapHold => AlliesFlowParams.HalfTimeSwapHold;
+    public static TimeSpan HalfTimeTransition => AlliesFlowParams.HalfTimeTransition;
 }
 
 /// <summary>

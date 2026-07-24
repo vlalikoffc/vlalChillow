@@ -1,20 +1,18 @@
 # Mode: Defuse
 
-**Owner agent:** mode-defuse (see `decompiled/AGENT_SWARM.md`)
-
-**Status:** STUB — unimplemented; refuse wire drive
+**Status:** Implemented — same flow as RankedDefuse; casual first-to-**6**.
 
 **SelectedLevels (probe run-20260722_213859):** Prison…Sandstone
 
-**Family:** bomb — bomb-family modes may share phase *interfaces* later; implementations stay in this folder only. **Do not import sibling Modes/\***.
+**Family:** bomb — Allies gold C2 bags / plant field=3 / host 109s combat.
+
+## Behaviour
+
+- Timers: `DefuseFlowParams` (aliases Allies gold)
+- Win target: **6** (not 8) — half-time after round 5 (`WinsNeeded - 1`)
+- Host branch: `IsAlliesRoom` → `TickAlliesFlowRoom` (C0=`Defuse`)
 
 ## Allowed edit paths
 
 - `server/Net/Match/Modes/Defuse/**`
-- Evidence notes under `decompiled/` that are mode-specific (do not invent wire)
-
-## Forbidden
-
-- Editing other `Modes/<Other>/` trees
-- Pasting capture bytes into host replies
-- Inventing C2 / WinTeam / timer fields without decompile or gold log evidence
+- Shared host partials only when adapting Allies-family wiring (do not invent wire)

@@ -227,6 +227,8 @@ public sealed partial class GameMatchHost
         // other actors' identity so joiner is not stuck on WaitingPlayers with empty world.
         SendMatchStateSnapshotToPeer(peer, room, excludeActorNr: joinerActorNr);
         SendLivingPawnSnapshotToPeer(peer, room, excludeOwnerActorNr: joinerActorNr);
+        // If bomb already planted (C2=40), room props alone do not show the mesh — re-TX plant Rpc.
+        SyncBombPlantStateToPeer(peer, room);
 
         // Abrupt reconnect into same match: re-force previous Tr/Ct after INIT (spawn path).
         MaybeScheduleReconnectRestore(peer, room, joinerActorNr);

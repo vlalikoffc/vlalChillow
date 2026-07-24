@@ -1,3 +1,4 @@
+using LiteNetLib;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
@@ -8,6 +9,19 @@ namespace StandChillow.LanServer.Net;
 public sealed partial class GameMatchHost
 {
     private const string AlliesModeId = "Ranked2v2";
+    private const string AlliesAltModeId = "Ranked2v2Alt";
+    private const string RankedDefuseModeId = "RankedDefuse";
+    private const string DefuseModeId = "Defuse";
+
+    /// <summary>
+    /// Bomb-round family that shares Allies gold FSM (C2=22→31→40?→101, host 109s combat).
+    /// Ranked2v2 / Ranked2v2Alt / RankedDefuse / Defuse — Escalation &amp; TDM stay separate.
+    /// </summary>
+    private static bool IsAlliesFamilyModeId(string? modeId) =>
+        string.Equals(modeId, AlliesModeId, StringComparison.Ordinal)
+        || string.Equals(modeId, AlliesAltModeId, StringComparison.Ordinal)
+        || string.Equals(modeId, RankedDefuseModeId, StringComparison.Ordinal)
+        || string.Equals(modeId, DefuseModeId, StringComparison.Ordinal);
 
     private bool IsAlliesRoom(MatchRoom room)
     {
@@ -17,10 +31,34 @@ public sealed partial class GameMatchHost
         {
             if (room.ActorProps.TryGetValue((0, MatchRoomPropKeys.C0), out var c0)
                 && c0.Kind == LobbyVariantKind.String
-                && string.Equals(c0.String, AlliesModeId, StringComparison.Ordinal))
+                && IsAlliesFamilyModeId(c0.String))
                 return true;
         }
-        return string.Equals(_matchGameModeId, AlliesModeId, StringComparison.Ordinal);
+        return IsAlliesFamilyModeId(_matchGameModeId);
+    }
+
+    private string AlliesFamilyLogTag(MatchRoom room)
+    {
+        lock (_roomGate)
+        {
+            if (room.ActorProps.TryGetValue((0, MatchRoomPropKeys.C0), out var c0)
+                && c0.Kind == LobbyVariantKind.String
+                && c0.String is { Length: > 0 } id)
+                return id switch
+                {
+                    AlliesAltModeId => "allies-alt",
+                    RankedDefuseModeId => "ranked-defuse",
+                    DefuseModeId => "defuse",
+                    _ => "allies",
+                };
+        }
+        return _matchGameModeId switch
+        {
+            AlliesAltModeId => "allies-alt",
+            RankedDefuseModeId => "ranked-defuse",
+            DefuseModeId => "defuse",
+            _ => "allies",
+        };
     }
 
     private TimeSpan RoundEndPauseFor(MatchRoom room) =>
@@ -419,6 +457,21 @@ public sealed partial class GameMatchHost
             room.Flow.BombPlantedUtc = plantUtc;
             room.Flow.Phase = MatchFlowPhase.BombPlanted;
             room.Flow.PhaseEndsUtc = DefuseTimer.FuseEndsUtc(plantUtc, AlliesFlowParams.BombFuse);
+            // Keep planter Rpc for late-join / reconnect peers (C2=40 alone is not enough).
+            if (plantPayload is { Length: > 0 })
+            {
+                room.Flow.LastBombPlantPayload = (byte[])plantPayload.Clone();
+                room.Flow.LastBombPlantField = sourceField;
+                room.Flow.LastBombPlantRpcId = rpcId == 0 ? (byte)2 : rpcId;
+                room.Flow.LastBombPlantTimeValue = plantTimeValue;
+            }
+            else
+            {
+                room.Flow.LastBombPlantPayload = null;
+                room.Flow.LastBombPlantField = 0;
+                room.Flow.LastBombPlantRpcId = 2;
+                room.Flow.LastBombPlantTimeValue = 0;
+            }
         }
 
         DateTime plantedAt;
@@ -486,6 +539,58 @@ public sealed partial class GameMatchHost
             (nReady >= 2 && n < nReady ? " WARN incomplete fan-out" : "") +
             (nReady >= 2 && n < 2 ? " WARN peers<2" : ""));
         return n;
+    }
+
+    /// <summary>
+    /// Late-join / reconnect: if bomb is already planted, push the same BombManager plant Rpc
+    /// the planter's peers got on plant (C2=40 room snapshot alone does not spawn bomb UI).
+    /// Reuses stored planter field/rpc/payload — no invented opcodes.
+    /// </summary>
+    private void SyncBombPlantStateToPeer(NetPeer peer, MatchRoom room)
+    {
+        if (!IsAlliesRoom(room))
+            return;
+
+        bool planted;
+        byte[]? payload;
+        byte field;
+        byte rpcId;
+        double timeVal;
+        lock (_roomGate)
+        {
+            planted = room.Flow.BombPlanted
+                && (room.Flow.Phase == MatchFlowPhase.BombPlanted
+                    || room.RoomC2 == MatchC2States.BombPlanted);
+            payload = room.Flow.LastBombPlantPayload;
+            field = room.Flow.LastBombPlantField;
+            rpcId = room.Flow.LastBombPlantRpcId;
+            timeVal = room.Flow.LastBombPlantTimeValue;
+        }
+
+        if (!planted)
+            return;
+
+        if (payload is not { Length: > 0 } || field == 0)
+        {
+            Console.WriteLine(
+                $"[match-host] {AlliesFamilyLogTag(room)}: reconnect bomb sync SKIPPED — " +
+                "planted but no stored plant Rpc payload (C2=40 only)");
+            return;
+        }
+
+        var stime = NextServerTime();
+        var pkt = MatchCodec.BuildWorldObjectRpc(
+            stime,
+            objectId: MatchFlowTestParams.BombManagerObjectId,
+            rpcId: rpcId == 0 ? (byte)2 : rpcId,
+            gaaTarget: 2,
+            field: field,
+            timeValue: timeVal > 0 ? timeVal : stime / 1000.0,
+            payload: payload);
+        SendAndDump(peer, pkt);
+        Console.WriteLine(
+            $"[match-host] {AlliesFamilyLogTag(room)}: reconnect bomb sync → peer " +
+            $"field={field} rpc={rpcId} payloadLen={payload.Length} (C2=40 already in snapshot)");
     }
 
     /// <summary>INIT-ready (<see cref="MatchPeerState.BootstrapSent"/>) peers in <paramref name="room"/>.</summary>

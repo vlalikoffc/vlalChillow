@@ -4,7 +4,9 @@
 
 **Status:** LIVE — gold `MATCH_ALLIES_PROBE.md` (`allies-probe` run-20260723_215727)
 
-Dedicated FSM: `GameMatchHost.Allies.cs` (Escalation-style branch; **not** shared Ranked 3s/90s timers).
+Dedicated FSM: `GameMatchHost.Allies.cs` (Escalation-style branch; **not** shared Ranked
+3s/Live-101 timers). Host combat timeout default **109s** (client 1:49). Same branch also
+drives Ranked2v2Alt / RankedDefuse / Defuse (wins 8 / 8 / 8 / 6).
 
 **Probe doc:** [MATCH_ALLIES_PROBE.md](./MATCH_ALLIES_PROBE.md) (`allies-probe` Sandstone 2x2 run-20260723_215727)
 

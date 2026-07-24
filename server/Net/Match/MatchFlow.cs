@@ -123,6 +123,15 @@ public sealed class MatchFlowState
     /// (mode/map kept). Armed once per series end; cleared when fired or on HardReset.
     /// </summary>
     public bool LobbyReturnPending { get; set; }
+    /// <summary>
+    /// Last accepted BombManager plant Rpc payload (Allies field=3) — kept while
+    /// <see cref="BombPlanted"/> so late-join / reconnect peers get the same plant fan-out
+    /// snapshot (C2=40 room props alone do not spawn the bomb mesh). Cleared with bomb authority.
+    /// </summary>
+    public byte[]? LastBombPlantPayload { get; set; }
+    public byte LastBombPlantField { get; set; }
+    public byte LastBombPlantRpcId { get; set; } = 2;
+    public double LastBombPlantTimeValue { get; set; }
 }
 
 /// <summary>Shared wipe / spawn / alive-count rules for match flow.</summary>

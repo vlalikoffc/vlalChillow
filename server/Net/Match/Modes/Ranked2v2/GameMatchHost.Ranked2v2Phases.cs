@@ -290,6 +290,10 @@ public sealed partial class GameMatchHost
             room.Flow.BombPlantedUtc = DateTime.MinValue;
             room.Flow.PendingBombPlant = false;
             room.Flow.EscalationCombatStarted = false;
+            room.Flow.LastBombPlantPayload = null;
+            room.Flow.LastBombPlantField = 0;
+            room.Flow.LastBombPlantRpcId = 2;
+            room.Flow.LastBombPlantTimeValue = 0;
         }
         Console.WriteLine(
             $"[match-host] match-flow: bomb authority clear ({reason}) " +
@@ -523,7 +527,7 @@ public sealed partial class GameMatchHost
         ClearBombAuthority(room, "RoundLive entry");
 
         // Sync DeadActors from actor death props so Prep combat kills are not forgotten
-        // when the prep clock expires — wipe must preempt the 90s round fantasy.
+        // when the prep clock expires — wipe must preempt the host round-timeout fantasy.
         SyncDeadActorsFromDeathProps(room);
         if (TryResolveWipeImmediate(room, bombPlanted: false))
             return;

@@ -44,6 +44,10 @@ public sealed partial class GameMatchHost
                 room.Flow.BombPlanted = false;
                 room.Flow.BombPlantedUtc = DateTime.MinValue;
                 room.Flow.PendingBombPlant = false;
+                room.Flow.LastBombPlantPayload = null;
+                room.Flow.LastBombPlantField = 0;
+                room.Flow.LastBombPlantRpcId = 2;
+                room.Flow.LastBombPlantTimeValue = 0;
                 room.LastCombatDamage.Clear();
                 return;
             }
@@ -89,6 +93,10 @@ public sealed partial class GameMatchHost
             room.Flow.BombPlanted = false;
             room.Flow.BombPlantedUtc = DateTime.MinValue;
             room.Flow.PendingBombPlant = false;
+            room.Flow.LastBombPlantPayload = null;
+            room.Flow.LastBombPlantField = 0;
+            room.Flow.LastBombPlantRpcId = 2;
+            room.Flow.LastBombPlantTimeValue = 0;
             room.Flow.EscalationCombatStarted = false;
             room.Flow.PendingEndReason = null;
             room.Flow.PendingCombatDestroy.Clear();

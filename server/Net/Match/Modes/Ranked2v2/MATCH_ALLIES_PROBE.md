@@ -205,7 +205,7 @@ Deltas from decoded `SetProperties` room bags (`match_rx*` captures).
 | PreWarmup C2=11 | 8 | Phone gold only — **dedicated skips** (no TX) |
 | WarmUp C2=21 | 3 | R1 only after `/set start` |
 | PreStart C2=22 | **10** (`/set prep`) | Host wait; wire `Time` = **anchor** (== `RoundStartTime`) |
-| Combat C2=31 | host RoundDuration | Wire `Time` = **anchor** now; **stay** until 40/101 |
+| Combat C2=31 | host RoundDuration (**109s** / client 1:49) | Wire `Time` = **anchor** now; **stay** until 40/101 |
 | RoundEndPause | 6 | After C2=101 WinTeam |
 | HalfTimeIntro 111 | 5 | Unchanged |
 | HalfTimeSwap 112 | 1 | Unchanged |

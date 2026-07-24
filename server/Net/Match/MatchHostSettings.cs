@@ -18,7 +18,8 @@ public static class MatchHostSettings
     private static int _preStartSeconds = 3;
     // Allies gold 22→31 ≈10s; Ranked Prep C2=31 uses the same knob.
     private static int _prepSeconds = 10;
-    private static int _roundSeconds = 90;
+    // Client combat clock shows 1:49 (109s) — host-side timeout must match (not 90s / 1:30).
+    private static int _roundSeconds = 109;
     private static int _roundEndPauseSeconds = 6;
     private static int _bombFuseSeconds = 40;
     private static bool _matchStartArmed;
@@ -120,14 +121,36 @@ public static class MatchHostSettings
     }
 
     /// <summary>
-    /// Allies / Ranked2v2: match over when either side reaches <see cref="WinsNeeded"/>.
-    /// No round-count cap — play continues past round 7 half-time until first-to-N.
+    /// Allies / Ranked2v2 / Alt / RankedDefuse / Defuse: match over when either side
+    /// reaches <see cref="WinsNeeded"/>. No round-count cap — play continues past
+    /// half-time until first-to-N.
     /// </summary>
     public static bool IsAlliesMatchOver(int scoreTr, int scoreCt)
     {
         var wins = WinsNeeded;
         return scoreTr >= wins || scoreCt >= wins;
     }
+
+    /// <summary>
+    /// Default first-to-N for bomb-round family modes (Allies gold = 8; casual Defuse = 6).
+    /// Returns false for modes that do not use this win target.
+    /// </summary>
+    public static bool TryDefaultWinsForMode(string gameModeId, out int wins)
+    {
+        wins = gameModeId switch
+        {
+            "Ranked2v2" or "Ranked2v2Alt" or "RankedDefuse" => 8,
+            "Defuse" => 6,
+            _ => 0,
+        };
+        return wins > 0;
+    }
+
+    /// <summary>
+    /// Half-time after this many completed rounds (wins−1). Allies first-to-8 → after R7;
+    /// casual Defuse first-to-6 → after R5.
+    /// </summary>
+    public static int HalfTimeAfterRound => Math.Max(1, WinsNeeded - 1);
 
     /// <summary>
     /// Escalation MR-N: match over if a side hit <c>TotalRounds/2+1</c>,
@@ -151,10 +174,10 @@ public static class MatchHostSettings
                 : "start=waiting for /set start";
             var debugChat = _debugMatchChat ? "debug-chat=on" : "debug-chat=off";
             return
-                $"rounds={_totalRounds} (Escalation MR cap) wins={_winsNeeded} (Allies first-to) " +
+                $"rounds={_totalRounds} (Escalation MR cap) wins={_winsNeeded} (bomb-family first-to) " +
                 $"money={_roundStartMoney} warmup={_warmupSeconds}s prestart={_preStartSeconds}s " +
-                $"prep={_prepSeconds}s round={_roundSeconds}s pause={_roundEndPauseSeconds}s " +
-                $"fuse={_bombFuseSeconds}s {start} {debugChat}";
+                $"prep={_prepSeconds}s round={_roundSeconds}s (host combat timeout) " +
+                $"pause={_roundEndPauseSeconds}s fuse={_bombFuseSeconds}s {start} {debugChat}";
         }
     }
 
@@ -164,14 +187,14 @@ public static class MatchHostSettings
           /set start         разрешить WarmUp когда обе команды ≥1 (иначе C2=10 ждёт)
                              (то же: console start|startmatch; НЕ /play — /play = rematch teardown)
           /set round <N>     Escalation MR-N max rounds (default 8)
-          /set wins <N>      Allies first-to-N wins (default 8)
+          /set wins <N>      bomb-family first-to-N (Allies/Alt/RankedDefuse=8, Defuse=6)
           /set team <t>      ct|tr|t|spectator — себе в матче (SetProperty team)
           /set money <N>     деньги на старт раунда (0–16000)
           /set fuse <сек>    таймер бомбы
           /set prep <сек>    Allies C2=22→31 buy wall (default 10s); Ranked Prep C2=31
           /set prestart <сек> Ranked PreStart C2=22 (Allies buy uses /set prep)
           /set warmup <сек>  WarmUp C2=21 (первый раунд)
-          /set roundtime <сек> длительность live
+          /set roundtime <сек> host combat timeout (default 109 = client 1:49)
           /set pause <сек>   пауза после RoundEnd
           /set status        текущие значения
         """.Trim();

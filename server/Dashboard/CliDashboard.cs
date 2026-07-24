@@ -357,11 +357,13 @@ public sealed class CliDashboard : IDisposable
         {
             GameModeId = "Ranked2v2",
             Map = "Sandstone 2x2",
-            Phase = MatchFlowPhase.RoundLive,
+            C2 = MatchC2States.PurchasePhase,
+            Phase = MatchFlowPhase.PurchasePhase,
             Round = 2,
             ScoreCt = 1,
             ScoreTr = 1,
-            TimeDeadline = Environment.TickCount / 1000.0 + 94,
+            // Demo only (STANDCHILLOW_DASH_DEMO=match): mirror real host PhaseEndsUtc, not a fake wire Time.
+            PhaseEndsUtc = DateTime.UtcNow + TimeSpan.FromSeconds(109),
             Actors = new List<MatchActorSnapshot>
             {
                 A(2, "Bot Stone", MatchTeam.Ct, 3200, 4, 1, 12, 41),
@@ -510,50 +512,47 @@ public sealed class CliDashboard : IDisposable
         return lines;
     }
 
-    private static bool IsAlliesLike(MatchSnapshot snap) =>
+    private static bool IsBombRoundFamily(MatchSnapshot snap) =>
         !snap.IsDeathMatch
-        && string.Equals(snap.GameModeId, "Ranked2v2", StringComparison.Ordinal);
+        && snap.GameModeId is "Ranked2v2" or "Ranked2v2Alt" or "RankedDefuse" or "Defuse";
 
     private string DescribePhase(MatchSnapshot snap)
     {
-        var allies = IsAlliesLike(snap);
-        // Prefer host Flow.PhaseEndsUtc (Allies C2=22 buy wall + C2=31 host round clock).
-        // Fall back to room Time for modes with a wire
-        // round/fuse clock (Ranked Live, TDM) — never invent Allies Live Time.
+        var bombFamily = IsBombRoundFamily(snap);
+        // Only real host deadlines: Flow.PhaseEndsUtc (buy wall, combat 109s, fuse).
+        // Never invent a countdown from wire Time alone for bomb-family combat
+        // (phone gold omits Live Time TX — Time is an anchor, not a deadline).
         double remain = 0;
-        var alliesBuy = allies && snap.Phase == MatchFlowPhase.WarmupWillFinish;
-        if (snap.PhaseEndsUtc > DateTime.MinValue && snap.PhaseEndsUtc < DateTime.MaxValue)
-        {
+        var hasHostDeadline = snap.PhaseEndsUtc > DateTime.MinValue
+            && snap.PhaseEndsUtc < DateTime.MaxValue;
+        if (hasHostDeadline)
             remain = (snap.PhaseEndsUtc - DateTime.UtcNow).TotalSeconds;
-        }
-        else if (snap.TimeDeadline > 0
+        else if (!bombFamily
+                 && snap.TimeDeadline > 0
                  && snap.Phase is MatchFlowPhase.RoundLive or MatchFlowPhase.BombPlanted
-                     or MatchFlowPhase.DeathMatchLive or MatchFlowPhase.DeathMatchWarmup
-                 && !(allies && snap.Phase is MatchFlowPhase.RoundLive
-                     or MatchFlowPhase.PurchasePhase))
+                     or MatchFlowPhase.DeathMatchLive or MatchFlowPhase.DeathMatchWarmup)
             remain = snap.TimeDeadline - Environment.TickCount / 1000.0;
 
-        var showClock = remain > 0
-            || (alliesBuy && snap.PhaseEndsUtc > DateTime.UtcNow
-                && snap.PhaseEndsUtc < DateTime.MaxValue);
+        var showClock = hasHostDeadline && remain > -0.5;
         var clock = showClock ? $" {FormatClock(Math.Max(0, remain))}" : "";
+        var c2 = snap.C2 > 0 ? $" · C2={snap.C2}" : "";
         var label = snap.Phase switch
         {
             MatchFlowPhase.WaitingPlayers => "WAITING PLAYERS",
-            MatchFlowPhase.AlliesPreWarmup => allies ? "FREE-FOR-ALL · C2=11" : snap.Phase.ToString(),
-            MatchFlowPhase.Warmup => allies ? $"WARM-UP · Round {Math.Max(1, snap.Round)}" : "WARM-UP",
-            // Allies: C2=22 buy wall (Time=RST=now on wire); generic Ranked keeps MATCH STARTING.
-            MatchFlowPhase.WarmupWillFinish => allies
+            MatchFlowPhase.AlliesPreWarmup => bombFamily ? "FREE-FOR-ALL · C2=11" : snap.Phase.ToString(),
+            MatchFlowPhase.Warmup => bombFamily
+                ? $"WARM-UP · Round {Math.Max(1, snap.Round)}{c2}"
+                : "WARM-UP",
+            // Bomb family: C2=22 buy wall (Time=RST=now on wire); generic Ranked keeps MATCH STARTING.
+            MatchFlowPhase.WarmupWillFinish => bombFamily
                 ? $"PREP · Round {snap.Round} · C2=22"
                 : "MATCH STARTING",
-            MatchFlowPhase.PurchasePhase => allies
+            MatchFlowPhase.PurchasePhase => bombFamily
                 ? $"LIVE · Round {snap.Round} · C2=31"
                 : $"PREP · Round {snap.Round} · C2=31",
-            MatchFlowPhase.RoundLive => allies
-                ? $"LIVE · Round {snap.Round}"
-                : $"LIVE · Round {snap.Round}",
-            MatchFlowPhase.BombPlanted => $"BOMB PLANTED · Round {snap.Round}",
-            MatchFlowPhase.RoundEndPause => $"ROUND END · Round {snap.Round}",
+            MatchFlowPhase.RoundLive => $"LIVE · Round {snap.Round}{c2}",
+            MatchFlowPhase.BombPlanted => $"BOMB PLANTED · Round {snap.Round}{c2}",
+            MatchFlowPhase.RoundEndPause => $"ROUND END · Round {snap.Round}{c2}",
             MatchFlowPhase.HalfTimeIntro => "HALF-TIME · INTRO · C2=111",
             MatchFlowPhase.HalfTimeSwap => "HALF-TIME · SWAP · C2=112",
             MatchFlowPhase.HalfTimeTransition => "HALF-TIME · RESUME · C2=113",

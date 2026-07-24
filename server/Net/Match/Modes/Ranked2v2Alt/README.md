@@ -1,20 +1,18 @@
 # Mode: Ranked2v2Alt
 
-**Owner agent:** mode-ranked2v2alt (see `decompiled/AGENT_SWARM.md`)
-
-**Status:** STUB — unimplemented; refuse wire drive
+**Status:** Implemented — same Allies gold FSM as Ranked2v2 (client Alt map half).
 
 **SelectedLevels (probe run-20260722_213859):** * 2x2 Alt
 
-**Family:** bomb — bomb-family modes may share phase *interfaces* later; implementations stay in this folder only. **Do not import sibling Modes/\***.
+**Family:** bomb — shares Allies C2 sequence / plant field=3 / host 109s combat / first-to-8.
+
+## Behaviour
+
+- Wire + host timers: copy of Allies (`MATCH_ALLIES_PROBE.md` / `DefuseFlowParams`)
+- Win target: **8** (`MatchHostSettings.TryDefaultWinsForMode`)
+- Host branch: `IsAlliesRoom` → `TickAlliesFlowRoom` (C0=`Ranked2v2Alt`)
 
 ## Allowed edit paths
 
 - `server/Net/Match/Modes/Ranked2v2Alt/**`
-- Evidence notes under `decompiled/` that are mode-specific (do not invent wire)
-
-## Forbidden
-
-- Editing other `Modes/<Other>/` trees
-- Pasting capture bytes into host replies
-- Inventing C2 / WinTeam / timer fields without decompile or gold log evidence
+- Shared host partials only when adapting Allies-family wiring (do not invent wire)

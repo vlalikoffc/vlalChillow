@@ -26,10 +26,11 @@ Default fuse length: `MatchHostSettings.BombFuse` (~40s).
 | Mode | Kept in mode files |
 |------|--------------------|
 | **Escalation** | C2=22 / 40 / 31 bags, auto-plant Rpc, PostPlantAnnounce gap, no fixed Live clock |
-| **Allies** | C2=22 anchor → ~10s → C2=31 combat stay, field=3 plant → C2=40 C2-only, C2=101 WinTeam only, half-time, host round timeout |
+| **Allies-family** | Ranked2v2 / Alt / RankedDefuse / Defuse: C2=22→31→40?→101, field=3 plant, host **109s** combat timeout (no Live Time TX) |
 | **Ranked (generic)** | Prep→Live C2 sequence, wipe/plant observe paths |
 
-Mode duration constants stay on `EscalationFlowParams` / `AlliesFlowParams` / `MatchFlowTestParams` — only the arithmetic moved here.
+Mode duration constants stay on `EscalationFlowParams` / `AlliesFlowParams` /
+`DefuseFlowParams` / `MatchFlowTestParams` — only the arithmetic moved here.
 
 ## Rollback
 
