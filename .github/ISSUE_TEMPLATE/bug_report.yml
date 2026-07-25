@@ -1,0 +1,80 @@
+name: Bug report
+description: Something in the LAN server misbehaves
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Only StandChillow **2.06 OBT F1** is supported. Other builds are untested.
+
+  - type: input
+    id: client-version
+    attributes:
+      label: Client build
+      placeholder: "2.06 OBT F1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Game mode
+      options:
+        - Escalation
+        - Ranked2v2
+        - Ranked2v2Alt
+        - RankedDefuse
+        - Defuse
+        - Duel
+        - Lobby only / discovery
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: map
+    attributes:
+      label: Map
+      placeholder: Prison
+
+  - type: input
+    id: host-os
+    attributes:
+      label: Host OS and .NET version
+      placeholder: "Ubuntu 24.04, .NET 8.0.11"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. mode ranked2v2
+        2. map ...
+        3. play
+        4. set start
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: Paste text only. Do not attach capture blobs or game binaries.
+      render: text
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Confirmation
+      options:
+        - label: My report contains no game binaries, decompiled code or raw capture dumps
+          required: true
