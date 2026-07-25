@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a mode, map, command or plugin capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Available evidence
+      description: >
+        Protocol work is evidence-driven. If this needs new wire behaviour,
+        describe what probe or capture could establish it. Proposals that
+        require guessing opcodes will be closed.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Discovery (UDP 5056)
+        - Lobby (UDP 7778)
+        - Match host (UDP 7777)
+        - Game mode FSM
+        - CLI dashboard
+        - Plugins
+        - Docs / tooling
+    validations:
+      required: true
