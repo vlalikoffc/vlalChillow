@@ -1,0 +1,90 @@
+# STAGED WORKFLOW - NOT ACTIVE YET
+#
+# Move this file to activate CI:
+#   mkdir -p .github/workflows
+#   git mv docs/ci/ci.yml .github/workflows/ci.yml
+#   git commit -m "ci: activate build and hygiene workflow"
+#
+# It could not be committed to .github/workflows/ directly because the token
+# that opened the pull request has no `workflows` scope.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore server/StandChillow.LanServer.csproj
+
+      - name: Build server
+        run: dotnet build server/StandChillow.LanServer.csproj -c Release --no-restore
+
+      - name: Build Telegram plugin
+        run: dotnet build server/plugins-src/StandChillow.Plugin.Telegram/StandChillow.Plugin.Telegram.csproj -c Release
+
+  format:
+    name: format (advisory)
+    runs-on: ubuntu-latest
+    # Advisory until the tree is fully formatted. Set continue-on-error to false
+    # once `dotnet format` reports a clean run.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Check formatting
+        run: dotnet format server/StandChillow.LanServer.csproj --verify-no-changes --severity warn
+
+  hygiene:
+    name: hygiene guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reverse-engineering dumps, game binaries and runtime captures must never
+      # enter the published tree.
+      - name: Reject RE dumps and game binaries
+        run: |
+          bad=$(git ls-files | grep -E '^(decompiled|original)/|\.(apk|aab|so|unity3d|dat)$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::These files must stay local (see .gitignore):"
+            echo "$bad"
+            exit 1
+          fi
+
+      - name: Reject committed captures and logs
+        run: |
+          bad=$(git ls-files | grep -E '(^|/)(captures|logs)/|\.log$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Runtime captures and logs are evidence-only, do not commit:"
+            echo "$bad"
+            exit 1
+          fi
