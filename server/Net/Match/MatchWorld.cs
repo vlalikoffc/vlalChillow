@@ -586,7 +586,7 @@ public readonly struct MatchGapActor
 
     public byte ActorNr { get; init; }
     public string Name { get; init; }
-    /// <summary>2.07 actor identity. Joiners preserve the full handshake token (CLB…).</summary>
+    /// <summary>2.07 actor identity: the handshake auth token without its leading C.</summary>
     public string UserId { get; init; }
     /// <summary>Optional typed props (<c>gak</c> PropertiesRecord). Empty for thin early Found.</summary>
     public IReadOnlyList<(string Key, LobbyVariant Value)>? Props { get; init; }

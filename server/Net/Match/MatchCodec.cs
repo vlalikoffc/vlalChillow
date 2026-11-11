@@ -360,6 +360,10 @@ public static class MatchCodec
         w.WriteByte((byte)MatchOpcode.JoinRoomResponse);
         w.WriteInt32(serverTime);
         w.WriteByte((byte)result);
+        // Live 2.07 Found has five absent optionals before debugMessage. The first
+        // is the legacy message slot below; these four reserved slots precede it.
+        for (var i = 0; i < 4; i++)
+            w.WriteBool(false);
         if (message is not null)
         {
             w.WriteBool(true);
@@ -1218,6 +1222,10 @@ public static class MatchCodec
     public static JoinRoomResponseBody ParseJoinRoomResponseBody(LobbyReader r)
     {
         var result = (JoinRoomResult)r.ReadByte();
+        // Four reserved absent optionals precede the legacy message slot in 2.07.
+        for (var i = 0; i < 4; i++)
+            if (r.ReadBool())
+                throw new InvalidDataException("Present reserved JoinRoomResponse optional");
         string? msg = null;
         if (r.ReadBool())
             msg = r.ReadString();
