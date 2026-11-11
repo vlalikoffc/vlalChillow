@@ -76,14 +76,15 @@ jobs:
           -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false
           -o ${{ runner.temp }}/standchillow-publish
 
+      # PR runs upload too (shorter retention): lets a branch build be tested on a
+      # real desktop/handset before merge without pushing to main.
       - name: Upload runnable server (${{ matrix.rid }})
-        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: standchillow-server-${{ matrix.rid }}
           path: ${{ runner.temp }}/standchillow-publish
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 14 }}
 
   release:
     name: GitHub Release (${{ github.ref_name }})
