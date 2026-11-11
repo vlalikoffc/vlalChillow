@@ -73,51 +73,11 @@ public sealed partial class GameMatchHost
                 Console.WriteLine(
                     $"[match-host] match-flow: /set start armed but teams incomplete " +
                     $"Tr={tr} Ct={ct} — WarmUp waits for both ≥1");
-                // The gate is edge-triggered on the team SetProperty: if the second team
-                // picked its side BEFORE /set start, nothing re-runs the check and the room
-                // sits in C2=10 forever. Keep a bounded poll so an armed gate always wins.
-                if (tr + ct > 0)
-                    ScheduleWarmupRecheck();
                 continue;
             }
 
             TryBeginMatchFlowIfBothTeams(room);
         }
-    }
-
-    /// <summary>WarmUp recheck cadence while the gate is armed (bounded, see ScheduleWarmupRecheck).</summary>
-    private static readonly TimeSpan WarmupRecheckDelay = TimeSpan.FromSeconds(5);
-    private const int WarmupRecheckAttempts = 24; // ≈2 min — a whole pick-screen worth of waiting
-    private int _warmupRecheckArmed;
-
-    /// <summary>
-    /// Re-run <see cref="NudgeMatchStartGate"/> a few seconds later while the WarmUp gate is
-    /// armed. Covers the race where a team picks its side before <c>/set start</c>: the
-    /// team-change hook fired too early, so the room would otherwise stay in WaitingPlayers.
-    /// Bounded (no tick-loop spam) and stops as soon as the gate disarms.
-    /// </summary>
-    private void ScheduleWarmupRecheck()
-    {
-        if (Interlocked.Exchange(ref _warmupRecheckArmed, 1) == 1)
-            return;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                for (var i = 0; i < WarmupRecheckAttempts; i++)
-                {
-                    await Task.Delay(WarmupRecheckDelay, _cts.Token).ConfigureAwait(false);
-                    if (_cts.IsCancellationRequested || !MatchHostSettings.MatchStartArmed)
-                        return;
-                    NudgeMatchStartGate();
-                }
-            }
-            catch (OperationCanceledException) { /* host stopping */ }
-            finally
-            {
-                Interlocked.Exchange(ref _warmupRecheckArmed, 0);
-            }
-        }, CancellationToken.None);
     }
 
     private static bool BothFightingTeamsPresent(MatchRoom room)

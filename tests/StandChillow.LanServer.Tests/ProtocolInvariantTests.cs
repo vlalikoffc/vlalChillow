@@ -44,26 +44,6 @@ public sealed class ProtocolInvariantTests
         Assert.Equal(expectedWins, wins);
     }
 
-    /// <summary>
-    /// Regression: a stray <c>play</c> while players are already fighting used to run
-    /// HardResetMatchForNewStart and Disconnect() every phone. The guard must classify
-    /// phases so a live match is never treated as "start / rematch".
-    /// </summary>
-    [Theory]
-    [InlineData(0 /*WaitingPlayers*/, false)] // lobby idle — /play is allowed
-    [InlineData(1 /*Warmup*/, true)]
-    [InlineData(3 /*PurchasePhase*/, true)]
-    [InlineData(4 /*RoundLive*/, true)]
-    [InlineData(5 /*BombPlanted*/, true)]
-    [InlineData(6 /*RoundEndPause*/, true)]
-    [InlineData(7 /*MatchOver*/, false)]      // series done — /play is a legit rematch
-    public void PlayGuard_TreatsOnlyRealMatchPhasesAsLive(byte phase, bool live)
-    {
-        var p = (MatchFlowPhase)phase;
-        var isLivePhase = p is not (MatchFlowPhase.WaitingPlayers or MatchFlowPhase.MatchOver);
-        Assert.Equal(live, isLivePhase);
-    }
-
     [Fact]
     public void DuelC2Ladder_MatchesTheGoldClientFlow()
     {

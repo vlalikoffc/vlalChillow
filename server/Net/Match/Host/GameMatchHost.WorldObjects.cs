@@ -231,35 +231,23 @@ public sealed partial class GameMatchHost
             // 20260723_030750_1117 / 20260723_030756_1126). Lobby OpChat never sees these —
             // execute slash commands (/set start, …) via host callback when present.
             // Slash: do NOT fan-out the command text to other peers (private Server feedback).
-            if (parsed.ObjectId == MatchSceneManagers.ChatManagerObjectId)
+            if (parsed.ObjectId == MatchSceneManagers.ChatManagerObjectId
+                && TryDecodeChatManagerText(parsed.Payload, out var chatText))
             {
-                // Log the decision either way: an undecodable payload used to fall through
-                // silently, so mid-match slash commands looked like "the server ignored me"
-                // while the text never reached the host command dispatcher.
-                if (TryDecodeChatManagerText(parsed.Payload, out var chatText))
+                Console.WriteLine(
+                    $"[match-host] ChatManager text actor={st.ActorNr}: {chatText}");
+                if (chatText.StartsWith('/'))
                 {
-                    Console.WriteLine(
-                        $"[match-host] ChatManager text actor={st.ActorNr}: {chatText}");
-                    if (chatText.StartsWith('/'))
+                    dropRelay = true;
+                    if (peer.Address is { } chatIp)
                     {
-                        dropRelay = true;
-                        if (peer.Address is { } chatIp)
+                        try { OnMatchChatSlashCommand?.Invoke(chatIp, chatText); }
+                        catch (Exception ex)
                         {
-                            try { OnMatchChatSlashCommand?.Invoke(chatIp, chatText); }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine(
-                                    $"[match-host] ChatManager slash handler failed: {ex.Message}");
-                            }
+                            Console.WriteLine(
+                                $"[match-host] ChatManager slash handler failed: {ex.Message}");
                         }
                     }
-                }
-                else
-                {
-                    Console.WriteLine(
-                        $"[match-host] ChatManager id={parsed.ObjectId} rpc={parsed.RpcId} " +
-                        $"payloadLen={parsed.Payload.Length} — text layout not recognised, " +
-                        "relayed verbatim (slash commands NOT executed)");
                 }
             }
 

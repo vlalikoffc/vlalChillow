@@ -77,14 +77,8 @@ public sealed partial class GameNetHost
             || cmd.Equals("play", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("игра", StringComparison.OrdinalIgnoreCase))
         {
-            // Honest reply: TryStartMatch refuses to tear down a live match (it only starts
-            // or rematches), so never claim "запуск" when nothing happened.
-            if (TryStartMatch(who))
-                reply("play — матч запущен; /set start чтобы начать раунды");
-            else if (_match.IsMatchLive())
-                reply("матч уже идёт — /set start (старт раундов) или /end (завершить)");
-            else
-                reply("play не удался — смотри лог сервера");
+            TryStartMatch(who);
+            reply("play — запуск/рематч");
             return true;
         }
 
@@ -97,7 +91,6 @@ public sealed partial class GameNetHost
             if (args.Length == 0)
             {
                 TryArmWarmupOrFirstPlay(who);
-                reply(DescribeStartState());
                 return true;
             }
         }
@@ -114,22 +107,6 @@ public sealed partial class GameNetHost
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Human-readable result of a bare <c>start</c> / <c>play</c> so phone players are never left
-    /// guessing whether the gate moved (previously the command was silent and looked ignored).
-    /// </summary>
-    private string DescribeStartState()
-    {
-        if (!MatchHostSettings.MatchStartArmed)
-            return _match.IsMatchLive()
-                ? "старт: матч идёт, но gate не arm — проверь /status"
-                : "старт: не вооружён — нужен /play";
-        var (tr, ct) = _match.CountFightingTeamRosterForLanRoom();
-        if (tr >= 1 && ct >= 1)
-            return $"старт armed — обе команды есть (T={tr} CT={ct}), WarmUp на следующем тике";
-        return $"старт armed — ждём обе команды (T={tr} CT={ct}); выберите сторону в матче";
     }
 
     private static bool IsEndMatchCommand(string cmd, string args) =>
