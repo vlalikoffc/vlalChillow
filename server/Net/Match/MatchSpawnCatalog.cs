@@ -3,7 +3,8 @@ namespace StandChillow.LanServer.Net.Match;
 /// <summary>
 /// Map+team spawn poses for ConnectAsClient fighter probe.
 /// From <c>decompiled/MAP_SPAWN_POINTS.json</c> (APK data.unity3d SpawnArea under
-/// Spawn_CT/TR + capture preferred overlays). Client <b>2.06 OBT F1</b>.
+/// Spawn_CT/TR + capture preferred overlays; original spawn evidence was captured on 2.06.
+/// The current server targets only <b>2.07 OBT F1</b>.
 /// See <c>decompiled/PLAYER_SPAWN.md</c>.
 /// </summary>
 public static class MatchSpawnCatalog

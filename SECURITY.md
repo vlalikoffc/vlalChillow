@@ -3,7 +3,7 @@
 ## Supported
 
 Only the latest commit on `main` receives fixes. The server targets StandChillow
-**2.06 OBT F1**; other client builds are untested and unsupported.
+**2.07 OBT F1**; version 2.06 and other client builds are untested and unsupported.
 
 ## Reporting a vulnerability
 

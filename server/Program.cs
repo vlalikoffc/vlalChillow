@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 using StandChillow.LanServer;
+using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Startup;
 
@@ -33,8 +34,10 @@ if (IsClientMode(args, out var clientArgs))
     return;
 }
 
-// The dashboard owns a real terminal; redirected output keeps ordinary console logging.
-var useDashboard = !Console.IsOutputRedirected;
+// Never emit full-screen ANSI into redirected/legacy terminals: use readable plain logs there.
+// --dashboard forces the UI explicitly; --no-dashboard / --console selects the plain command loop.
+var dashboardOverride = ConsumeDashboardFlag(ref args);
+var useDashboard = dashboardOverride ?? TerminalCapabilities.CanUseDashboard();
 var logPath = RunLog.Start(dashboardMode: useDashboard);
 if (!useDashboard)
 {
@@ -45,6 +48,28 @@ if (!useDashboard)
 
 ConsumeDebugMatchChatFlag(ref args);
 await HostBootstrap.RunAsync(args, useDashboard);
+
+static bool? ConsumeDashboardFlag(ref string[] args)
+{
+    bool? useDashboard = null;
+    var kept = new List<string>(args.Length);
+    foreach (var arg in args)
+    {
+        if (arg is "--dashboard")
+        {
+            useDashboard = true;
+            continue;
+        }
+        if (arg is "--no-dashboard" or "--console")
+        {
+            useDashboard = false;
+            continue;
+        }
+        kept.Add(arg);
+    }
+    args = kept.ToArray();
+    return useDashboard;
+}
 
 static bool IsClientMode(string[] args, out string[] rest)
 {

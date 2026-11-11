@@ -294,24 +294,35 @@ public sealed class CliDashboard : IDisposable
 
         while (_pendingDeaths.TryDequeue(out var death))
         {
-            // Attribute to the most recent enemy-team killer credit; consume it.
-            var idx = _recentKillers.FindLastIndex(k =>
-                IsFighting(k.Team) && k.Team != death.VictimTeam && k.Nr != death.VictimNr);
             KillFeedLine line;
-            if (idx >= 0)
+            if (death.KillerNr is not null && !string.IsNullOrWhiteSpace(death.KillerName))
             {
-                var killer = _recentKillers[idx];
-                _recentKillers.RemoveAt(idx);
+                // Prefer the host's verified damage/kill attribution over timing-based guesses.
+                _recentKillers.RemoveAll(k => k.Nr == death.KillerNr);
                 line = new KillFeedLine(
-                    killer.Name, killer.Team, KillerKnown: true,
+                    death.KillerName, death.KillerTeam, KillerKnown: true,
                     death.VictimName, death.VictimTeam, now);
             }
             else
             {
-                var enemyTeam = death.VictimTeam == MatchTeam.Tr ? MatchTeam.Ct
-                    : death.VictimTeam == MatchTeam.Ct ? MatchTeam.Tr : MatchTeam.None;
-                line = new KillFeedLine("?", enemyTeam, KillerKnown: false,
-                    death.VictimName, death.VictimTeam, now);
+                // Fallback for a victim-first wire order: use the latest enemy kill-counter bump.
+                var idx = _recentKillers.FindLastIndex(k =>
+                    IsFighting(k.Team) && k.Team != death.VictimTeam && k.Nr != death.VictimNr);
+                if (idx >= 0)
+                {
+                    var killer = _recentKillers[idx];
+                    _recentKillers.RemoveAt(idx);
+                    line = new KillFeedLine(
+                        killer.Name, killer.Team, KillerKnown: true,
+                        death.VictimName, death.VictimTeam, now);
+                }
+                else
+                {
+                    var enemyTeam = death.VictimTeam == MatchTeam.Tr ? MatchTeam.Ct
+                        : death.VictimTeam == MatchTeam.Ct ? MatchTeam.Tr : MatchTeam.None;
+                    line = new KillFeedLine("?", enemyTeam, KillerKnown: false,
+                        death.VictimName, death.VictimTeam, now);
+                }
             }
 
             lock (_stateGate)

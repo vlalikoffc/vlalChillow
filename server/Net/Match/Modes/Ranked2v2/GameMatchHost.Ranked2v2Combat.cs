@@ -92,7 +92,12 @@ public sealed partial class GameMatchHost
         }
     }
 
-    private void NoteActorDeath(MatchRoom room, byte actorNr, LobbyVariant value, string source)
+    private void NoteActorDeath(
+        MatchRoom room,
+        byte actorNr,
+        LobbyVariant value,
+        string source,
+        byte? killerActorNr = null)
     {
         if (actorNr == 0 || actorNr == MatchHostActor.ActorNr)
             return;
@@ -162,7 +167,14 @@ public sealed partial class GameMatchHost
             $"[observe] death actor={actorNr} team={team} via {source} " +
             "(DeadActors armed → same-tick wipe check)");
 
-        Dashboard.DashboardHub.PostDeath(actorNr, ResolveActorName(actorNr), team, source);
+        Dashboard.DashboardHub.PostDeath(
+            actorNr,
+            ResolveActorName(actorNr),
+            team,
+            source,
+            killerActorNr,
+            killerActorNr is byte killer ? ResolveActorName(killer) : null,
+            killerActorNr is byte confirmedKiller ? GetActorTeam(room, confirmedKiller) : MatchTeam.None);
 
         var name = ResolveActorName(actorNr);
         PostServerDebugChat(
@@ -457,7 +469,8 @@ public sealed partial class GameMatchHost
             $"[combat-death] master death → TX death=1 actor={victimActorNr} killer={killerLabel} " +
             $"src={source}");
 
-        NoteActorDeath(room, victimActorNr, LobbyVariant.FromInt(1), source: source);
+        NoteActorDeath(
+            room, victimActorNr, LobbyVariant.FromInt(1), source: source, killerActorNr: killerActorNr);
     }
 
 }

@@ -313,7 +313,13 @@ public sealed partial class GameMatchHost
             $"death={newDeath} killer={killerLabel} src={source} " +
             "(death HUD + FFA respawn client-driven; no wipe)");
         Dashboard.DashboardHub.PostDeath(
-            victimActorNr, ResolveActorName(victimActorNr), victimTeam, source);
+            victimActorNr,
+            ResolveActorName(victimActorNr),
+            victimTeam,
+            source,
+            killerActorNr,
+            killerActorNr is byte killer ? ResolveActorName(killer) : null,
+            killerActorNr is byte confirmedKiller ? GetActorTeam(room, confirmedKiller) : MatchTeam.None);
         var name = ResolveActorName(victimActorNr);
         PostServerDebugChat(
             string.IsNullOrEmpty(name)

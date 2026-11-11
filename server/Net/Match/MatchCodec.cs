@@ -112,7 +112,7 @@ public static class MatchAuth
     public const ushort ProtocolVersion = 1024;
 
     /// <summary><c>cui.balw()</c> — lobby version string (not used on match wire).</summary>
-    public const string GameVersion = "2.06";
+    public const string GameVersion = "2.07";
 
     /// <summary>True if HandshakeRequest AppId is one of the observed live values.</summary>
     public static bool IsAcceptedAppId(string? appId) =>
