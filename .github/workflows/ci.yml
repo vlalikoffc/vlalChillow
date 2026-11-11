@@ -45,10 +45,19 @@ jobs:
         run: dotnet build server/plugins-src/StandChillow.Plugin.Telegram/StandChillow.Plugin.Telegram.csproj -c Release
 
       - name: Test protocol invariants
+        shell: bash
         run: >-
-          dotnet test tests/StandChillow.LanServer.Tests/StandChillow.LanServer.Tests.csproj
+          set -o pipefail; dotnet test tests/StandChillow.LanServer.Tests/StandChillow.LanServer.Tests.csproj
           -c Release --results-directory "${{ runner.temp }}/test-results"
           --logger "trx;LogFileName=protocol-tests.trx"
+          2>&1 | tee "${{ runner.temp }}/test-output.txt"
+
+      - name: Annotate failed protocol assertions
+        if: failure()
+        shell: bash
+        run: |
+          grep -A 12 -E 'Error Message:|Failed StandChillow' "${{ runner.temp }}/test-output.txt" \
+            | head -60 | while IFS= read -r line; do echo "::error::${line}"; done
 
       - name: Upload failed test report (${{ matrix.rid }})
         if: failure()
