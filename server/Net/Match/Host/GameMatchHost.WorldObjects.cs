@@ -526,6 +526,14 @@ public sealed partial class GameMatchHost
         if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
             return;
 
+        // Capture RX — this is the packet the phones flood and the host previously never
+        // dumped, which made captures look like clients "went silent" after their CWO.
+        // Rate-capped: State floods ~10Hz/pawn; first N + every Kth keeps the join phase
+        // (where stumbles happen) while not flooding the disk for minutes on end.
+        var rxCount = Interlocked.Increment(ref _stateRelayRxCaptures);
+        if (rxCount <= StateRelayCaptureFirst || rxCount % StateRelayCaptureEveryK == 0)
+            DumpCapture($"match_rx_{st.ActorNr:D3}_WorldObjectState", raw);
+
         short? objectId = null;
         if (raw.Length >= 4
             && MatchCodec.TryParseEnvelope(raw, out _, out var op, out _, out var bodyOffset)
@@ -541,6 +549,12 @@ public sealed partial class GameMatchHost
         }
 
         var n = BroadcastInitReadyUnreliableExcept(st.Room, peer, raw);
+
+        // Capture relay TX — what the host forwards to the other peers. Without this the
+        // other client's capture has no host-side view of the relayed State stream.
+        var txCount = Interlocked.Increment(ref _stateRelayTxCaptures);
+        if (txCount <= StateRelayCaptureFirst || txCount % StateRelayCaptureEveryK == 0)
+            DumpCapture($"match_tx_{st.ActorNr:D3}_WorldObjectState_relay", raw);
         var logged = Interlocked.Increment(ref _stateRelayLogged);
         if (logged <= StateLogFirst || logged % StateLogEveryK == 0)
         {

@@ -63,6 +63,12 @@ public sealed partial class GameMatchHost : IDisposable
     private int _stateRxSuppressed;
     private int _stateRelayLogged;
     private DateTime _lastStateSummaryUtc = DateTime.MinValue;
+    // WorldObjectState capture (handles the relay RX + relay TX the host previously
+    // never dumped — the hole that made captures look like clients went silent).
+    private const int StateRelayCaptureFirst = 200;
+    private const int StateRelayCaptureEveryK = 50;
+    private int _stateRelayRxCaptures;
+    private int _stateRelayTxCaptures;
 
     // WeaponDropManager (scene id=4) WorldObjectRpc floods like State — rate-limit console.
     private const short WeaponDropManagerObjectId = 4;
