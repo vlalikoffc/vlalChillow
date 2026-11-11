@@ -224,6 +224,30 @@ public static class MatchRoomField
 public static class MatchCodec
 {
     /// <summary>
+    /// 2.07 reliable host operations carry a zero Int32 between envelope serverTime and body.
+    /// Handshake, JoinRoomResponse, client requests and unreliable WorldObjectState do not.
+    /// </summary>
+    private static void WriteHostOperationHeader(LobbyWriter w, MatchOpcode opcode, int serverTime)
+    {
+        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
+        w.WriteByte((byte)opcode);
+        w.WriteInt32(serverTime);
+        w.WriteInt32(0);
+    }
+
+    private static bool HasHostOperationPrefix(MatchFrameFlags flags, MatchOpcode opcode) =>
+        (flags & MatchFrameFlags.HasServerTime) != 0
+        && opcode is MatchOpcode.ActorJoinedEvent
+            or MatchOpcode.ActorLeftEvent
+            or MatchOpcode.SetProperties
+            or MatchOpcode.SetProperty
+            or MatchOpcode.SetInternalProperty
+            or MatchOpcode.CreateWorldObject
+            or MatchOpcode.DestroyWorldObject
+            or MatchOpcode.ReCreateSceneManager
+            or MatchOpcode.WorldObjectRpc;
+
+    /// <summary>
     /// Plain HandshakeRequest (<c>fuo=0</c> / <c>fuv</c>):
     /// flags=0, opcode=0, u16 LE 1024, AppId string, UserId string.
     /// </summary>
@@ -448,9 +472,7 @@ public static class MatchCodec
         string? userGuid = null)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.ActorJoinedEvent);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.ActorJoinedEvent, serverTime);
         WriteGak(w, actor);
         if (userGuid is { Length: > 0 })
         {
@@ -475,9 +497,7 @@ public static class MatchCodec
         byte? optionalByte = null)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.ActorLeftEvent);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.ActorLeftEvent, serverTime);
         w.WriteByte(actorNr);
         if (optionalBool is { } b)
         {
@@ -507,9 +527,7 @@ public static class MatchCodec
         LobbyVariant value)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.SetInternalProperty);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.SetInternalProperty, serverTime);
         w.WriteByte(actorNr);
         w.WriteByte(code);
         w.WriteFzp(value);
@@ -530,9 +548,7 @@ public static class MatchCodec
         LobbyVariant value)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.SetProperty);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.SetProperty, serverTime);
         w.WriteByte(actorNr);
         w.WriteString(key);
         w.WriteFzp(value);
@@ -565,9 +581,7 @@ public static class MatchCodec
         IReadOnlyList<(string Key, LobbyVariant Value)> props)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.SetProperties);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.SetProperties, serverTime);
         w.WriteByte(actorNr);
         w.WriteBareProps(props);
         return w.ToArray();
@@ -588,9 +602,7 @@ public static class MatchCodec
         byte[]? trailingPayload = null)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.CreateWorldObject);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.CreateWorldObject, serverTime);
         WriteCreateWorldObjectBody(w, kind, objectId, typeName, fusTag, ownerActorNr, trailingPayload);
         return w.ToArray();
     }
@@ -737,9 +749,7 @@ public static class MatchCodec
         byte[]? payload = null)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.WorldObjectRpc);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.WorldObjectRpc, serverTime);
         WriteWorldObjectRpcBody(w, objectId, rpcId, gaaTarget, field, timeValue, payload);
         return w.ToArray();
     }
@@ -884,9 +894,7 @@ public static class MatchCodec
     public static byte[] BuildReCreateSceneManager(int serverTime, short objectId)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.ReCreateSceneManager);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.ReCreateSceneManager, serverTime);
         w.WriteInt16(objectId);
         return w.ToArray();
     }
@@ -980,9 +988,7 @@ public static class MatchCodec
     public static byte[] BuildDestroyWorldObject(int serverTime, short objectId)
     {
         var w = new LobbyWriter();
-        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.DestroyWorldObject);
-        w.WriteInt32(serverTime);
+        WriteHostOperationHeader(w, MatchOpcode.DestroyWorldObject, serverTime);
         w.WriteInt16(objectId);
         return w.ToArray();
     }
@@ -1150,6 +1156,14 @@ public static class MatchCodec
             if (decoded != uncLen)
                 return false;
             return true;
+        }
+
+        if (HasHostOperationPrefix(flags, opcode))
+        {
+            if (payload.Length < bodyOffset + 4
+                || BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(bodyOffset, 4)) != 0)
+                return false;
+            bodyOffset += 4;
         }
 
         body = payload.Slice(bodyOffset).ToArray();
