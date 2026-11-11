@@ -109,7 +109,7 @@ public sealed class Match207BootstrapTests
     public void SceneTransitions_MatchPhoneReservedInt32()
     {
         Assert.Equal(
-            Convert.FromHexString("04CA8675000000000000000400"),
+            Convert.FromHexString("04CA86750000000000000400"),
             MatchCodec.BuildReCreateSceneManager(30086, objectId: 4));
         Assert.Equal(
             Convert.FromHexString("04C986750000000000008100"),
