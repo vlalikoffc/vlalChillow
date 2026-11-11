@@ -9,17 +9,8 @@ public sealed class Match207HandshakeTests
     [Fact]
     public void ExtendedHandshake207_DecodesTheLiveRequestLayout()
     {
-        const string token = "\0CLB143C7D41FAE30EB14F49B1678E3933C9_dac2313f130647fcb10c980fe6136cd";
-        var w = new LobbyWriter();
-        w.WriteByte(0);
-        w.WriteByte((byte)MatchOpcode.FetchServerTimeRequest);
-        w.WriteVarInt(977);
-        w.WriteString(MatchAuth.AppId);
-        w.WriteString("");
-        w.WriteString(token);
-        w.WriteByte(0x63);
-
-        var packet = w.ToArray();
+        const string token = "CLB143C7D41FAE30EB14F49B1678E3933C9_dac2313f130647fcb10c980fe6136cdc";
+        var packet = MatchCodec.BuildHandshake207Request(MatchAuth.AppId, "", token);
         Assert.Equal(100, packet.Length);
         Assert.True(MatchCodec.TryOpenBody(
             packet, out _, out var opcode, out _, out var body));
@@ -32,7 +23,6 @@ public sealed class Match207HandshakeTests
         Assert.Equal(MatchAuth.AppId, request.AppId);
         Assert.Equal("", request.UserId);
         Assert.Equal(token, request.AuthToken);
-        Assert.Equal(0x63, request.TrailingByte);
         Assert.Equal(0, reader.Remaining);
     }
 

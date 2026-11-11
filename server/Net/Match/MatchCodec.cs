@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 using K4os.Compression.LZ4;
 using StandChillow.LanServer.Net.Lobby;
 
@@ -180,7 +181,6 @@ public readonly struct Handshake207RequestBody
     public string AppId { get; init; }
     public string UserId { get; init; }
     public string AuthToken { get; init; }
-    public byte TrailingByte { get; init; }
 }
 
 /// <summary>Decoded <c>fuy</c> JoinRoomRequest body (after envelope).</summary>
@@ -237,6 +237,30 @@ public static class MatchCodec
         w.WriteBytes(u16);
         w.WriteString(appId);
         w.WriteString(userId);
+        return w.ToArray();
+    }
+
+    /// <summary>
+    /// Live 2.07 extended handshake: opcode 2, varint protocol 977, AppId,
+    /// empty legacy user id, then a UInt16-length-prefixed 68-byte token.
+    /// ConnectAsClient generates the observed CLB + device hash + session hash
+    /// shape; it never replays a captured token.
+    /// </summary>
+    public static byte[] BuildHandshake207Request(
+        string appId,
+        string userId,
+        string? authToken = null)
+    {
+        authToken ??= $"CLB{LobbyAuth.Md5Hex(userId)}_{Guid.NewGuid():N}";
+        var tokenBytes = Encoding.UTF8.GetBytes(authToken);
+        var w = new LobbyWriter();
+        w.WriteByte(0);
+        w.WriteByte((byte)MatchOpcode.FetchServerTimeRequest);
+        w.WriteVarInt(MatchAuth.ProtocolVersion207);
+        w.WriteString(appId);
+        w.WriteString("");
+        w.WriteInt16(checked((short)tokenBytes.Length));
+        w.WriteBytes(tokenBytes);
         return w.ToArray();
     }
 
@@ -1145,13 +1169,19 @@ public static class MatchCodec
 
     public static Handshake207RequestBody ParseHandshake207RequestBody(LobbyReader r)
     {
+        var protocolVersion = r.ReadVarInt();
+        var appId = r.ReadString();
+        var userId = r.ReadString();
+        var tokenLength = r.ReadInt16();
+        if (tokenLength < 0)
+            throw new InvalidDataException($"Bad 2.07 auth token length {tokenLength}");
+        var authToken = Encoding.UTF8.GetString(r.ReadBytes(tokenLength));
         return new Handshake207RequestBody
         {
-            ProtocolVersion = r.ReadVarInt(),
-            AppId = r.ReadString(),
-            UserId = r.ReadString(),
-            AuthToken = r.ReadString(),
-            TrailingByte = r.ReadByte(),
+            ProtocolVersion = protocolVersion,
+            AppId = appId,
+            UserId = userId,
+            AuthToken = authToken,
         };
     }
 
