@@ -90,6 +90,15 @@ public static class MatchRoomPropKeys
     public const string Team = "team"; // <c>bbo.caav</c> / <c>cux</c> byte
     public const string Uid = "uid";
     public const string BadgeId = "badgeId";
+    /// <summary>
+    /// Account-verification flag (<c>fzq.Bool</c>) — every phone joiner authors it in the bootstrap
+    /// identity batch (<c>uid</c> → <c>badgeId</c> → <c>verified</c> → <c>from_lobby</c> → <c>avatar</c>),
+    /// and the phone host re-authors it for its own actor between <c>badgeId</c> and <c>from_lobby</c>.
+    /// Gold: <c>20261111_074024_010_match_rx_SetProperty_len14.bin</c> (client TX) and
+    /// <c>20261111_074258_051_match_rx007_SetProperty_len22.bin</c> (host TX). The dedicated host
+    /// skipped it, so an INIT identity batch did not match the shape clients expect.
+    /// </summary>
+    public const string Verified = "verified";
     public const string FromLobby = "from_lobby";
     public const string Avatar = "avatar";
     public const string Money = "money";
@@ -615,12 +624,19 @@ public static class MatchSceneManagers
     /// <summary>
     /// Weapon/grenade drop catalogs (byte item ids) observed on phone host WeaponDropManager / GrenadeManager.
     /// Rebuilt as int32 count + id bytes — same structure, not a memcpy of the packet.
+    /// <para>
+    /// Exactly <b>51</b> ids, same list for both managers — gold
+    /// <c>20261111_074258_058_match_rx014_CreateWorldObject_len88.bin</c> /
+    /// <c>..._059_match_rx015_CreateWorldObject_len85.bin</c> (phone host, len 88/85).
+    /// <c>89</c> (Hands — not droppable) and <c>101</c> must not be here: an earlier list carried
+    /// them and emitted 53 ids (len 90/87), i.e. two stale entries and a different tail order.
+    /// </para>
     /// </summary>
     public static readonly byte[] DropCatalogIds =
     [
         11, 12, 13, 15, 16, 17, 18, 32, 33, 34, 35, 36, 37, 42, 43, 44, 45, 46, 47, 48, 49,
         51, 52, 53, 54, 62, 63, 64, 65, 70, 71, 72, 73, 75, 77, 78, 79, 80, 81, 82, 83, 85,
-        86, 88, 89, 91, 92, 93, 94, 95, 100, 102, 101,
+        86, 88, 91, 92, 93, 94, 95, 100, 102,
     ];
 
     public static readonly Entry[] Bootstrap =

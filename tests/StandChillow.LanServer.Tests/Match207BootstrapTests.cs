@@ -116,6 +116,61 @@ public sealed class Match207BootstrapTests
             MatchCodec.BuildDestroyWorldObject(30086, objectId: 129));
     }
 
+    /// <summary>
+    /// Phone host sends a bare <c>00 0F</c> right after Found
+    /// (gold <c>20261111_074252_005_match_rx003_op15_len2.bin</c>); the dedicated host must too.
+    /// </summary>
+    [Fact]
+    public void RoomInitReady_MatchesPhoneEmptyNudge()
+    {
+        var packet = MatchCodec.BuildRoomInitReady();
+
+        Assert.Equal(new byte[] { 0x00, 0x0F }, packet);
+        Assert.True(MatchCodec.TryParseEnvelope(
+            packet, out var flags, out var opcode, out _, out var bodyOffset));
+        Assert.Equal(MatchFrameFlags.None, flags);
+        Assert.Equal(MatchOpcode.RoomInitReady, opcode);
+        Assert.Equal((byte)15, (byte)opcode);
+        Assert.Equal(packet.Length, bodyOffset);
+    }
+
+    /// <summary>
+    /// Phone host identity block: uid → badgeId → verified → from_lobby → avatar → ping
+    /// (gold <c>20261111_074258_049..053</c>). The dedicated host must not skip <c>verified</c>.
+    /// </summary>
+    [Fact]
+    public void HostIdentity_IncludesVerifiedBetweenBadgeIdAndFromLobby()
+    {
+        var verified = MatchCodec.BuildSetProperty(
+            9829, actorNr: 1, MatchRoomPropKeys.Verified, LobbyVariant.FromBool(false));
+
+        Assert.Equal(
+            Convert.FromHexString("04656526000000000000010876657269666965640600"),
+            verified);
+    }
+
+    /// <summary>
+    /// WeaponDropManager / GrenadeManager catalogs are exactly the gold 51 ids
+    /// (gold len=88/85 CreateWorldObject). 89 (Hands) and 101 must stay out.
+    /// </summary>
+    [Fact]
+    public void DropCatalog_MatchesGoldPhoneManagerPayload()
+    {
+        Assert.Equal(51, MatchSceneManagers.DropCatalogIds.Length);
+        Assert.DoesNotContain((byte)89, MatchSceneManagers.DropCatalogIds);
+        Assert.DoesNotContain((byte)101, MatchSceneManagers.DropCatalogIds);
+        Assert.Equal(102, MatchSceneManagers.DropCatalogIds[^1]);
+
+        var payload = MatchCodec.BuildDropCatalogPayload(MatchSceneManagers.DropCatalogIds);
+        var cwo = MatchCodec.BuildCreateWorldObject(
+            9829, WorldObjectKind.SceneManager, objectId: 4, "WeaponDropManager",
+            fusTag: 0xFC, ownerActorNr: null, trailingPayload: payload);
+
+        Assert.Equal(88, cwo.Length);
+        Assert.Equal(51, System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(
+            payload.AsSpan(0, 4)));
+    }
+
     private static LobbyReader Open(byte[] packet, MatchOpcode expectedOpcode)
     {
         Assert.True(MatchCodec.TryOpenBody(

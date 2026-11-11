@@ -692,6 +692,16 @@ public sealed class GameMatchClient : IDisposable
                     Interlocked.Increment(ref _postJoinRx);
                 break;
             }
+            case MatchOpcode.RoomInitReady:
+            {
+                // Bare 00 0F right after Found — the same frame a phone host sends.
+                // Body is empty and nothing answers it: just count it and keep the probe quiet.
+                if (_joinSucceeded)
+                    Interlocked.Increment(ref _postJoinRx);
+                Console.WriteLine(
+                    "[match-net] RX RoomInitReady (op15) — bare INIT frame from phone host");
+                break;
+            }
             case MatchOpcode.ActorJoinedEvent:
             case MatchOpcode.ActorLeftEvent:
             case MatchOpcode.WorldObjectRpc:

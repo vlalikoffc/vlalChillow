@@ -132,6 +132,9 @@ public sealed class MatchProbeDecode
                 case MatchOpcode.FetchServerTimeResponse:
                     sb.Append(" — clock sync");
                     break;
+                case MatchOpcode.RoomInitReady:
+                    sb.Append(" — bare INIT frame, empty body (seen right after Found)");
+                    break;
                 default:
                     sb.Append(CultureInfo.InvariantCulture,
                         $" — undecoded body={body.Length}B (kept in .bin capture)");
@@ -177,6 +180,7 @@ public sealed class MatchProbeDecode
             => "WORLD",
         MatchOpcode.ActorJoinedEvent or MatchOpcode.ActorLeftEvent
             or MatchOpcode.JoinRoomResponse or MatchOpcode.HandshakeResponse
+            or MatchOpcode.RoomInitReady
             => "ROOM",
         _ => "PKT",
     };
