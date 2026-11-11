@@ -89,6 +89,44 @@ Two steps matter:
 
 Typical flow: everyone joins lobby → host picks `mode` + `map` → host runs `play` → both teams pick CT/T → host runs `set start` → WarmUp / buy → live rounds.
 
+### Config file (admins + how the match starts)
+
+On first launch the server writes a **commented `config.json`** next to the executable and
+prints where. Edit it, then restart the host (or run console `config reload`).
+
+```jsonc
+{
+  "admin": {
+    "nicknames": [ "влал" ],                                  // who may run admin commands
+    "adminOnlyCommands": [ "mode", "map", "set", "play", "end", "start" ],
+    "anyoneCanStart": false                                   // let everyone run /start
+  },
+  "matchStart": {
+    "mode": "manual",        // "manual" | "auto" | "ready"   ← see below
+    "auto":  { "minPlayersPerTeam": 1 },
+    "ready": { "announceInChat": true, "resetOnLeave": true, "allowUnready": true }
+  }
+}
+```
+
+**Who is an admin.** Matched by the lobby nickname, case-insensitive. Anyone not in
+`admin.nicknames` gets a private «только для админов» reply and the command does not run.
+`/help`, `/ready` and `/unready` are always open to everyone.
+
+**Three ways to start a match** — pick one with `matchStart.mode`:
+
+| Mode | How the match starts |
+|------|----------------------|
+| **`manual`** (default) | Only by `/start` or `/set start`. Who may use it is decided by `admin` above. |
+| **`auto`** | The server arms the start **by itself** as soon as both teams have at least `auto.minPlayersPerTeam` players. Does exactly what `/set start` does. |
+| **`ready`** | Everyone currently **in the match** types `/ready`. The server posts «ник готов (1/3)» in chat and starts once all of them are ready. |
+
+`/ready` is rejected from the lobby — you must be in the match. If a ready player leaves the
+match, the vote is dropped and the counter is recalculated, so a leaver can never block the
+start. `/unready` cancels a vote (disable with `ready.allowUnready`).
+
+Console helpers: `config` prints the active settings, `config reload` re-reads the file.
+
 ### Useful console commands
 
 ```
@@ -99,6 +137,8 @@ play                     # launch / rematch
 end                      # end match / return path
 status                   # lobby + match summary
 plugins                  # list loaded plugins
+config                   # show active config (admins, start mode)
+config reload            # re-read config.json without restarting
 quit
 ```
 

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Runtime.InteropServices;
+using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net;
@@ -87,6 +88,17 @@ public static class HostBootstrap
         Console.WriteLine($"[plugins] root: {plugins.PluginsRoot}");
 
         var advertiseIp = LanInterfacePicker.PickLanBindAddress();
+        // Конфиг: админы и режим старта. Файл создаётся сам при первом запуске.
+        var serverConfig = ServerConfig.Load();
+        var admins = serverConfig.Admin.Nicknames.Count == 0
+            ? "(никого не задано — admin-команды недоступны)"
+            : string.Join(", ", serverConfig.Admin.Nicknames);
+        Console.WriteLine($"[config] файл: {ServerConfig.LastLoadedPath}");
+        Console.WriteLine($"[config] админы: {admins}");
+        Console.WriteLine($"[config] запуск матча кому угодно: {(serverConfig.Admin.AnyoneCanStart ? "да" : "нет")}");
+        Console.WriteLine($"[config] режим старта: {serverConfig.DescribeStartMode()}");
+        Console.WriteLine();
+
         using var game = new GameNetHost(
             lobbyTitle,
             LanDiscoveryHost.DefaultGamePort,
@@ -97,7 +109,8 @@ public static class HostBootstrap
             {
                 SyncDiscovery();
                 plugins.NotifyMatchStarted("host");
-            });
+            },
+            config: serverConfig);
         gameRef = game;
         plugins.AttachHost(game);
         plugins.LoadAll();
