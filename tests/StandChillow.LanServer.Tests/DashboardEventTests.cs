@@ -29,9 +29,9 @@ public sealed class DashboardEventTests
         }
 
         Assert.NotNull(received);
-        Assert.Equal(7, received.VictimNr);
+        Assert.Equal((byte)7, received.VictimNr);
         Assert.Equal("victim", received.VictimName);
-        Assert.Equal(4, received.KillerNr);
+        Assert.Equal((byte?)4, received.KillerNr);
         Assert.Equal("killer", received.KillerName);
         Assert.Equal(MatchTeam.Ct, received.KillerTeam);
     }
