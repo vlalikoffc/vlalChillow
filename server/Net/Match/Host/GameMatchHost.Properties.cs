@@ -221,6 +221,12 @@ public sealed partial class GameMatchHost
                         $"[observe] SetProperties death actor={actorNr} value={v} (same-tick wipe)");
                     NoteActorDeath(room, actorNr, v, source: "SetProperties");
                 }
+
+                // Joiner-ready gate: identity may arrive as a batch SetProperties (uid +
+                // from_lobby + avatar|ping in one packet) — phone clients do this. Previously
+                // only individual SetProperty was checked, so batch identity delayed the
+                // bootstrap (managers+C2) by up to the 15s soft timeout → client init stumble.
+                NoteJoinerIdentityProp(peer, actorNr, k);
             }
 
             // kills++ = confirmed kill. Duel FFA branches in RouteConfirmedKillByKiller;
