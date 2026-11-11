@@ -79,9 +79,10 @@ public sealed partial class GameMatchHost
         if (result == HandshakeResult.Success)
         {
             st.Handshaken = true;
-            // 2.07 leaves the legacy userId empty. Keep the per-connection token
-            // for actor duplicate detection instead of rejecting the new client.
-            st.UserId = req.AuthToken;
+            // 2.07 actor snapshots carry the auth token without its leading C
+            // (CLB… in handshake → LB… in gap), matching the live phone host.
+            // 2.07 gap identity omits the handshake token's leading C (CLB… → LB…).
+            st.UserId = req.AuthToken.Length > 0 ? req.AuthToken[1..] : req.AuthToken;
             st.AppId = req.AppId;
         }
 
@@ -152,7 +153,7 @@ public sealed partial class GameMatchHost
                 if (st.UserId is { } u)
                     room.UserIds.Add(u);
                 var nick = string.IsNullOrWhiteSpace(req.Room) ? $"actor{nr}" : req.Room;
-                room.Actors.Add((nr, nick));
+                room.Actors.Add((nr, nick, st.UserId ?? ""));
                 st.RosterName = nick;
             }
             st.Room = room;
@@ -183,7 +184,7 @@ public sealed partial class GameMatchHost
         MatchGapRoom? gap = null;
         if (result == JoinRoomResult.Found && room is not null && actor is { } assigned)
         {
-            List<(byte Nr, string Name)> actorsSnap;
+            List<(byte Nr, string Name, string UserId)> actorsSnap;
             byte roomC2;
             string modeId;
             string levelId;
@@ -216,6 +217,7 @@ public sealed partial class GameMatchHost
                 {
                     ActorNr = a.Nr,
                     Name = a.Name,
+                    UserId = a.UserId,
                     Props = null,
                     Flag = false,
                 }).ToList(),

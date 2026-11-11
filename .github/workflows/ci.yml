@@ -45,7 +45,28 @@ jobs:
         run: dotnet build server/plugins-src/StandChillow.Plugin.Telegram/StandChillow.Plugin.Telegram.csproj -c Release
 
       - name: Test protocol invariants
-        run: dotnet test tests/StandChillow.LanServer.Tests/StandChillow.LanServer.Tests.csproj -c Release
+        shell: bash
+        run: >-
+          set -o pipefail; dotnet test tests/StandChillow.LanServer.Tests/StandChillow.LanServer.Tests.csproj
+          -c Release --results-directory "${{ runner.temp }}/test-results"
+          --logger "trx;LogFileName=protocol-tests.trx"
+          2>&1 | tee "${{ runner.temp }}/test-output.txt"
+
+      - name: Annotate failed protocol assertions
+        if: failure()
+        shell: bash
+        run: |
+          grep -A 12 -E 'Error Message:|Failed StandChillow' "${{ runner.temp }}/test-output.txt" \
+            | head -60 | while IFS= read -r line; do echo "::error::${line}"; done
+
+      - name: Upload failed test report (${{ matrix.rid }})
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-protocol-tests-${{ matrix.rid }}
+          path: ${{ runner.temp }}/test-results
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Publish self-contained server (${{ matrix.rid }})
         run: >-

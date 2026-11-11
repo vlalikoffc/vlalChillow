@@ -587,6 +587,7 @@ public sealed class MatchProbeDecode
         {
             var nr = r.ReadByte();
             var name = r.ReadString();
+            var userId = r.ReadString();
             var hasTyped = r.ReadBool();
             List<(string Key, LobbyVariant Value)>? props = null;
             if (hasTyped)
@@ -596,6 +597,7 @@ public sealed class MatchProbeDecode
             {
                 ActorNr = nr,
                 Name = name,
+                UserId = userId,
                 Props = props,
                 Flag = flag,
             };

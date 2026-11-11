@@ -360,6 +360,10 @@ public static class MatchCodec
         w.WriteByte((byte)MatchOpcode.JoinRoomResponse);
         w.WriteInt32(serverTime);
         w.WriteByte((byte)result);
+        // Live 2.07 Found has five absent optionals before debugMessage. The first
+        // is the legacy message slot below; these four reserved slots precede it.
+        for (var i = 0; i < 4; i++)
+            w.WriteBool(false);
         if (message is not null)
         {
             w.WriteBool(true);
@@ -388,6 +392,8 @@ public static class MatchCodec
         }
         else
             w.WriteBool(false);
+        // Live 2.07 JoinRoomResponse has one final absent optional after gap.
+        w.WriteBool(false);
         return w.ToArray();
     }
 
@@ -415,13 +421,14 @@ public static class MatchCodec
     }
 
     /// <summary>
-    /// <c>gak.booe</c>: nr, name, hasTypedProps, [typed props], flag.
+    /// 2.07 <c>gak.booe</c>: nr, name, userId, hasTypedProps, [typed props], flag.
     /// Same layout as gap actor entries (thin Found uses empty props + flag=false).
     /// </summary>
     public static void WriteGak(LobbyWriter w, MatchGapActor a)
     {
         w.WriteByte(a.ActorNr);
         w.WriteString(a.Name);
+        w.WriteString(a.UserId);
         w.WriteBool(true);
         if (a.Props is { Count: > 0 } actorProps)
             w.WriteTypedProps(actorProps);
@@ -1215,6 +1222,10 @@ public static class MatchCodec
     public static JoinRoomResponseBody ParseJoinRoomResponseBody(LobbyReader r)
     {
         var result = (JoinRoomResult)r.ReadByte();
+        // Four reserved absent optionals precede the legacy message slot in 2.07.
+        for (var i = 0; i < 4; i++)
+            if (r.ReadBool())
+                throw new InvalidDataException("Present reserved JoinRoomResponse optional");
         string? msg = null;
         if (r.ReadBool())
             msg = r.ReadString();
