@@ -910,7 +910,8 @@ public static class MatchCodec
         w.WriteBytes(new byte[8]);
         w.WriteByte(MatchSceneManagers.PawnSpawn.TrailingU8B);
         w.WriteFloat(MatchSceneManagers.PawnSpawn.TrailingFloat);
-        w.WriteByte(MatchSceneManagers.PawnSpawn.TrailingU8C);
+        // Phone RPC spawn tail is 14B: unlike pawn CreateWorldObject it has no final
+        // loadout-tag / TrailingU8C byte.
         return w.ToArray();
     }
 
