@@ -111,8 +111,8 @@ public static class MatchAuth
     /// <summary><c>ful.cwfh</c> / <c>fuv.cwgm</c> protocol version ushort.</summary>
     public const ushort ProtocolVersion = 1024;
 
-    /// <summary>Varint protocol marker D1 07 in the live 2.07 extended handshake.</summary>
-    public const int ProtocolVersion207 = 2001;
+    /// <summary>Varint protocol marker D1 07 = 977 in the live 2.07 extended handshake.</summary>
+    public const int ProtocolVersion207 = 977;
 
     /// <summary><c>cui.balw()</c> — lobby version string (not used on match wire).</summary>
     public const string GameVersion = "2.07";
@@ -180,7 +180,7 @@ public readonly struct Handshake207RequestBody
     public string AppId { get; init; }
     public string UserId { get; init; }
     public string AuthToken { get; init; }
-    public bool TrailingFlag { get; init; }
+    public byte TrailingByte { get; init; }
 }
 
 /// <summary>Decoded <c>fuy</c> JoinRoomRequest body (after envelope).</summary>
@@ -1151,7 +1151,7 @@ public static class MatchCodec
             AppId = r.ReadString(),
             UserId = r.ReadString(),
             AuthToken = r.ReadString(),
-            TrailingFlag = r.ReadBool(),
+            TrailingByte = r.ReadByte(),
         };
     }
 
