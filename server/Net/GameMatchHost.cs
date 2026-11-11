@@ -579,6 +579,32 @@ public sealed partial class GameMatchHost : IDisposable
                 else
                     HandleHandshake207(peer, body, payload);
                 break;
+            case MatchOpcode.CustomEvent:
+                // Real phone clients send CustomEvent (op205) — ping/keepalive during init.
+                // Phone server relays it; the dedicated previously dumped it unhandled, so
+                // clients waited for a response that never came → init stumble. Relay to
+                // other room peers (same flags=None shape) so clients see each other's
+                // CustomEvent traffic. Do NOT parse the body — relay verbatim.
+                {
+                    MatchRoom? ceRoom = null;
+                    if (_peers.TryGetValue(peer, out var ceSt))
+                        ceRoom = ceSt.Room;
+                    if (ceRoom is not null)
+                    {
+                        var nCe = BroadcastRoomExcept(ceRoom, peer, payload,
+                            tag: "match_tx_CustomEvent");
+                        Console.WriteLine(
+                            $"[match-host] TX relay CustomEvent → peers={nCe} " +
+                            $"(was unhandled — phones send this as ping/keepalive)");
+                    }
+                    else
+                    {
+                        Console.WriteLine(
+                            $"[match-host] CustomEvent from {peer} — no room, dump only");
+                        DumpCapture("match_op205", payload);
+                    }
+                }
+                break;
             default:
                 Console.WriteLine($"[match-host] unhandled opcode {opcode} — dump");
                 DumpCapture($"match_op{(byte)opcode}", payload);
