@@ -12,8 +12,8 @@ public sealed class Match207JoinRoomTests
         (byte Nr, string Name, string UserId)[] expectedActors =
         [
             (1, "player_6472", "LB143C7D41FAE30EB14F49B1678E3933C9"),
-            (2, "FinalSapper78", "LB4B7BA14444774A9D4FBBEC23F4519998_425b3cb5f43a4b678668831543224948"),
-            (3, "probe", "LB115248D58295549502339697C4CCF9DC_b21ef71e6c3345729dbb21897b024f44"),
+            (2, "FinalSapper78", "CLB4B7BA14444774A9D4FBBEC23F4519998_425b3cb5f43a4b678668831543224948"),
+            (3, "probe", "CLB115248D58295549502339697C4CCF9DC_b21ef71e6c3345729dbb21897b024f44"),
         ];
         var gap = new MatchGapRoom
         {

@@ -81,7 +81,9 @@ public sealed partial class GameMatchHost
             st.Handshaken = true;
             // 2.07 actor snapshots carry the auth token without its leading C
             // (CLB… in handshake → LB… in gap), matching the live phone host.
-            st.UserId = req.AuthToken.Length > 0 ? req.AuthToken[1..] : req.AuthToken;
+            // 2.07 Found preserves the joiner's full auth identity (CLB…), as in the
+            // authoritative phone capture. The phone host's own LB… identity is separate.
+            st.UserId = req.AuthToken;
             st.AppId = req.AppId;
         }
 
