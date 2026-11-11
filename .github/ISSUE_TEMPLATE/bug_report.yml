@@ -5,13 +5,13 @@ body:
   - type: markdown
     attributes:
       value: |
-        Only StandChillow **2.06 OBT F1** is supported. Other builds are untested.
+        Only StandChillow **2.07 OBT F1** is supported. Version 2.06 and other builds are rejected/untested.
 
   - type: input
     id: client-version
     attributes:
       label: Client build
-      placeholder: "2.06 OBT F1"
+      placeholder: "2.07 OBT F1"
     validations:
       required: true
 

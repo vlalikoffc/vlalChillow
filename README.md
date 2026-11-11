@@ -4,7 +4,7 @@ LAN multiplayer **dedicated server** for [**StandChillow**](https://t.me/chillow
 
 Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engineering authorized by the game owner. Not an official product and not affiliated with the game publisher.
 
-**Supported client version:** StandChillow **2.06 OBT F1**. Other builds are untested.
+**Supported client version:** StandChillow **2.07 OBT F1 only**. Version 2.06 is intentionally rejected; other builds are untested.
 
 ## What works
 
@@ -46,11 +46,23 @@ Escalation on Prison over LAN — from lobby ready-up through round outcomes on 
 
 ## Requirements
 
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- StandChillow client on the same LAN (Wi‑Fi/Ethernet; VPN interfaces are skipped for bind/advertise)
-- Linux, macOS, or Windows
+- StandChillow **2.07 OBT F1** on the same LAN (Wi‑Fi/Ethernet; VPN interfaces are skipped for bind/advertise)
+- Linux x64, macOS x64, or Windows x64
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) **only when building from source** — downloadable server binaries are self-contained
 
 ## Quick start
+
+### Ready-to-run server (no .NET installation)
+
+Every successful build on `main` publishes three artifacts under **Actions → CI → latest successful run**:
+
+- `standchillow-server-win-x64` → run `StandChillow.LanServer.exe`
+- `standchillow-server-linux-x64` → run `./StandChillow.LanServer`
+- `standchillow-server-osx-x64` → run `./StandChillow.LanServer`
+
+On Linux/macOS, first run `chmod +x StandChillow.LanServer`. Tags matching `v*` also create a GitHub Release with ZIP files for all three platforms.
+
+### Build from source
 
 ```bash
 cd server
@@ -58,7 +70,7 @@ dotnet build -c Release
 dotnet run -c Release
 ```
 
-Phones: open StandChillow → LAN → your lobby should appear → join → chat.
+Phones: open StandChillow → LAN → your lobby should appear → join → chat. The interactive dashboard requires an ANSI-capable TTY; use `--console` for plain logs or `--dashboard` to force the full-screen UI.
 
 ### Ports
 
@@ -140,7 +152,7 @@ Everything the server sends is derived from client reverse-engineering and obser
 
 ## Reverse-engineering basis and boundaries
 
-The game owner has authorized the reverse engineering used for this project. Its sole interoperability target is self-hosted **LAN play** with StandChillow 2.06 OBT F1; the project does not connect to or provide access to official online services and contains no anti-cheat bypass.
+The game owner has authorized the reverse engineering used for this project. Its sole interoperability target is self-hosted **LAN play** with StandChillow 2.07 OBT F1; the project does not connect to or provide access to official online services and contains no anti-cheat bypass.
 
 No game assets, game binaries, or decompiled source code are distributed in this repository. Local reverse-engineering dumps, original binaries, captures, and logs are excluded by `.gitignore`, and the CI hygiene guard rejects them if they are accidentally tracked.
 

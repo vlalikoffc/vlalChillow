@@ -307,7 +307,13 @@ public sealed partial class GameMatchHost
             $"[match-host] tdm-flow: master death authored victim={victimActorNr}/{victimTeam} " +
             $"death={newDeath} killer={killerLabel} src={source} (death HUD + respawn now client-driven)");
         Dashboard.DashboardHub.PostDeath(
-            victimActorNr, ResolveActorName(victimActorNr), victimTeam, source);
+            victimActorNr,
+            ResolveActorName(victimActorNr),
+            victimTeam,
+            source,
+            killerActorNr,
+            killerActorNr is byte resolvedKiller ? ResolveActorName(resolvedKiller) : null,
+            killerActorNr is byte confirmedKiller ? GetActorTeam(room, confirmedKiller) : MatchTeam.None);
     }
 
     /// <summary>

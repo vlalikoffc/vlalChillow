@@ -32,11 +32,12 @@ public enum JoinFailReason : byte
 public static class LobbyAuth
 {
     /// <summary>
-    /// Runtime LAN version string (APK 2.06 OBT F1).
+    /// Runtime LAN version string (APK 2.07 OBT F1).
     /// eth.cctor still seeds cnuv from literal cnus="1.0.0", but NetcodeSupport.Init
-    /// overwrites cnuv via eth.bjqn(cui.balw()) → Build version "2.06".
+    /// overwrites cnuv via eth.bjqn(cui.balw()) → Build version "2.07".
+    /// Only this exact version is accepted; 2.06 is intentionally unsupported.
     /// </summary>
-    public const string GameVersion = "2.06";
+    public const string GameVersion = "2.07";
 
     /// <summary>
     /// Runtime LAN auth key. eth.cctor seeds cnuw from cnut="wassup", but
@@ -45,7 +46,7 @@ public static class LobbyAuth
     public const string AuthKey = "projectchillow2";
 
     /// <summary>Wire MD5 hex (ese.bjmy uses uppercase X2), live capture match.</summary>
-    public static readonly string VersionHash = Md5Hex(GameVersion); // 9C08D5D96080EDBF4720031F88424DC3
+    public static readonly string VersionHash = Md5Hex(GameVersion); // 7F8A3CB21BF6C31961C634036D0CFAB6
     public static readonly string AuthHash = Md5Hex(AuthKey);       // D460C75AC10D98B20D3262A73B1DCC66
 
     public static string Md5Hex(string s)

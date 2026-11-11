@@ -12,8 +12,16 @@ public static class DashboardHub
     /// <summary>A chat line to show in the lobby/match chat area.</summary>
     public sealed record ChatEntry(string Speaker, string Text, bool FromServer, DateTime WhenUtc);
 
-    /// <summary>A victim death fact from host combat handling (killer is best-effort, see below).</summary>
-    public sealed record DeathEntry(byte VictimNr, string VictimName, MatchTeam VictimTeam, string Source, DateTime WhenUtc);
+    /// <summary>A verified victim death fact; killer identity is included when the host resolved it.</summary>
+    public sealed record DeathEntry(
+        byte VictimNr,
+        string VictimName,
+        MatchTeam VictimTeam,
+        string Source,
+        DateTime WhenUtc,
+        byte? KillerNr = null,
+        string? KillerName = null,
+        MatchTeam KillerTeam = MatchTeam.None);
 
     /// <summary>A round / match result to banner (Ranked round end or DeathMatch final).</summary>
     public sealed record RoundResultEntry(
@@ -26,8 +34,17 @@ public static class DashboardHub
     public static void PostChat(string speaker, string text, bool fromServer = false) =>
         SafeInvoke(() => Chat?.Invoke(new ChatEntry(speaker, text, fromServer, DateTime.UtcNow)));
 
-    public static void PostDeath(byte victimNr, string victimName, MatchTeam victimTeam, string source) =>
-        SafeInvoke(() => Death?.Invoke(new DeathEntry(victimNr, victimName, victimTeam, source, DateTime.UtcNow)));
+    public static void PostDeath(
+        byte victimNr,
+        string victimName,
+        MatchTeam victimTeam,
+        string source,
+        byte? killerNr = null,
+        string? killerName = null,
+        MatchTeam killerTeam = MatchTeam.None) =>
+        SafeInvoke(() => Death?.Invoke(new DeathEntry(
+            victimNr, victimName, victimTeam, source, DateTime.UtcNow,
+            killerNr, killerName, killerTeam)));
 
     public static void PostRoundResult(
         string headline, MatchTeam winner, byte mvpNr, string? mvpName, bool isFinal) =>
