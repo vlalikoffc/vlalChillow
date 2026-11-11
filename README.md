@@ -64,7 +64,7 @@ Phones: open StandChillow → LAN → your lobby should appear → join → chat
 
 | Port | Role |
 |------|------|
-| **5056/udp** | Discovery only (Bonjour V2 / `sosalbolt482` probe) |
+| **5056/udp** | Discovery only (Bonjour V2 LAN interoperability probe) |
 | **7778/udp** | Lobby (LiteNetLib join after discovery) |
 | **7777/udp** | Match (after host starts the game) |
 
@@ -137,6 +137,14 @@ Reverse-engineering notes and Ghidra dumps stay **local** (`decompiled/`) and ar
 ## Protocol fidelity
 
 Everything the server sends is derived from client reverse-engineering and observed LAN traffic. Unknown fields are logged or left unimplemented — not guessed. Discovery auth strings, LiteNetLib keys, opcodes, and game mode IDs match what the mobile client expects.
+
+## Reverse-engineering basis and boundaries
+
+The game owner has authorized the reverse engineering used for this project. Its sole interoperability target is self-hosted **LAN play** with StandChillow 2.06 OBT F1; the project does not connect to or provide access to official online services and contains no anti-cheat bypass.
+
+No game assets, game binaries, or decompiled source code are distributed in this repository. Local reverse-engineering dumps, original binaries, captures, and logs are excluded by `.gitignore`, and the CI hygiene guard rejects them if they are accidentally tracked.
+
+`--client` mode is a protocol-learning tool only. Run it exclusively on networks and game instances you control; it is not a production hosting path or a tool for accessing third-party services.
 
 ## License
 

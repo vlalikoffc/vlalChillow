@@ -588,7 +588,7 @@ public sealed partial class GameMatchHost
     /// <summary>
     /// Gold C2=101 bag len≈119: Time, winner score only, WinTeam, C2 — no CoLosses.
     /// </summary>
-    private static List<(string Key, LobbyVariant Value)> BuildDuelRoundEndRoomProps(
+    internal static List<(string Key, LobbyVariant Value)> BuildDuelRoundEndRoomProps(
         double nowSec,
         MatchTeam winner,
         int scoreTr,

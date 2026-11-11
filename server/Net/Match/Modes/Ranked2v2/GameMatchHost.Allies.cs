@@ -611,7 +611,7 @@ public sealed partial class GameMatchHost
     /// Gold round-end bag len≈151: Time, winner score, loser CoLosses, winner CoLosses=0,
     /// WinTeam, C2=101 — winner score key only (not both TrScore+CtScore in one bag).
     /// </summary>
-    private static List<(string Key, LobbyVariant Value)> BuildAlliesRoundEndRoomProps(
+    internal static List<(string Key, LobbyVariant Value)> BuildAlliesRoundEndRoomProps(
         double nowSec,
         MatchTeam winner,
         int scoreTr,

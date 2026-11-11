@@ -7,6 +7,9 @@ Goal: **no multi-thousand-line god-files**, clear homes for lobby / discovery / 
 | Path | Owns | Notes |
 |------|------|--------|
 | `server/` | Dedicated LAN server (C#) | Only place that binds UDP / answers clients |
+| `server/Startup/` | Dedicated-host and ConnectAsClient startup paths | Entry-point orchestration only |
+| `server/Dashboard/` | CLI rendering and console command routing | Shared game commands stay in `GameNetHost` |
+| `tests/` | Socket-free protocol regression tests | xUnit; run in CI on all desktop OSes |
 | `server/Lan/` | Discovery (Bonjour V2 / UDP 5056) | Stay out of match host |
 | `server/Net/Lobby/` | Lobby LiteNetLib + codecs | Stay out of match host |
 | `server/Net/Match/` | Match codec, world constants, flow rules, **modes** | |
