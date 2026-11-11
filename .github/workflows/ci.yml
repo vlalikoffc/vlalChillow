@@ -94,6 +94,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      # gh release create --generate-notes needs a git repo to find the previous tag
+      # ("fatal: not a git repository (or any of the parent directories): .git"),
+      # so check out the tagged commit before touching the release.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # One subdirectory per artifact (all three builds share the same file names,
+      # so they must NOT be merged into one directory).
       - uses: actions/download-artifact@v4
         with:
           path: release
@@ -103,13 +112,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          mkdir -p out
           for dir in release/standchillow-server-*; do
             name=$(basename "$dir")
-            (cd "$dir" && zip -q -r "../${name}.zip" .)
+            (cd "$dir" && zip -q -r "../../out/${name}.zip" .)
           done
-          gh release create "$GITHUB_REF_NAME" release/*.zip \
-            --title "влалChillow Server $GITHUB_REF_NAME" \
-            --generate-notes
+          ls -l out
+          tag="$GITHUB_REF_NAME"
+          # A release created by hand in the UI (pre-release flow) already owns the tag;
+          # upload into it instead of failing with 422 already_exists.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag exists — uploading assets"
+            gh release upload "$tag" out/*.zip --clobber
+          else
+            # Tags starting with 'v' published from CI are pre-releases until promoted.
+            gh release create "$tag" out/*.zip \
+              --title "влалChillow Server $tag" \
+              --prerelease \
+              --generate-notes
+          fi
 
   format:
     name: format (advisory)
