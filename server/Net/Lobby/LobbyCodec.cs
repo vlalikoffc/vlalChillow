@@ -40,14 +40,15 @@ public static class LobbyAuth
     public const string GameVersion = "2.07";
 
     /// <summary>
-    /// Runtime LAN auth key. eth.cctor seeds cnuw from cnut="wassup", but
-    /// NetcodeSupport.Init overwrites cnuw via eth.bjqp("projectchillow2").
+    /// Runtime LAN auth key for 2.07 (eth.cnut, copied to eth.cnuw).
+    /// The previous projectchillow2 expectation causes a live 2.07 client to
+    /// receive InvalidAuthKey during lobby join.
     /// </summary>
-    public const string AuthKey = "projectchillow2";
+    public const string AuthKey = "wassup";
 
-    /// <summary>Wire MD5 hex (ese.bjmy uses uppercase X2), live capture match.</summary>
+    /// <summary>Wire MD5 hex (ese.bjmy uses uppercase X2).</summary>
     public static readonly string VersionHash = Md5Hex(GameVersion); // 7F8A3CB21BF6C31961C634036D0CFAB6
-    public static readonly string AuthHash = Md5Hex(AuthKey);       // D460C75AC10D98B20D3262A73B1DCC66
+    public static readonly string AuthHash = Md5Hex(AuthKey);       // F2638DBFF86C757AFA70670C11254A67
 
     public static string Md5Hex(string s)
     {

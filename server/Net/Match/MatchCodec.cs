@@ -98,7 +98,7 @@ public enum JoinRoomResult : byte
 /// (<c>captures/*_match_rx_HandshakeRequest_len62.bin</c>).
 /// Alternate metadata attribution for <c>cui.balx</c>: <c>gamma.Chillow.StandChillow</c>
 /// (host accepts both; probe TX prefers the live package id).
-/// Not lobby auth (<c>projectchillow2</c>).
+/// Not lobby auth (<c>wassup</c>).
 /// </summary>
 public static class MatchAuth
 {
