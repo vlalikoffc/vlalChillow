@@ -16,12 +16,14 @@ public sealed partial class GameMatchHost
         if (joinerActorNr == MatchHostActor.ActorNr)
             return;
 
+        _peers.TryGetValue(joinerPeer, out var joinerState);
         var evt = MatchCodec.BuildActorJoinedEvent(
             NextServerTime(),
             new MatchGapActor
             {
                 ActorNr = joinerActorNr,
                 Name = joinerName,
+                UserId = joinerState?.UserId ?? "",
                 Props = null,
                 Flag = false,
             });

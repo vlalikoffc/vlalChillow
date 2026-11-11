@@ -41,7 +41,7 @@ public sealed partial class GameMatchHost
                 timeDeadline = t.Double;
 
             var actors = new List<MatchActorSnapshot>(room.Actors.Count);
-            foreach (var (nr, name) in room.Actors)
+            foreach (var (nr, name, _) in room.Actors)
             {
                 var team = MatchFlowRules.GetActorTeam(room.ActorProps, nr);
                 // K column / kill attribution: prefer the explicit kills prop, fall back to the
@@ -88,7 +88,7 @@ public sealed partial class GameMatchHost
         lock (_roomGate)
         {
             foreach (var room in _roomsByPassword.Values)
-                foreach (var (nr, name) in room.Actors)
+                foreach (var (nr, name, _) in room.Actors)
                     if (nr == actorNr)
                         return name;
         }

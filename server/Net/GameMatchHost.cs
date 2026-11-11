@@ -448,7 +448,7 @@ public sealed partial class GameMatchHost : IDisposable
             NextActorNr = MatchHostActor.ActorNr + 1,
         };
         // Actor 1 = lobby fake "Server" — master client / dedicated host, Spectators only.
-        room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name));
+        room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name, MatchHostActor.BootstrapUid));
         room.ActorProps[(MatchHostActor.ActorNr, MatchRoomPropKeys.Team)] =
             LobbyVariant.FromByte((byte)MatchHostActor.Team);
         room.ActorProps[(MatchHostActor.ActorNr, MatchRoomPropKeys.Uid)] =

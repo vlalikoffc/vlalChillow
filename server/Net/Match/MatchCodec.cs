@@ -388,6 +388,8 @@ public static class MatchCodec
         }
         else
             w.WriteBool(false);
+        // Live 2.07 JoinRoomResponse has one final absent optional after gap.
+        w.WriteBool(false);
         return w.ToArray();
     }
 
@@ -415,13 +417,14 @@ public static class MatchCodec
     }
 
     /// <summary>
-    /// <c>gak.booe</c>: nr, name, hasTypedProps, [typed props], flag.
+    /// 2.07 <c>gak.booe</c>: nr, name, userId, hasTypedProps, [typed props], flag.
     /// Same layout as gap actor entries (thin Found uses empty props + flag=false).
     /// </summary>
     public static void WriteGak(LobbyWriter w, MatchGapActor a)
     {
         w.WriteByte(a.ActorNr);
         w.WriteString(a.Name);
+        w.WriteString(a.UserId);
         w.WriteBool(true);
         if (a.Props is { Count: > 0 } actorProps)
             w.WriteTypedProps(actorProps);

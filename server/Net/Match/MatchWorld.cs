@@ -580,6 +580,8 @@ public readonly struct MatchGapActor
 {
     public byte ActorNr { get; init; }
     public string Name { get; init; }
+    /// <summary>2.07 actor identity: the handshake auth token without its leading C.</summary>
+    public string UserId { get; init; } = "";
     /// <summary>Optional typed props (<c>gak</c> PropertiesRecord). Empty for thin early Found.</summary>
     public IReadOnlyList<(string Key, LobbyVariant Value)>? Props { get; init; }
     /// <summary><c>gak.cwzj</c> — live capture false for both host + joiner.</summary>
@@ -729,8 +731,8 @@ public static class MatchSceneManagers
 /// <summary>Default match gap room props matching live Ranked2v2 / Sandstone capture.</summary>
 public static class MatchGapDefaults
 {
-    /// <summary><c>gap.booo</c> — live = 4 (likely max actors).</summary>
-    public const byte MaxActorsHint = 4;
+    /// <summary><c>gap.booo</c> — live 2.07 phone host = 20.</summary>
+    public const byte MaxActorsHint = 20;
 
     /// <summary><c>gap.boou</c> — live = 1.</summary>
     public const byte TrailingByte = 1;
