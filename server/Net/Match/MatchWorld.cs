@@ -578,10 +578,12 @@ public enum WorldObjectKind : byte
 /// </summary>
 public readonly struct MatchGapActor
 {
+    public MatchGapActor() => UserId = "";
+
     public byte ActorNr { get; init; }
     public string Name { get; init; }
     /// <summary>2.07 actor identity: the handshake auth token without its leading C.</summary>
-    public string UserId { get; init; } = "";
+    public string UserId { get; init; }
     /// <summary>Optional typed props (<c>gak</c> PropertiesRecord). Empty for thin early Found.</summary>
     public IReadOnlyList<(string Key, LobbyVariant Value)>? Props { get; init; }
     /// <summary><c>gak.cwzj</c> — live capture false for both host + joiner.</summary>
