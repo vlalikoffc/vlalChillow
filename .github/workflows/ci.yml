@@ -45,7 +45,19 @@ jobs:
         run: dotnet build server/plugins-src/StandChillow.Plugin.Telegram/StandChillow.Plugin.Telegram.csproj -c Release
 
       - name: Test protocol invariants
-        run: dotnet test tests/StandChillow.LanServer.Tests/StandChillow.LanServer.Tests.csproj -c Release
+        run: >-
+          dotnet test tests/StandChillow.LanServer.Tests/StandChillow.LanServer.Tests.csproj
+          -c Release --results-directory "${{ runner.temp }}/test-results"
+          --logger "trx;LogFileName=protocol-tests.trx"
+
+      - name: Upload failed test report (${{ matrix.rid }})
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-protocol-tests-${{ matrix.rid }}
+          path: ${{ runner.temp }}/test-results
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Publish self-contained server (${{ matrix.rid }})
         run: >-
