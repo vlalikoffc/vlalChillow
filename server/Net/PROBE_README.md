@@ -1,6 +1,6 @@
 # ConnectAsClient probe
 
-Learning-mode client (`dotnet run -c Release -- --client …`) that joins a **real** phone host (or dedicated LAN host) over Bonjour V2 + LiteNetLib, captures match traffic, and can optionally spawn as a **visible fighting pawn**.
+Learning-mode client (`dotnet run -c Release -- --client …`) that joins a **real** phone host (or dedicated LAN host) over Bonjour V3 + LiteNetLib, captures match traffic, and can optionally spawn as a **visible fighting pawn**.
 
 **Last probe update targets game version: StandChillow `2.06 OBT F1`.**
 

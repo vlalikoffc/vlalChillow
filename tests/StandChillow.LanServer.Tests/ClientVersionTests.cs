@@ -18,12 +18,14 @@ public sealed class ClientVersionTests
     }
 
     [Fact]
-    public void Lobby_UsesThe207AuthHashAndRejectsThePreviousKey()
+    public void Lobby_UsesTheObserved207AuthHashAndRejectsGuessedKeys()
     {
-        Assert.Equal("wassup", LobbyAuth.AuthKey);
-        Assert.Equal("F2638DBFF86C757AFA70670C11254A67", LobbyAuth.AuthHash);
+        Assert.Equal("4EF9253D5750014EAF9865C31CB13EBA", LobbyAuth.AuthHash);
         Assert.False(LobbyAuth.HashEquals(
-            "D460C75AC10D98B20D3262A73B1DCC66", // MD5(projectchillow2) caused InvalidAuthKey.
+            "F2638DBFF86C757AFA70670C11254A67", // Incorrect wassup guess.
+            LobbyAuth.AuthHash));
+        Assert.False(LobbyAuth.HashEquals(
+            "D460C75AC10D98B20D3262A73B1DCC66", // Incorrect projectchillow2 guess.
             LobbyAuth.AuthHash));
     }
 

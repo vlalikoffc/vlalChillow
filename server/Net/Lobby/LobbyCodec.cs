@@ -39,16 +39,14 @@ public static class LobbyAuth
     /// </summary>
     public const string GameVersion = "2.07";
 
-    /// <summary>
-    /// Runtime LAN auth key for 2.07 (eth.cnut, copied to eth.cnuw).
-    /// The previous projectchillow2 expectation causes a live 2.07 client to
-    /// receive InvalidAuthKey during lobby join.
-    /// </summary>
-    public const string AuthKey = "wassup";
-
     /// <summary>Wire MD5 hex (ese.bjmy uses uppercase X2).</summary>
     public static readonly string VersionHash = Md5Hex(GameVersion); // 7F8A3CB21BF6C31961C634036D0CFAB6
-    public static readonly string AuthHash = Md5Hex(AuthKey);       // F2638DBFF86C757AFA70670C11254A67
+
+    /// <summary>
+    /// Exact auth hash from a live 2.07 OBT F1 JoinLobbyRequest. The source key
+    /// is unknown; do not replace this observed wire value with a guessed string.
+    /// </summary>
+    public const string AuthHash = "4EF9253D5750014EAF9865C31CB13EBA";
 
     public static string Md5Hex(string s)
     {

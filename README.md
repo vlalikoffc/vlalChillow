@@ -9,7 +9,7 @@ Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engi
 ## What works
 
 - **Lobby** — LiteNetLib on UDP **7778** (join, full roster, chat, mode/map selection, `/end`)
-- **Auto-discovery** — Bonjour V2 probe/reply on UDP **5056**; when phones search LAN lobbies, this host appears automatically (same as a phone-hosted lobby)
+- **Auto-discovery** — 2.07 Bonjour V3 (`SC LAN Bonjour V3`) probe/reply on UDP **5056**; when phones search LAN lobbies, this host appears automatically (same as a phone-hosted lobby)
 - **Match channel** — after `play`, clients move to UDP **7777**
 - **CLI dashboard** — TTY console + phone chat slash commands (`/mode`, `/map`, `/set start`, `/play`, `/end`, …)
 - **Graceful shutdown** — CTRL+C tears down cleanly; rematch via `play` again
@@ -76,7 +76,7 @@ Phones: open StandChillow → LAN → your lobby should appear → join → chat
 
 | Port | Role |
 |------|------|
-| **5056/udp** | Discovery only (Bonjour V2 LAN interoperability probe) |
+| **5056/udp** | Discovery only (2.07 Bonjour V3 LAN interoperability probe) |
 | **7778/udp** | Lobby (LiteNetLib join after discovery) |
 | **7777/udp** | Match (after host starts the game) |
 
