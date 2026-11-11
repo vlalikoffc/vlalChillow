@@ -52,6 +52,7 @@ offenders are tracked as issues — do not add to them.
 ```bash
 dotnet build server/StandChillow.LanServer.csproj -c Release
 dotnet build server/plugins-src/StandChillow.Plugin.Telegram/StandChillow.Plugin.Telegram.csproj -c Release
+dotnet test tests/StandChillow.LanServer.Tests/StandChillow.LanServer.Tests.csproj -c Release
 dotnet format server/StandChillow.LanServer.csproj --severity warn
 ```
 

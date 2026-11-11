@@ -413,7 +413,9 @@ public sealed partial class GameMatchHost
                 parsed.Field,
                 parsed.TimeValue,
                 parsed.Payload.Length > 0 ? parsed.Payload : null);
-            NetPeer? exceptSender = parsed.GaaTarget is 3 or 4 ? null : peer;
+            NetPeer? exceptSender = WorldObjectRpcRelayPolicy.ExcludesSender(parsed.GaaTarget)
+                ? peer
+                : null;
             var n = BroadcastInitReadyExcept(
                 st.Room, exceptSender, echo, tag: "match_tx_WorldObjectRpc", dumpCapture: logRpc);
             if (logRpc)

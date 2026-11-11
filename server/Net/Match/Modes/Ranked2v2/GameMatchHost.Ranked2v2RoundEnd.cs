@@ -183,7 +183,7 @@ public sealed partial class GameMatchHost
     /// then follows with <see cref="BroadcastMatchScoresToAllPeers"/> so stay-in peers never
     /// keep a stale opposing score after RoundEnd.
     /// </summary>
-    private static List<(string Key, LobbyVariant Value)> BuildRoundEndRoomProps(
+    internal static List<(string Key, LobbyVariant Value)> BuildRoundEndRoomProps(
         double nowSec,
         MatchTeam winner,
         int scoreTr,
@@ -254,7 +254,7 @@ public sealed partial class GameMatchHost
     /// <c>resultRoundType</c>/<c>resultRoundActor</c> as Byte. <c>mvpCode</c> = <see cref="MatchMvpCodes"/>.
     /// <c>resultRoundActor</c> is 0 on all four Allies gold outcomes (not mirrored from mvpPlayer).
     /// </summary>
-    private static List<(string Key, LobbyVariant Value)> BuildWinTeamProps(
+    internal static List<(string Key, LobbyVariant Value)> BuildWinTeamProps(
         MatchTeam winner,
         byte mvpNr,
         byte mvpCode) =>
