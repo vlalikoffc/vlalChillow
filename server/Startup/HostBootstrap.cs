@@ -20,7 +20,7 @@ public static class HostBootstrap
         Console.WriteLine("║  discovery UDP 5056  ·  lobby UDP 7778                 ║");
         Console.WriteLine("║  match UDP 7777 (Handshake + JoinRoom)                 ║");
         Console.WriteLine("║  default: Ranked2v2 / Sandstone 2x2 («союзники»)       ║");
-        Console.WriteLine("║  probe: Bonjour V2 + sosalbolt482   proto: 4           ║");
+        Console.WriteLine("║  probe: Bonjour V3 + legacy probes  proto: 4           ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════╝");
         Console.WriteLine();
 

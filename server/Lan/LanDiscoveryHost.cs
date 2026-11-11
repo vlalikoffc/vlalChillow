@@ -17,7 +17,8 @@ namespace StandChillow.LanServer.Lan;
 ///   - Phone search UI: LanDiscoveryPopupController → gpe.bqkb (broadcast probes); searchers do NOT reply.
 ///   - Live: searching phone → RX PROBE on our 5056 → TX reply → lobby listed; join then hits 7778.
 ///   - Probe magics (exact body → same LanDiscoveryInfo unicast reply):
-///       * "StandChillow LAN Bonjour V2" — live phone (metadata lit)
+///       * "SC LAN Bonjour V3" — live 2.07 OBT F1 phone
+///       * "StandChillow LAN Bonjour V2" — earlier discovery format
 ///       * "sosalbolt482" — DummyDLL const gpe.cyce (legacy/alt)
 ///   - Proto byte = LanLobbyHelper.cbta = 4
 /// Hosts do NOT unsolicited-broadcast (KeepAlive only calls qxt to refresh payload).
@@ -29,15 +30,18 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
     public const ushort DefaultGamePort = 7778;  // LanLobbyHelper.cbtb / qxg → 0x1E62
     public const byte ProtocolVersion = 4;       // LanLobbyHelper.cbta
 
-    /// <summary>Live phone probe (global-metadata string literal, len=27).</summary>
+    /// <summary>Live 2.07 OBT F1 phone probe (17 UTF-8 bytes).</summary>
+    public const string ProbeBonjourV3 = "SC LAN Bonjour V3";
+    /// <summary>Earlier discovery probe.</summary>
     public const string ProbeBonjourV2 = "StandChillow LAN Bonjour V2";
     /// <summary>DummyDLL const gpe.cyce — alternate/legacy magic.</summary>
     public const string ProbeSosalbolt = "sosalbolt482";
 
+    public static readonly byte[] ProbeMagicBonjourV3 = Encoding.UTF8.GetBytes(ProbeBonjourV3);
     public static readonly byte[] ProbeMagicBonjourV2 = Encoding.UTF8.GetBytes(ProbeBonjourV2);
     public static readonly byte[] ProbeMagicSosalbolt = Encoding.UTF8.GetBytes(ProbeSosalbolt);
-    /// <summary>Preferred name for logs; both magics are accepted.</summary>
-    public static readonly byte[] ProbeMagic = ProbeMagicBonjourV2;
+    /// <summary>Preferred 2.07 probe; older discovery probes remain recognizable.</summary>
+    public static readonly byte[] ProbeMagic = ProbeMagicBonjourV3;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly object _gate = new();
@@ -326,8 +330,9 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
     }
 
     /// <summary>Exact-body probe match. Returns kind name or null.</summary>
-    private static string? MatchProbe(ReadOnlySpan<byte> buf)
+    internal static string? MatchProbe(ReadOnlySpan<byte> buf)
     {
+        if (buf.SequenceEqual(ProbeMagicBonjourV3)) return "bonjour-v3";
         if (buf.SequenceEqual(ProbeMagicBonjourV2)) return "bonjour-v2";
         if (buf.SequenceEqual(ProbeMagicSosalbolt)) return "sosalbolt482";
         return null;
@@ -582,7 +587,7 @@ public sealed record LanDiscoveryInfo
 }
 
 /// <summary>
-/// Discovery client (ConnectAsClient): broadcast Bonjour V2 (+ sosalbolt482) on UDP 5056 from LAN NICs,
+/// Discovery client (ConnectAsClient): broadcast Bonjour V3 (+ legacy probes) on UDP 5056 from LAN NICs,
 /// collect LanDiscoveryInfo unicast replies, then join advertised GamePort (7778).
 /// Matches phone search stack (gpe.bqkb → ephemeral UdpClient + broadcast), not host listen (bqkg).
 /// Learning only — never for fake loopback self-test.
@@ -633,7 +638,8 @@ public sealed class LanDiscoveryClient : IAsyncDisposable
             $"[client-disc] probe UDP {LanDiscoveryHost.DiscoveryPort} " +
             $"(discovery only; join uses LanDiscoveryInfo.GamePort={LanDiscoveryHost.DefaultGamePort})");
         Console.WriteLine(
-            $"[client-disc] magics: '{LanDiscoveryHost.ProbeBonjourV2}' + '{LanDiscoveryHost.ProbeSosalbolt}'");
+            $"[client-disc] magics: '{LanDiscoveryHost.ProbeBonjourV3}' + " +
+            $"'{LanDiscoveryHost.ProbeBonjourV2}' + '{LanDiscoveryHost.ProbeSosalbolt}'");
 
         foreach (var ep in endpoints)
         {
@@ -683,6 +689,7 @@ public sealed class LanDiscoveryClient : IAsyncDisposable
     {
         var magics = new[]
         {
+            (LanDiscoveryHost.ProbeBonjourV3, LanDiscoveryHost.ProbeMagicBonjourV3),
             (LanDiscoveryHost.ProbeBonjourV2, LanDiscoveryHost.ProbeMagicBonjourV2),
             (LanDiscoveryHost.ProbeSosalbolt, LanDiscoveryHost.ProbeMagicSosalbolt),
         };
@@ -780,7 +787,8 @@ public sealed class LanDiscoveryClient : IAsyncDisposable
         var hex = Convert.ToHexString(buf);
 
         // Own probes echoed back (broadcast loop) — still log once-ish via echo counter.
-        if (buf.SequenceEqual(LanDiscoveryHost.ProbeMagicBonjourV2) ||
+        if (buf.SequenceEqual(LanDiscoveryHost.ProbeMagicBonjourV3) ||
+            buf.SequenceEqual(LanDiscoveryHost.ProbeMagicBonjourV2) ||
             buf.SequenceEqual(LanDiscoveryHost.ProbeMagicSosalbolt))
         {
             var n = Interlocked.Increment(ref _echoes);

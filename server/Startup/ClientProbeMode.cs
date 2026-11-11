@@ -38,7 +38,7 @@ public static class ClientProbeMode
         Console.Title = "влалChillow LAN ConnectAsClient";
         Console.WriteLine("╔══════════════════════════════════════════════════════════╗");
         Console.WriteLine("║  ConnectAsClient — learn from a REAL phone host        ║");
-        Console.WriteLine("║  UDP 5056 = discovery probe/reply (Bonjour V2)         ║");
+        Console.WriteLine("║  UDP 5056 = discovery probe/reply (Bonjour V3)         ║");
         Console.WriteLine("║  UDP 7778 = LiteNetLib lobby join                      ║");
         Console.WriteLine("║  UDP 7777 = LiteNetLib match after Play (op9)          ║");
         Console.WriteLine("║  Phone must CREATE/host a LAN lobby (search ≠ host)    ║");
