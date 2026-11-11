@@ -568,7 +568,10 @@ public sealed partial class GameMatchHost : IDisposable
                 HandleWorldObjectStateRelay(peer, payload);
                 break;
             case MatchOpcode.FetchServerTimeRequest:
-                HandleFetchServerTime(peer, payload);
+                if (body.Remaining == 0)
+                    HandleFetchServerTime(peer, payload);
+                else
+                    HandleHandshake207(peer, body, payload);
                 break;
             default:
                 Console.WriteLine($"[match-host] unhandled opcode {opcode} — dump");

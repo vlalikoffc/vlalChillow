@@ -52,6 +52,47 @@ public sealed partial class GameMatchHost
             $"len={resp.Length} hex={Convert.ToHexString(resp)}");
     }
 
+    private void HandleHandshake207(NetPeer peer, LobbyReader body, byte[] raw)
+    {
+        DumpCapture("match_rx_Handshake207Request", raw);
+        var req = MatchCodec.ParseHandshake207RequestBody(body);
+        Console.WriteLine(
+            $"[match-host] Handshake207Request appId='{req.AppId}' userId='{req.UserId}' " +
+            $"proto={req.ProtocolVersion} authTokenLen={req.AuthToken.Length} " +
+            $"trailing={req.TrailingFlag} remaining={body.Remaining}");
+
+        if (!_peers.TryGetValue(peer, out var st))
+            st = _peers[peer] = new MatchPeerState();
+
+        HandshakeResult result;
+        if (!MatchAuth.IsAcceptedAppId(req.AppId))
+            result = HandshakeResult.InvalidAppId;
+        else if (string.IsNullOrWhiteSpace(req.AuthToken))
+            result = HandshakeResult.InvalidUserId;
+        else if (req.ProtocolVersion != MatchAuth.ProtocolVersion207)
+            result = HandshakeResult.InvalidProtocolVersion;
+        else if (st.Handshaken)
+            result = HandshakeResult.AlreadyAuthenticated;
+        else
+            result = HandshakeResult.Success;
+
+        if (result == HandshakeResult.Success)
+        {
+            st.Handshaken = true;
+            // 2.07 leaves the legacy userId empty. Keep the per-connection token
+            // for actor duplicate detection instead of rejecting the new client.
+            st.UserId = req.AuthToken;
+            st.AppId = req.AppId;
+        }
+
+        var resp = MatchCodec.BuildHandshake207Response(result, NextServerTime());
+        Send(peer, resp);
+        DumpCapture("match_tx_Handshake207Response", resp);
+        Console.WriteLine(
+            $"[match-host] TX Handshake207Response result={result} ({(byte)result}) " +
+            $"len={resp.Length} hex={Convert.ToHexString(resp)}");
+    }
+
     private void HandleJoinRoom(NetPeer peer, LobbyReader body, byte[] raw)
     {
         DumpCapture("match_rx_JoinRoomRequest", raw);

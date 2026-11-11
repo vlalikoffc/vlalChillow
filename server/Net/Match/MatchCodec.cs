@@ -111,6 +111,9 @@ public static class MatchAuth
     /// <summary><c>ful.cwfh</c> / <c>fuv.cwgm</c> protocol version ushort.</summary>
     public const ushort ProtocolVersion = 1024;
 
+    /// <summary>Varint protocol marker D1 07 in the live 2.07 extended handshake.</summary>
+    public const int ProtocolVersion207 = 2001;
+
     /// <summary><c>cui.balw()</c> — lobby version string (not used on match wire).</summary>
     public const string GameVersion = "2.07";
 
@@ -165,6 +168,19 @@ public readonly struct HandshakeRequestBody
     public ushort ProtocolVersion { get; init; }
     public string AppId { get; init; }
     public string UserId { get; init; }
+}
+
+/// <summary>
+/// StandChillow 2.07 extended handshake carried by envelope opcode 2. The same
+/// opcode with an empty body remains the older FetchServerTimeRequest.
+/// </summary>
+public readonly struct Handshake207RequestBody
+{
+    public int ProtocolVersion { get; init; }
+    public string AppId { get; init; }
+    public string UserId { get; init; }
+    public string AuthToken { get; init; }
+    public bool TrailingFlag { get; init; }
 }
 
 /// <summary>Decoded <c>fuy</c> JoinRoomRequest body (after envelope).</summary>
@@ -239,6 +255,24 @@ public static class MatchCodec
         w.WriteInt32(serverTime);
         w.WriteByte((byte)result);
         w.WriteBool(flag);
+        return w.ToArray();
+    }
+
+    /// <summary>
+    /// 2.07 phone-host handshake response: result plus the observed four-byte
+    /// tail 00 00 00 04. This is distinct from the pre-2.07 two-byte body.
+    /// </summary>
+    public static byte[] BuildHandshake207Response(HandshakeResult result, int serverTime)
+    {
+        var w = new LobbyWriter();
+        w.WriteByte((byte)MatchFrameFlags.HasServerTime);
+        w.WriteByte((byte)MatchOpcode.HandshakeResponse);
+        w.WriteInt32(serverTime);
+        w.WriteByte((byte)result);
+        w.WriteByte(0);
+        w.WriteByte(0);
+        w.WriteByte(0);
+        w.WriteByte(4);
         return w.ToArray();
     }
 
@@ -1106,6 +1140,18 @@ public static class MatchCodec
             ProtocolVersion = proto,
             AppId = appId,
             UserId = userId,
+        };
+    }
+
+    public static Handshake207RequestBody ParseHandshake207RequestBody(LobbyReader r)
+    {
+        return new Handshake207RequestBody
+        {
+            ProtocolVersion = r.ReadVarInt(),
+            AppId = r.ReadString(),
+            UserId = r.ReadString(),
+            AuthToken = r.ReadString(),
+            TrailingFlag = r.ReadBool(),
         };
     }
 

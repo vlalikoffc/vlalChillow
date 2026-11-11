@@ -153,7 +153,7 @@ public sealed class LobbyWriter
         _ms.Write(b);
     }
 
-    private void WriteVarInt(int value)
+    internal void WriteVarInt(int value)
     {
         var v = (uint)value;
         while (v >= 0x80)
@@ -462,7 +462,7 @@ public sealed class LobbyReader
         }
     }
 
-    private int ReadVarInt()
+    internal int ReadVarInt()
     {
         var result = 0;
         var shift = 0;
