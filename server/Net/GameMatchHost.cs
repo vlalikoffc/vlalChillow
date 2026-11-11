@@ -579,6 +579,14 @@ public sealed partial class GameMatchHost : IDisposable
                 else
                     HandleHandshake207(peer, body, payload);
                 break;
+            case MatchOpcode.RoomInitReady:
+                // Clients may echo the same empty 00 0F nudge back at INIT. Nothing to relay
+                // (it carries no state) — acknowledge in the log so it is not "unhandled".
+                Console.WriteLine(
+                    "[match-host] RX RoomInitReady (op15) from " +
+                    $"{peer.Address}:{peer.Port} — empty INIT nudge, no relay");
+                DumpCapture("match_rx_RoomInitReady", payload);
+                break;
             case MatchOpcode.CustomEvent:
                 // Real phone clients send CustomEvent (op205) — ping/keepalive during init.
                 // Phone server relays it; the dedicated previously dumped it unhandled, so

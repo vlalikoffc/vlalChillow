@@ -47,3 +47,21 @@ Docs: [`decompiled/PLAYER_SPAWN.md`](../../decompiled/PLAYER_SPAWN.md), [`decomp
 | `tools/decode_allies_probe.py` | Decode SetProperties C2 timelines |
 
 Mode-specific gold FSMs stay under `Net/Match/Modes/*/MATCH_*_PROBE.md`.
+
+---
+
+## Post-Found INIT frame (opcode 15)
+
+A phone host sends a **bare two-byte frame** `00 0F` (flags `None` + opcode `15`, no server time,
+no body) **immediately after `JoinRoomResponse Found`** and before any identity prop, scene
+manager or `C2`. Gold: `20261111_074252_005_match_rx003_op15_len2.bin` (probe joining a phone
+host; the frame landed between Found and the first `SetProperty uid`).
+
+What the client does with it is **not** decoded — it is only ever observed with an empty body.
+The dedicated host therefore emits that exact shape right after Found
+(`MatchCodec.BuildRoomInitReady`, handled as `MatchOpcode.RoomInitReady`) and treats an inbound
+one as informational, never as a state transition. No fields are invented.
+
+The remaining INIT identity block is ordered `uid → badgeId → verified → from_lobby → avatar →
+ping` (gold `20261111_074258_049..053`); `verified` is a `fzq.Bool` and is not part of the
+joiner-ready gate.

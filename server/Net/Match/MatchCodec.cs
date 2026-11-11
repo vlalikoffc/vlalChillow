@@ -42,6 +42,14 @@ public enum MatchOpcode : byte
     JoinRoomResponse = 12,
     LeaveRoomRequest = 13,
     LeaveRoomResponse = 14,
+    /// <summary>
+    /// Bare two-byte frame (<c>00 0F</c>) the phone host sends immediately after
+    /// <c>JoinRoomResponse Found</c>, <b>before</b> any SetProperty / scene manager / C2.
+    /// Gold <c>20261111_074252_005_match_rx003_op15_len2.bin</c> (probe joining a phone host).
+    /// Its meaning is <b>not</b> decoded from the client — it is only ever observed with an
+    /// empty body, so the dedicated host echoes that exact shape instead of inventing fields.
+    /// </summary>
+    RoomInitReady = 15,
     ActorJoinedEvent = 50,
     ActorLeftEvent = 51,
     SetProperties = 100,
@@ -365,6 +373,16 @@ public static class MatchCodec
         w.WriteBool(false); // no fzf createOptions
         return w.ToArray();
     }
+
+    /// <summary>
+    /// Bare frame — <c>flags=None + opcode 15</c>, <b>no</b> server time and <b>no</b> body.
+    /// Byte-identical to the phone host's <c>00 0F</c>
+    /// (<c>20261111_074252_005_match_rx003_op15_len2.bin</c>), which it sends right after
+    /// <c>JoinRoomResponse Found</c> and before any SetProperty / scene manager / C2.
+    /// The dedicated host never sent it; see <c>RoomInitReady</c> for the evidence note.
+    /// </summary>
+    public static byte[] BuildRoomInitReady() =>
+        [(byte)MatchFrameFlags.None, (byte)MatchOpcode.RoomInitReady];
 
     /// <summary>
     /// Host JoinRoomResponse (<c>fuo=12</c> / <c>fuz</c>).
@@ -1273,6 +1291,7 @@ public static class MatchCodec
         MatchOpcode.JoinRoomResponse => "JoinRoomResponse",
         MatchOpcode.LeaveRoomRequest => "LeaveRoomRequest",
         MatchOpcode.LeaveRoomResponse => "LeaveRoomResponse",
+        MatchOpcode.RoomInitReady => "RoomInitReady",
         MatchOpcode.ActorJoinedEvent => "ActorJoinedEvent",
         MatchOpcode.ActorLeftEvent => "ActorLeftEvent",
         MatchOpcode.SetProperties => "SetProperties",
@@ -1311,6 +1330,7 @@ public static class MatchCodec
             or MatchOpcode.FetchServerTimeResponse
             or MatchOpcode.LeaveRoomRequest
             or MatchOpcode.LeaveRoomResponse
+            or MatchOpcode.RoomInitReady
             or MatchOpcode.ServerSideError;
 
     public static string JoinRoomResultName(JoinRoomResult r) => r switch

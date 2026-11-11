@@ -240,6 +240,16 @@ public sealed partial class GameMatchHost
 
         if (result == JoinRoomResult.Found && room is not null && actor is { } joinerNr)
         {
+            // Phone host sends a bare `00 0F` (opcode 15) right after Found — before any
+            // SetProperty / scene manager / C2. The dedicated never sent it, so clients were
+            // missing the first post-Found frame (see RoomInitReady in MatchCodec).
+            var initReady = MatchCodec.BuildRoomInitReady();
+            Send(peer, initReady);
+            DumpCapture("match_tx_RoomInitReady", initReady);
+            Console.WriteLine(
+                "[match-host] TX RoomInitReady (op15, empty body) → joiner " +
+                $"{joinerNr} — same first post-Found frame as the phone host");
+
             // Dynamic roster: peers who already Found only knew actors-at-entry.
             // Push ActorJoinedEvent (fup) so early humans learn about this joiner.
             var joinName = st.RosterName ?? $"actor{joinerNr}";

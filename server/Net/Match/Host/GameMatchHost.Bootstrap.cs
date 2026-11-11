@@ -104,6 +104,11 @@ public sealed partial class GameMatchHost
             case MatchRoomPropKeys.Ping:
                 st.JoinerPingSeen = true;
                 break;
+            case MatchRoomPropKeys.Verified:
+                // Phones always author it inside the identity batch (uid→badgeId→verified→
+                // from_lobby→avatar). It is informational — never part of the ready gate,
+                // so an older client that omits it still unlocks INIT.
+                break;
             default:
                 return;
         }
@@ -163,6 +168,9 @@ public sealed partial class GameMatchHost
             LobbyVariant.FromString(MatchHostActor.Name)));
         SetHostProp(MatchRoomPropKeys.Uid, LobbyVariant.FromString(MatchHostActor.BootstrapUid));
         SetHostProp(MatchRoomPropKeys.BadgeId, LobbyVariant.FromInt(0));
+        // Phone host identity order is uid → badgeId → verified → from_lobby → avatar → ping
+        // (gold 20261111_074258_049..053). Dedicated skipped verified, so the block was short.
+        SetHostProp(MatchRoomPropKeys.Verified, LobbyVariant.FromBool(false));
         SetHostProp(MatchRoomPropKeys.FromLobby, LobbyVariant.FromBool(false));
         // Avatar must not abort managers/C2 — PlaceholderAvatarJpeg is fail-safe, but still guard.
         var avatarJpeg = MatchHostActor.PlaceholderAvatarJpeg;
