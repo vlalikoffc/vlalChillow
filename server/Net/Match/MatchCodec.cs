@@ -283,20 +283,20 @@ public static class MatchCodec
     }
 
     /// <summary>
-    /// 2.07 phone-host handshake response: result plus the observed four-byte
-    /// tail 00 00 00 04. This is distinct from the pre-2.07 two-byte body.
+    /// Live 2.07 phone response to the protocol-977 extended handshake:
+    /// HasServerTime + opcode 3 + result + four zero bytes + success flag.
+    /// This 12-byte packet is distinct from the older opcode-1 response and
+    /// from an empty-body opcode-3 clock-sync response.
     /// </summary>
     public static byte[] BuildHandshake207Response(HandshakeResult result, int serverTime)
     {
         var w = new LobbyWriter();
         w.WriteByte((byte)MatchFrameFlags.HasServerTime);
-        w.WriteByte((byte)MatchOpcode.HandshakeResponse);
+        w.WriteByte((byte)MatchOpcode.FetchServerTimeResponse);
         w.WriteInt32(serverTime);
         w.WriteByte((byte)result);
-        w.WriteByte(0);
-        w.WriteByte(0);
-        w.WriteByte(0);
-        w.WriteByte(4);
+        w.WriteInt32(0);
+        w.WriteBool(result == HandshakeResult.Success);
         return w.ToArray();
     }
 
