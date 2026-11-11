@@ -91,7 +91,7 @@ public sealed class Match207BootstrapTests
         Assert.Equal(
             Convert.FromHexString(
                 "04CB2E2D000000000000810001040200AC1C5A643B1F2740" +
-                "640000000000000000000100004040"),
+                "6400000000000000000100004040"),
             packet);
 
         var r = Open(packet, MatchOpcode.WorldObjectRpc);
