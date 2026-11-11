@@ -705,6 +705,60 @@ public sealed partial class GameMatchHost : IDisposable
     }
 
     /// <summary>
+    /// True while players are actually in a match on the LAN room — any non-host actor has
+    /// picked Tr/Ct, a pawn is alive, or the flow already advanced past the C2=10 waiting
+    /// screen. A room that is merely WaitingPlayers with nobody fighting is <b>not</b> live
+    /// (that is the normal pre-start state where <c>/play</c> is a no-op).
+    /// <para>
+    /// Used by <c>/play</c> so a start command typed during a running match never silently
+    /// tears it down. Evidence: 2026-11-11 console <c>play</c> landed while four phones were
+    /// already in Ranked2v2Alt with pawns; <see cref="HardResetMatchForNewStart"/> then
+    /// Disconnect()ed all of them and destroyed their pawns — players saw "всё наебнулось".
+    /// </para>
+    /// </summary>
+    public bool IsMatchLive()
+    {
+        lock (_roomGate)
+        {
+            if (!_roomsByPassword.TryGetValue(LanCreateRoomPasswordKey, out var room))
+                return false;
+            if (room.Flow.Phase is not (MatchFlowPhase.WaitingPlayers or MatchFlowPhase.MatchOver))
+                return true;
+            if (room.Flow.Phase == MatchFlowPhase.MatchOver)
+                return false; // series done → /play is a legitimate rematch
+            var (tr, ct) = CountFightingTeamRoster(room);
+            return tr > 0 || ct > 0 || room.LivingPawns.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// True when the LAN room is in <see cref="MatchFlowPhase.MatchOver"/> (series finished,
+    /// holding before lobby return). A <c>/play</c> here is a legitimate rematch.
+    /// </summary>
+    public bool IsInMatchOver()
+    {
+        lock (_roomGate)
+        {
+            return _roomsByPassword.TryGetValue(LanCreateRoomPasswordKey, out var room)
+                && room.Flow.Phase == MatchFlowPhase.MatchOver;
+        }
+    }
+
+    /// <summary>
+    /// Fighting-team head count of the LAN room, for command feedback
+    /// (<c>/start</c> tells players why WarmUp has not started). Empty room → <c>(0, 0)</c>.
+    /// </summary>
+    public (int Tr, int Ct) CountFightingTeamRosterForLanRoom()
+    {
+        lock (_roomGate)
+        {
+            if (!_roomsByPassword.TryGetValue(LanCreateRoomPasswordKey, out var room))
+                return (0, 0);
+            return CountFightingTeamRoster(room);
+        }
+    }
+
+    /// <summary>
     /// Hard reset before a rematch /play: stop flow on old room, Destroy leftover entities,
     /// drop match peers, replace Dedik room with a fresh WaitingPlayers host slot.
     /// Does <b>not</b> rebind UDP 7777 (singleton). Evidence: dedicated rematch hang was

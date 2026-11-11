@@ -174,6 +174,20 @@ public sealed partial class GameNetHost : IDisposable
     /// </summary>
     public bool TryStartMatch(string reason = "manual")
     {
+        // Guard: /play typed while players are already in a match must NOT tear it down.
+        // HardResetMatchForNewStart disconnects every match peer and destroys their pawns —
+        // a stray `play` from console/chat otherwise reads as a crash. Rematch only from
+        // MatchOver/idle lobby (RETURN TO LOBBY), never from a live phase.
+        if (_match.IsMatchLive())
+        {
+            Console.WriteLine(
+                $"[lobby] {reason}: play ignored — match already live " +
+                "(use /set start to arm WarmUp, /end to stop)");
+            BroadcastServerChat(
+                "матч уже идёт — /play не перезапускает его. /set start — старт раундов, /end — завершить");
+            return false;
+        }
+
         bool rematch;
         lock (_gate)
         {
@@ -580,7 +594,8 @@ public sealed partial class GameNetHost : IDisposable
     public void ArmMatchStart(string who)
     {
         MatchHostSettings.MatchStartArmed = true;
-        var msg = "матч armed — WarmUp когда обе команды ≥1 (/set start)";
+        var (tr, ct) = _match.CountFightingTeamRosterForLanRoom();
+        var msg = $"матч armed — WarmUp когда обе команды ≥1 (/set start); сейчас T={tr} CT={ct}";
         Console.WriteLine($"[lobby] {who}: {msg} (MatchStartArmed=true)");
         BroadcastServerChat(msg);
         // Nudge flow if already waiting with both teams.
