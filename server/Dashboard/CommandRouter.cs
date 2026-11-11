@@ -91,6 +91,12 @@ public sealed class CommandRouter
                 foreach (var (name, status) in _game.Session.SnapshotRoster())
                     _feedback($"{name} ({LobbySession.FormatStatus(status)})");
                 break;
+            case "config":
+                if (parts.Length == 2 && parts[1].Equals("reload", StringComparison.OrdinalIgnoreCase))
+                    _game.ReloadConfig(_feedback);
+                else
+                    _game.ShowConfig(_feedback);
+                break;
             case "status":
                 _syncDiscovery();
                 _feedback(

@@ -1,4 +1,5 @@
 using System.Net;
+using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 
@@ -9,8 +10,72 @@ public sealed partial class GameNetHost
     private bool TryHandleSlashCommand(ConnectedPlayer player, string message)
     {
         void Reply(string text) => ReplyPrivate(player, text);
+
+        // Права: часть команд доступна только админам из config.json.
+        // Консоль сервера этим гейтом не проходит — оператор и так хозяин.
+        if (!IsCommandAllowedFor(player, message, out var denyReason))
+        {
+            Reply(denyReason);
+            return true; // отказ — это обработанная команда, «неизвестная» не показываем
+        }
+
         return TryDispatchHostCommand(message, Reply, who: $"chat:{player.Name}", player);
     }
+
+    /// <summary>
+    /// Пускать ли игрока к команде. Решает <c>config.json</c>:
+    /// <c>admin.nicknames</c>, <c>admin.adminOnlyCommands</c>, <c>admin.anyoneCanStart</c>.
+    /// </summary>
+    private bool IsCommandAllowedFor(ConnectedPlayer player, string message, out string denyReason)
+    {
+        denyReason = string.Empty;
+
+        var body = message.Trim();
+        if (body.StartsWith('/'))
+            body = body[1..].Trim();
+        if (body.Length == 0)
+            return true;
+
+        var space = body.IndexOf(' ');
+        var command = (space < 0 ? body : body[..space]).Trim();
+        var args = space < 0 ? string.Empty : body[(space + 1)..].Trim();
+
+        // «/set start» — это по сути команда start, права проверяем по ней же.
+        var effective = command;
+        if (command.Equals("set", StringComparison.OrdinalIgnoreCase)
+            && args.Equals("start", StringComparison.OrdinalIgnoreCase))
+            effective = "start";
+
+        // Справка и готовность доступны всем всегда.
+        if (IsPublicCommand(effective))
+            return true;
+
+        // Явное разрешение запускать матч кому угодно.
+        if (effective.Equals("start", StringComparison.OrdinalIgnoreCase)
+            && _config.Admin.AnyoneCanStart)
+            return true;
+
+        if (!_config.IsAdminOnly(effective))
+            return true;
+
+        if (_config.IsAdmin(player.Name))
+            return true;
+
+        denyReason = $"команда /{effective} только для админов (твой ник: {player.Name})";
+        return false;
+    }
+
+    /// <summary>Команды, которые никогда не требуют прав администратора.</summary>
+    private static bool IsPublicCommand(string command) =>
+        command.Equals("help", StringComparison.OrdinalIgnoreCase)
+        || command.Equals("?", StringComparison.OrdinalIgnoreCase)
+        || command.Equals("команды", StringComparison.OrdinalIgnoreCase)
+        || command.Equals("ready", StringComparison.OrdinalIgnoreCase)
+        || command.Equals("unready", StringComparison.OrdinalIgnoreCase)
+        || command.Equals("готов", StringComparison.OrdinalIgnoreCase)
+        || command.Equals("неготов", StringComparison.OrdinalIgnoreCase)
+        || command.Equals("г", StringComparison.OrdinalIgnoreCase)
+        || command.Equals("нг", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Shared host command dispatch for lobby chat <c>/</c>, mid-match ChatManager <c>/</c>,
@@ -67,6 +132,24 @@ public sealed partial class GameNetHost
             return true;
         }
 
+        if (cmd.Equals("ready", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("r", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("готов", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("г", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleReadyCommand(reply, player, ready: true);
+            return true;
+        }
+
+        if (cmd.Equals("unready", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("nr", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("неготов", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("нг", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleReadyCommand(reply, player, ready: false);
+            return true;
+        }
+
         if (IsEndMatchCommand(cmd, args))
         {
             TryEndMatchNow(who, reply);
@@ -116,13 +199,15 @@ public sealed partial class GameNetHost
 
     public static string FormatCommandHelp() =>
         """
-        команды: /mode /map /set /play /start /end /help
+        команды: /mode /map /set /play /start /end /ready /help
           /mode [alias]  список или сменить режим
           /map [alias]   карты текущего режима (короткие alias)
           /set …         параметры (start, end, round, wins, …)
           /play          запуск / рематч
           /start         WarmUp (когда матч уже поднят)
           /end           завершить матч сразу (без 5с)
+          /ready         отметить готовность (режим старта ready)
+          /unready       отменить готовность
         """.Trim();
 
     private static string FormatUnknownCommandHelp(string message) =>
@@ -148,6 +233,15 @@ public sealed partial class GameNetHost
             .FirstOrDefault(p => p.Name.Equals(name, StringComparison.Ordinal));
         if (player is not null)
             _session.TrySetPlayerStatus(player, PlayerLobbyStatus.Lobby);
+
+        // Вышел из катки — его голос больше не считается, иначе он вечно
+        // блокировал бы старт. Пересчитываем и показываем новый счёт.
+        if (_startGate.Remove(name))
+        {
+            Console.WriteLine($"[start-gate] {name}: голос снят (вышел из катки)");
+            AnnounceReadyProgress();
+        }
+
         BroadcastServerChat($"{name} Отключился!");
         BroadcastServerChat(_session.BuildPlayerListMessage());
         try { _onRosterChanged?.Invoke(); } catch { /* ignore */ }
@@ -196,7 +290,9 @@ public sealed partial class GameNetHost
 
         if (key.Equals("status", StringComparison.OrdinalIgnoreCase))
         {
-            BroadcastServerChat(MatchHostSettings.FormatStatusLine());
+            var status = MatchHostSettings.FormatStatusLine();
+            BroadcastServerChat(status);
+            reply(status);
             return;
         }
 
@@ -210,7 +306,11 @@ public sealed partial class GameNetHost
         if (key.Equals("start", StringComparison.OrdinalIgnoreCase)
             || key.Equals("startmatch", StringComparison.OrdinalIgnoreCase))
         {
+            // Раньше эта ветка молчала: ArmMatchStart шлёт только общий чат,
+            // который из катки может быть не виден — и команда выглядела как
+            // «ушла в никуда». Теперь есть и персональный ответ.
             ArmMatchStart(who);
+            reply("старт армлен — WarmUp, как только в обеих командах будет минимум по игроку");
             return;
         }
 
@@ -310,6 +410,87 @@ public sealed partial class GameNetHost
         }
 
         reply($"unknown /set '{key}' — /set help");
+    }
+
+    /// <summary>
+    /// <c>/ready</c> и <c>/unready</c>. Голосовать можно только находясь в катке —
+    /// из лобби команда не принимается, иначе голос повиснет и заблокирует старт.
+    /// </summary>
+    private void HandleReadyCommand(Action<string> reply, ConnectedPlayer? player, bool ready)
+    {
+        if (player is null)
+        {
+            reply(ready ? "/ready только из чата игрока" : "/unready только из чата игрока");
+            return;
+        }
+
+        if (_startGate.Mode != MatchStartMode.Ready)
+        {
+            reply("режим старта по готовности выключен — config.json → matchStart.mode = \"ready\"");
+            return;
+        }
+
+        if (player.Status != PlayerLobbyStatus.InMatch)
+        {
+            reply("ты не в катке — /ready работает только из матча (сначала /play)");
+            return;
+        }
+
+        var nick = player.Name;
+
+        if (ready)
+        {
+            if (!_startGate.MarkReady(nick))
+            {
+                reply("ты уже в списке готовых");
+                return;
+            }
+
+            Console.WriteLine($"[start-gate] {nick}: /ready");
+        }
+        else
+        {
+            if (!_startGate.AllowUnready)
+            {
+                reply("/unready отключён в конфиге (ready.allowUnready = false)");
+                return;
+            }
+
+            if (!_startGate.MarkUnready(nick))
+            {
+                reply("ты и так не был в списке готовых");
+                return;
+            }
+
+            Console.WriteLine($"[start-gate] {nick}: /unready");
+        }
+
+        var inMatch = InMatchPlayerNames();
+        var everyoneReady = _startGate.ShouldStart(inMatch, 0, 0, out var reason);
+        Console.WriteLine($"[start-gate] {reason}");
+
+        var action = ready ? $"{nick} готов" : $"{nick} передумал";
+        if (_startGate.AnnounceInChat)
+            BroadcastServerChat($"{action} — {reason}");
+        else
+            reply(reason);
+
+        // Все готовы — стартуем сразу, не дожидаясь следующего тика.
+        if (everyoneReady)
+            ArmMatchStart($"ready:{nick}");
+    }
+
+    /// <summary>Пишет в чат прогресс готовности — только в режиме <c>ready</c>.</summary>
+    private void AnnounceReadyProgress()
+    {
+        if (_startGate.Mode != MatchStartMode.Ready)
+            return;
+        if (!_startGate.AnnounceInChat)
+            return;
+
+        var inMatch = InMatchPlayerNames();
+        _startGate.ShouldStart(inMatch, 0, 0, out var reason);
+        BroadcastServerChat(reason);
     }
 
     private static bool TryParseTeamArg(string raw, out MatchTeam team)

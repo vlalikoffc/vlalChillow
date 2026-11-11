@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using LiteNetLib;
+using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
@@ -36,14 +37,27 @@ public sealed partial class GameNetHost : IDisposable
     private readonly Action? _onRosterChanged;
     private readonly Action? _onMatchStarted;
 
+    /// <summary>Конфиг сервера (админы + режим старта). Меняется только через <see cref="ReloadConfig"/>.</summary>
+    private ServerConfig _config;
+
+    /// <summary>Кто нажал /ready и какой режим старта активен.</summary>
+    private readonly MatchStartGate _startGate = new();
+
+    /// <summary>Как часто опрашивать гейт старта (автостарт / готовность).</summary>
+    private static readonly TimeSpan StartGateInterval = TimeSpan.FromSeconds(1);
+    private DateTime _lastStartGateCheckUtc = DateTime.MinValue;
+
     public GameNetHost(
         string lobbyName = "влал хостит рялна",
         int port = DefaultGamePort,
         IReadOnlyList<LanEndpoint>? lanEndpoints = null,
         Action? onRosterChanged = null,
         IPAddress? advertiseLanIp = null,
-        Action? onMatchStarted = null)
+        Action? onMatchStarted = null,
+        ServerConfig? config = null)
     {
+        _config = config ?? new ServerConfig();
+        _startGate.Apply(_config);
         _session = new LobbySession(lobbyName);
         _onRosterChanged = onRosterChanged;
         _onMatchStarted = onMatchStarted;
@@ -106,6 +120,14 @@ public sealed partial class GameNetHost : IDisposable
                 var leftId = left.ServerMemberId;
                 var wasInMatch = left.Status == PlayerLobbyStatus.InMatch;
                 Broadcast(LobbyCodec.BuildMemberLeft(leftId));
+
+                // Отключившийся не должен вечно блокировать старт по готовности.
+                if (_startGate.Remove(name))
+                {
+                    Console.WriteLine($"[start-gate] {name}: голос снят (отключился)");
+                    AnnounceReadyProgress();
+                }
+
                 if (!wasInMatch)
                     BroadcastServerChat($"{name} Отключился!");
                 BroadcastServerChat(_session.BuildPlayerListMessage());
@@ -238,6 +260,9 @@ public sealed partial class GameNetHost : IDisposable
         _session.ResetAllToLobby();
         MatchHostSettings.MatchStartArmed = false;
 
+        // Катка закончилась — голоса /ready прошлого матча не должны тянуться в следующий.
+        _startGate.Clear();
+
         _match.SuspendMatchListen(reason);
         PushIdleLobbySignals(broadcastAll: true);
 
@@ -308,6 +333,17 @@ public sealed partial class GameNetHost : IDisposable
                 try { action(); }
                 catch (Exception ex) { Console.WriteLine($"[lobby] deferred error: {ex.Message}"); }
             }
+
+            // Автостарт / старт по готовности. Держится на этом же потоке, потому что
+            // ArmMatchStart шлёт лобби-пакеты, а слать их лучше из poll-потока.
+            var now = DateTime.UtcNow;
+            if (now - _lastStartGateCheckUtc >= StartGateInterval)
+            {
+                _lastStartGateCheckUtc = now;
+                try { EvaluateMatchStartGate(); }
+                catch (Exception ex) { Console.WriteLine($"[start-gate] error: {ex.Message}"); }
+            }
+
             try { await Task.Delay(15, _cts.Token); }
             catch (OperationCanceledException) { break; }
         }
@@ -473,21 +509,54 @@ public sealed partial class GameNetHost : IDisposable
     }
 
     /// <summary>
-    /// ChatManager mid-match slash (match peer IP ≠ lobby peer). Resolve lobby player by IP.
+    /// ChatManager mid-match slash. Match peer ≠ lobby peer (7777 vs 7778), поэтому
+    /// игрока ищем по нику актора, а IP оставляем запасным путём.
     /// </summary>
-    private void HandleMatchChatSlashCommand(IPAddress matchPeerIp, string message)
+    private void HandleMatchChatSlashCommand(string actorName, IPAddress? matchPeerIp, string message)
     {
-        var player = _session.TryGetByIp(matchPeerIp);
+        var player = ResolveMatchChatPlayer(actorName, matchPeerIp);
         if (player is null)
         {
+            // Раньше тут был молчаливый return — команда просто исчезала, и было
+            // не понять, дошла ли она вообще. Теперь причина видна в консоли.
             Console.WriteLine(
-                $"[chat] ChatManager slash from {matchPeerIp} but no lobby peer — {message}");
+                $"[chat] ChatManager slash: не удалось определить игрока " +
+                $"(actor='{actorName}' ip={matchPeerIp}) — команда не выполнена: {message}");
             return;
         }
 
         Console.WriteLine($"[chat] {player.Name}: {message} (ChatManager command, silent)");
         if (!TryHandleSlashCommand(player, message))
             ReplyPrivate(player, FormatUnknownCommandHelp(message));
+    }
+
+    /// <summary>
+    /// Кто именно написал команду в катке. Порядок: ник актора → IP → единственный игрок.
+    /// </summary>
+    private ConnectedPlayer? ResolveMatchChatPlayer(string actorName, IPAddress? matchPeerIp)
+    {
+        var joined = _session.JoinedPlayers();
+        if (joined.Count == 0)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(actorName))
+        {
+            var nick = actorName.Trim();
+            foreach (var candidate in joined)
+            {
+                if (string.Equals(candidate.Name, nick, StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+            }
+        }
+
+        if (matchPeerIp is not null)
+        {
+            var byIp = _session.TryGetByIp(matchPeerIp);
+            if (byIp is not null)
+                return byIp;
+        }
+
+        return joined.Count == 1 ? joined[0] : null;
     }
 
     /// <summary>
@@ -585,6 +654,75 @@ public sealed partial class GameNetHost : IDisposable
         BroadcastServerChat(msg);
         // Nudge flow if already waiting with both teams.
         _match.NudgeMatchStartGate();
+    }
+
+    /// <summary>
+    /// Режимы <c>auto</c> и <c>ready</c>: решает, пора ли армить старт.
+    /// В режиме <c>manual</c> ничего не делает — старт остаётся за командой.
+    /// </summary>
+    private void EvaluateMatchStartGate()
+    {
+        if (_startGate.Mode == MatchStartMode.Manual)
+            return;
+
+        bool started;
+        lock (_gate)
+            started = _matchStarted;
+        if (!started)
+            return;
+
+        if (MatchHostSettings.MatchStartArmed)
+            return;
+
+        var inMatch = InMatchPlayerNames();
+        _match.TryGetTeamCounts(out var ct, out var tr);
+
+        if (!_startGate.ShouldStart(inMatch, ct, tr, out var reason))
+            return;
+
+        Console.WriteLine($"[start-gate] {reason} — стартую (то же, что /set start)");
+        ArmMatchStart("start-gate");
+    }
+
+    /// <summary>Ники тех, кто сейчас реально в катке (а не просто сидит в лобби).</summary>
+    private List<string> InMatchPlayerNames()
+    {
+        var names = new List<string>();
+        foreach (var player in _session.JoinedPlayers())
+        {
+            if (player.Status == PlayerLobbyStatus.InMatch && !string.IsNullOrWhiteSpace(player.Name))
+                names.Add(player.Name);
+        }
+
+        return names;
+    }
+
+    /// <summary>Показать действующий конфиг (консоль: <c>config</c>).</summary>
+    public void ShowConfig(Action<string> feedback)
+    {
+        var admins = _config.Admin.Nicknames.Count == 0
+            ? "(нет)"
+            : string.Join(", ", _config.Admin.Nicknames);
+
+        feedback($"config: {ServerConfig.LastLoadedPath}");
+        feedback($"  админы: {admins}");
+        feedback($"  только для админов: {string.Join(", ", _config.Admin.AdminOnlyCommands)}");
+        feedback($"  /start разрешён всем: {(_config.Admin.AnyoneCanStart ? "да" : "нет")}");
+        feedback($"  режим старта: {_config.DescribeStartMode()}");
+    }
+
+    /// <summary>Перечитать <c>config.json</c> без перезапуска (консоль: <c>config reload</c>).</summary>
+    public void ReloadConfig(Action<string> feedback)
+    {
+        _config = ServerConfig.Load(ServerConfig.LastLoadedPath);
+        _startGate.Apply(_config);
+
+        // Голоса /ready имеют смысл только в режиме ready — иначе это мусор.
+        if (_config.StartMode != MatchStartMode.Ready)
+            _startGate.Clear();
+
+        feedback($"config перечитан: {ServerConfig.LastLoadedPath}");
+        ShowConfig(feedback);
     }
 
     /// <summary>

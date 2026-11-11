@@ -239,14 +239,16 @@ public sealed partial class GameMatchHost
                 if (chatText.StartsWith('/'))
                 {
                     dropRelay = true;
-                    if (peer.Address is { } chatIp)
+
+                    // Ник важнее IP: матч-пир и лобби-пир — два разных сокета (7777/7778),
+                    // поэтому резолв только по IP регулярно терял игрока, и команда
+                    // молча умирала. Имя актора уже лежит в комнате — берём его.
+                    var actorName = ResolveActorName(st.Room, st.ActorNr);
+                    try { OnMatchChatSlashCommand?.Invoke(actorName, peer.Address, chatText); }
+                    catch (Exception ex)
                     {
-                        try { OnMatchChatSlashCommand?.Invoke(chatIp, chatText); }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine(
-                                $"[match-host] ChatManager slash handler failed: {ex.Message}");
-                        }
+                        Console.WriteLine(
+                            $"[match-host] ChatManager slash handler failed: {ex.Message}");
                     }
                 }
             }
@@ -706,6 +708,30 @@ public sealed partial class GameMatchHost
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Ник актора из ростера комнаты. Пустая строка, если комната про него не знает —
+    /// тогда вызывающий сам решает, чем резолвить игрока дальше.
+    /// </summary>
+    private string ResolveActorName(MatchRoom? room, byte actorNr)
+    {
+        if (room is null)
+            return string.Empty;
+
+        lock (_roomGate)
+        {
+            foreach (var (nr, name, _) in room.Actors)
+            {
+                if (nr != actorNr)
+                    continue;
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+                return name;
+            }
+        }
+
+        return string.Empty;
     }
 
 }

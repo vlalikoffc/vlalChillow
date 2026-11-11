@@ -99,7 +99,13 @@ public sealed partial class GameMatchHost : IDisposable
     /// Payload decode is length-prefixed UTF-8 from live ChatManager Rpc captures — not invented.
     /// Lobby OpChat cannot see these; wire this from <see cref="GameNetHost"/>.
     /// </summary>
-    public Action<IPAddress, string>? OnMatchChatSlashCommand { get; set; }
+    /// <remarks>
+    /// Arguments: <b>roster nick of the speaking actor</b> (empty when the room has no name
+    /// for that actor), the match peer IP, and the raw text. The nick is the primary way to
+    /// find the lobby player — matching by IP alone is fragile, because the match peer and
+    /// the lobby peer are two different sockets (7777 vs 7778).
+    /// </remarks>
+    public Action<string, IPAddress?, string>? OnMatchChatSlashCommand { get; set; }
 
     /// <summary>
     /// Fired when a human JoinRoom Found into Dedik (enters катка). Name = roster nick.
@@ -233,6 +239,51 @@ public sealed partial class GameMatchHost : IDisposable
     public int Port => _manager.IsRunning ? _manager.LocalPort : _listenPort;
     /// <summary>True while match LiteNetLib is bound (false after MatchOver Suspend).</summary>
     public bool IsListening => _manager.IsRunning;
+
+    /// <summary>
+    /// Сколько живых бойцов сейчас за CT и за TR. Читается только сервером
+    /// (для автостарта) — на провод не уходит ничего.
+    /// </summary>
+    /// <remarks>
+    /// Синтетический актор сервера (<see cref="MatchHostActor.ActorNr"/>) в счёт не идёт,
+    /// как и зрители/Those без команды.
+    /// </remarks>
+    public void TryGetTeamCounts(out int ct, out int tr)
+    {
+        var localCt = 0;
+        var localTr = 0;
+
+        lock (_roomGate)
+        {
+            foreach (var room in _roomsByPassword.Values)
+            {
+                foreach (var (nr, _, _) in room.Actors)
+                {
+                    if (nr == MatchHostActor.ActorNr)
+                        continue;
+
+                    if (!room.ActorProps.TryGetValue((nr, MatchRoomPropKeys.Team), out var value))
+                        continue;
+
+                    if (value.Kind != LobbyVariantKind.Byte)
+                        continue;
+
+                    switch ((MatchTeam)value.Byte)
+                    {
+                        case MatchTeam.Ct:
+                            localCt++;
+                            break;
+                        case MatchTeam.Tr:
+                            localTr++;
+                            break;
+                    }
+                }
+            }
+        }
+
+        ct = localCt;
+        tr = localTr;
+    }
 
     /// <summary>
     /// After series MatchResults + delay: disconnect peers / clear Dedik, then <c>Stop()</c> UDP
