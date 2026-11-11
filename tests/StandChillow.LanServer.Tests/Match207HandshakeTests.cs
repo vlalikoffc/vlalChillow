@@ -29,15 +29,15 @@ public sealed class Match207HandshakeTests
     [Fact]
     public void Handshake207Response_MatchesThePhoneHostWireLayout()
     {
-        var response = MatchCodec.BuildHandshake207Response(HandshakeResult.Success, 1_140_666);
+        var response = MatchCodec.BuildHandshake207Response(HandshakeResult.Success, 1495);
 
         Assert.Equal(
-            new byte[] { 4, 1, 0xBA, 0x67, 0x11, 0, 0, 0, 0, 0, 4 },
+            new byte[] { 4, 3, 0xD7, 0x05, 0, 0, 0, 0, 0, 0, 0, 1 },
             response);
         Assert.True(MatchCodec.TryOpenBody(
             response, out _, out var opcode, out var serverTime, out var body));
-        Assert.Equal(MatchOpcode.HandshakeResponse, opcode);
-        Assert.Equal(1_140_666, serverTime);
+        Assert.Equal(MatchOpcode.FetchServerTimeResponse, opcode);
+        Assert.Equal(1495, serverTime);
         Assert.Equal(
             HandshakeResult.Success,
             MatchCodec.ParseHandshakeResponseBody(new LobbyReader(body)));
