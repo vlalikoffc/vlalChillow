@@ -312,7 +312,7 @@ public sealed partial class GameMatchHost
             victimTeam,
             source,
             killerActorNr,
-            killerActorNr is byte killer ? ResolveActorName(killer) : null,
+            killerActorNr is byte resolvedKiller ? ResolveActorName(resolvedKiller) : null,
             killerActorNr is byte confirmedKiller ? GetActorTeam(room, confirmedKiller) : MatchTeam.None);
     }
 
