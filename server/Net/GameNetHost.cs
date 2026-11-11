@@ -643,6 +643,9 @@ public sealed partial class GameNetHost : IDisposable
         Console.WriteLine(
             $"[lobby] TX → {peer.Address}:{peer.Port} delivery={delivery} len={payload.Length} " +
             $"op={(LobbyOpcode)payload[0]}");
+        // Capture every lobby TX — JoinResponse (~13KB with avatars) and chat are the
+        // join-phase payloads; without this the lobby half of the capture is blind.
+        DumpCapture($"lobby_tx_{(LobbyOpcode)payload[0]}", payload);
     }
 
     private void DumpCapture(string tag, byte[] payload)

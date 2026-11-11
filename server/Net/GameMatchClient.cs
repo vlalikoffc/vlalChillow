@@ -41,7 +41,7 @@ public sealed class GameMatchClient : IDisposable
     private const int NoisyLogEveryK = 50;
     private static readonly TimeSpan NoisySummaryInterval = TimeSpan.FromSeconds(3);
     /// <summary>Cap WorldObjectState .bin captures so long matches do not fill disk.</summary>
-    private const int MaxWorldObjectStateCaptures = 12;
+    private const int MaxWorldObjectStateCaptures = 20000;
     /// <summary>
     /// If host bootstrap (C2=10) is slow/missing, still TX team (and fighter catalog spawn) after
     /// this delay. Fighters prefer map+team catalog poses; peer CWO is only a fallback when the
@@ -1259,6 +1259,11 @@ public sealed class GameMatchClient : IDisposable
                 var state = MatchCodec.BuildWorldObjectStateStanding(
                     objectId, _probeStateSeq, tickTime, pos.X, pos.Y, pos.Z);
                 peer.Send(state, DeliveryMethod.Unreliable);
+                // Capture every State TX — the loop floods at ~10Hz and the RX cap
+                // (MaxWorldObjectStateCaptures) would silently drop the joiner's own
+                // outbound stream. Without this the capture shows the client "silent"
+                // even while it streams fat/thin State every 100ms.
+                DumpCapture($"match_tx_seq{_probeStateSeq:D5}_WorldObjectState", state);
             }
         });
     }
