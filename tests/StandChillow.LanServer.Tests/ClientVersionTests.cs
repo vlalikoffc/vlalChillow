@@ -18,6 +18,16 @@ public sealed class ClientVersionTests
     }
 
     [Fact]
+    public void Lobby_UsesThe207AuthHashAndRejectsThePreviousKey()
+    {
+        Assert.Equal("wassup", LobbyAuth.AuthKey);
+        Assert.Equal("F2638DBFF86C757AFA70670C11254A67", LobbyAuth.AuthHash);
+        Assert.False(LobbyAuth.HashEquals(
+            "D460C75AC10D98B20D3262A73B1DCC66", // MD5(projectchillow2) caused InvalidAuthKey.
+            LobbyAuth.AuthHash));
+    }
+
+    [Fact]
     public void JoinRequest_RoundTripsThe207VersionHash()
     {
         var packet = LobbyCodec.BuildJoinRequest("207-probe");
