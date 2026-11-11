@@ -11,7 +11,7 @@ namespace StandChillow.LanServer.Net;
 /// ConnectAsClient match channel: after OpGameHostingStateChangedEvent the real client
 /// (LanLobbyHelper.qxm → NetManager.bfqz(room) + bfqg(cui.balx(), endpoint) → LiteNetLibClient.bovt)
 /// opens a second LiteNetLib connection to esz IP:port (live: 7777).
-/// Post-connect: HandshakeRequest (<c>fuv</c>) then JoinRoomRequest (<c>fuy</c> / JoinOnly) on Success.
+/// Post-connect: 2.07 extended handshake (protocol 977), then JoinRoomRequest on Success.
 /// Captures are for analysis only — never replay into dedicated-host replies.
 /// </summary>
 public sealed class GameMatchClient : IDisposable
@@ -405,21 +405,21 @@ public sealed class GameMatchClient : IDisposable
     }
 
     /// <summary>
-    /// <c>dwu</c> on transport connected: <c>fuv(1024, clgc=AppId, userId)</c> via <c>bfxt</c>
-    /// with <c>gcv.Reliable</c> → LiteNetLib <c>ReliableOrdered</c>.
+    /// 2.07 transport connect: opcode 2 + protocol 977 + AppId + generated
+    /// CLB token, sent with LiteNetLib ReliableOrdered.
     /// </summary>
     private void SendHandshake(NetPeer peer)
     {
         if (_handshakeSent) return;
         _handshakeSent = true;
-        var payload = MatchCodec.BuildHandshakeRequest(_appId, _userId);
+        var payload = MatchCodec.BuildHandshake207Request(_appId, _userId);
         peer.Send(payload, DeliveryMethod.ReliableOrdered);
         var n = Interlocked.Increment(ref _txLogged);
         Console.WriteLine(
-            $"[match-net] TX#{n} HandshakeRequest (fuo=0) appId='{_appId}' userId='{_userId}' " +
-            $"proto={MatchAuth.ProtocolVersion} len={payload.Length} " +
+            $"[match-net] TX#{n} Handshake207Request (fuo=2) appId='{_appId}' userId='{_userId}' " +
+            $"proto={MatchAuth.ProtocolVersion207} len={payload.Length} " +
             $"head={Convert.ToHexString(payload.AsSpan(0, Math.Min(payload.Length, 48)))}");
-        DumpCapture($"match_tx{n:D3}_HandshakeRequest", payload);
+        DumpCapture($"match_tx{n:D3}_Handshake207Request", payload);
     }
 
     private void SendJoinRoom(NetPeer peer, string reason)
@@ -676,12 +676,27 @@ public sealed class GameMatchClient : IDisposable
                 TryHandlePeerPawnDestroy(peer, payload);
                 break;
             }
+            case MatchOpcode.FetchServerTimeResponse:
+            {
+                // A 2.07 host may answer the extended opcode-2 handshake with
+                // opcode 3. Empty opcode-3 packets are only clock sync.
+                if (bodyOffset < payload.Length)
+                {
+                    var r = new LobbyReader(payload.AsSpan(bodyOffset));
+                    var result = MatchCodec.ParseHandshakeResponseBody(r);
+                    Console.WriteLine($"[match-net] opcode-3 handshake result={result}");
+                    if (result == HandshakeResult.Success)
+                        SendJoinRoom(peer, "after opcode-3 handshake Success");
+                }
+                if (_joinSucceeded)
+                    Interlocked.Increment(ref _postJoinRx);
+                break;
+            }
             case MatchOpcode.ActorJoinedEvent:
             case MatchOpcode.ActorLeftEvent:
             case MatchOpcode.WorldObjectRpc:
             case MatchOpcode.SetInternalProperty:
             case MatchOpcode.FetchServerTimeRequest:
-            case MatchOpcode.FetchServerTimeResponse:
             {
                 if (_joinSucceeded)
                     Interlocked.Increment(ref _postJoinRx);

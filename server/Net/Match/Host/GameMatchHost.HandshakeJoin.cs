@@ -59,7 +59,7 @@ public sealed partial class GameMatchHost
         Console.WriteLine(
             $"[match-host] Handshake207Request appId='{req.AppId}' userId='{req.UserId}' " +
             $"proto={req.ProtocolVersion} authTokenLen={req.AuthToken.Length} " +
-            $"trailing=0x{req.TrailingByte:X2} remaining={body.Remaining}");
+            $"remaining={body.Remaining}");
 
         if (!_peers.TryGetValue(peer, out var st))
             st = _peers[peer] = new MatchPeerState();
