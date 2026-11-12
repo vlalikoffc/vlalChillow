@@ -31,6 +31,15 @@ public sealed class LobbySession
     public const byte DedicatedMaxMembers = 16;
     public const string WelcomeMessage = "это тест ради нехуй делать";
 
+    /// <summary>
+    /// Переопределения из <c>config.json</c> (блок server). Задаёт только
+    /// выделенный сервер на старте; в пробе (<c>--client</c>) остаются дефолты.
+    /// </summary>
+    public static byte MaxMembersOverride { get; set; }
+
+    /// <summary>null — использовать <see cref="WelcomeMessage"/>.</summary>
+    public static string? WelcomeMessageOverride { get; set; }
+
     private readonly object _gate = new();
     private readonly Dictionary<NetPeer, ConnectedPlayer> _byPeer = new();
     private readonly List<ConnectedPlayer> _order = new();
@@ -244,7 +253,7 @@ public sealed class LobbySession
             var response = LobbyCodec.BuildJoinSuccess(
                 selfMemberId: player.ServerMemberId,
                 lobbyName: _lobbyName,
-                maxMembers: DedicatedMaxMembers,
+                maxMembers: MaxMembersOverride > 0 ? MaxMembersOverride : DedicatedMaxMembers,
                 members: visible,
                 lobbyProps: BuildLobbyProps(),
                 hostingIp: hostIp,

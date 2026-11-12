@@ -1,14 +1,38 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using StandChillow.LanServer.Config;
 
 namespace StandChillow.LanServer.Lan;
 
 /// <summary>
 /// Picks real LAN (Wi‑Fi/Ethernet) addresses even when a VPN owns the default route.
 /// </summary>
+/// <remarks>
+/// Настройки приходят из блока <c>network</c> конфига и применяются только
+/// выделенным сервером (<see cref="Apply"/>). Проба (<c>--client</c>) значения
+/// не задаёт и работает на дефолтах: VPN не трогаем.
+/// </remarks>
 public static class LanInterfacePicker
 {
+    /// <summary>true — не видеть VPN/Hamachi/Radmin; false — слушать везде.</summary>
+    public static bool IgnoreVpn { get; set; } = true;
+
+    /// <summary>Только этот адрес (null — все подходящие).</summary>
+    public static IPAddress? OnlyAddress { get; set; }
+
+    /// <summary>
+    /// Применяет блок <c>network</c> конфига. Вызывается только выделенным сервером.
+    /// </summary>
+    public static void Apply(NetworkConfig network)
+    {
+        IgnoreVpn = network.IgnoreVpn;
+        OnlyAddress = IPAddress.TryParse(network.BindAddress?.Trim(), out var bind)
+                      && !bind.Equals(IPAddress.Any)
+            ? bind
+            : null;
+    }
+
     private static readonly string[] VpnNameHints =
     [
         "tun", "tap", "wg", "wireguard", "vpn", "ppp", "utun", "ipsec", "nordlynx", "proton",
@@ -26,9 +50,10 @@ public static class LanInterfacePicker
                 continue;
             if (nic.NetworkInterfaceType is NetworkInterfaceType.Loopback)
                 continue;
-            if (LooksLikeVpn(nic))
+            if (IgnoreVpn && LooksLikeVpn(nic))
                 continue;
-            if (!IsLanCapableType(nic))
+            // С IgnoreVpn=false принимаем и «неизвестные» типы (Hamachi/Radmin часто так и выглядят).
+            if (!IsLanCapableType(nic) && IgnoreVpn)
                 continue;
 
             var props = nic.GetIPProperties();
@@ -38,7 +63,9 @@ public static class LanInterfacePicker
                     continue;
                 if (IPAddress.IsLoopback(uni.Address))
                     continue;
-                if (!IsPrivateOrLinkLocalIpv4(uni.Address))
+                // Hamachi (25/8) и Radmin VPN (26/8) — не приватные диапазоны,
+                // поэтому при IgnoreVpn=false берём любой IPv4.
+                if (IgnoreVpn && !IsPrivateOrLinkLocalIpv4(uni.Address))
                     continue;
 
                 var mask = uni.IPv4Mask ?? GuessMask(uni.PrefixLength);
@@ -47,11 +74,43 @@ public static class LanInterfacePicker
             }
         }
 
-        return result
+        var picked = result
             .GroupBy(e => e.Address.ToString())
-            .Select(g => g.First())
+            .Select(g => g.First());
+
+        if (OnlyAddress is not null)
+        {
+            var only = picked.Where(e => e.Address.Equals(OnlyAddress)).ToList();
+            // Явно заданный адрес уважаем даже если NIC не попал в фильтр выше.
+            if (only.Count == 0)
+                only.Add(BuildForAddress(OnlyAddress));
+            return only;
+        }
+
+        return picked
             .OrderBy(e => e.Address.ToString(), StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>Одиночный endpoint по адресу (для <c>network.bindAddress</c>).</summary>
+    private static LanEndpoint BuildForAddress(IPAddress address)
+    {
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            foreach (var uni in nic.GetIPProperties().UnicastAddresses)
+            {
+                if (uni.Address.Equals(address))
+                {
+                    var mask = uni.IPv4Mask ?? GuessMask(uni.PrefixLength);
+                    return new LanEndpoint(
+                        nic.Name, nic.Description, address, mask, ComputeBroadcast(address, mask));
+                }
+            }
+        }
+
+        var fallback = GuessMask(24);
+        return new LanEndpoint("bind", "config.bindAddress", address, fallback,
+            ComputeBroadcast(address, fallback));
     }
 
     public static string? FindInterfaceName(IPAddress address)

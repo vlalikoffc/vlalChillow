@@ -13,20 +13,37 @@ namespace StandChillow.LanServer.Startup;
 /// <summary>Constructs and owns the dedicated discovery, lobby, match, and plugin lifecycle.</summary>
 public static class HostBootstrap
 {
-    public static async Task RunAsync(string[] args, bool useDashboard)
+    public static async Task RunAsync(
+        string[] args,
+        bool useDashboard,
+        ServerConfig? config = null)
     {
         Console.Title = "влалChillow LAN Dedicated Lobby";
         Console.WriteLine("╔══════════════════════════════════════════════════════════╗");
         Console.WriteLine("║  влалChillow LAN dedicated host                        ║");
-        Console.WriteLine("║  discovery UDP 5056  ·  lobby UDP 7778                 ║");
+        Console.WriteLine("║  discovery UDP 5056  ·  lobby UDP 7778 (default)       ║");
         Console.WriteLine("║  match UDP 7777 (Handshake + JoinRoom)                 ║");
         Console.WriteLine("║  default: Ranked2v2 / Sandstone 2x2 («союзники»)       ║");
         Console.WriteLine("║  probe: Bonjour V3 + legacy probes  proto: 4           ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════╝");
         Console.WriteLine();
 
+        // Конфиг уже прочитан в Program (только выделенный сервер, не проба).
+        var serverConfig = config ?? ServerConfig.Load();
+
+        // Сеть: адрес прослушивания + VPN. Применяется только здесь (дедик).
+        LanInterfacePicker.Apply(serverConfig.Network);
+        NetBind.Apply(serverConfig.Network);
+        Console.WriteLine(
+            $"[config] сеть: bind={serverConfig.Network.BindAddress} " +
+            $"ignoreVpn={(serverConfig.Network.IgnoreVpn ? "да" : "нет")} " +
+            $"advertiseIp={serverConfig.Network.AdvertiseIp ?? "авто"}");
+
         // Keep CLI simple: optional level/title only. Discovery HostName = LobbyId (live phone).
-        var level = args.ElementAtOrDefault(0) ?? "влал хостит рялна";
+        // Приоритет: аргумент консоли → launch.title → дефолт.
+        var level = args.ElementAtOrDefault(0)
+            ?? serverConfig.Launch.Title
+            ?? "влал хостит рялна";
         if (args.Length >= 2)
             level = args[1]; // legacy: [ignoredName] [level]
 
@@ -45,7 +62,7 @@ public static class HostBootstrap
             LevelName = lobbyTitle,
             MemberCount = 1,
             ProtocolVersion = LanDiscoveryHost.ProtocolVersion,
-            GamePort = LanDiscoveryHost.DefaultGamePort,
+            GamePort = (ushort)serverConfig.Server.LobbyPort,
             HasExtraStrings = true,
             Extra1 = LobbyPropKeys.DefaultSelectedLevel, // level id for thumbnail
             Extra2 = LobbyPropKeys.DefaultGameModeId,    // mode id for details
@@ -87,9 +104,10 @@ public static class HostBootstrap
         using var plugins = new PluginManager();
         Console.WriteLine($"[plugins] root: {plugins.PluginsRoot}");
 
-        var advertiseIp = LanInterfacePicker.PickLanBindAddress();
-        // Конфиг: админы и режим старта. Файл создаётся сам при первом запуске.
-        var serverConfig = ServerConfig.Load();
+        var advertiseIp = !string.IsNullOrWhiteSpace(serverConfig.Network.AdvertiseIp)
+                          && IPAddress.TryParse(serverConfig.Network.AdvertiseIp, out var forcedIp)
+            ? forcedIp
+            : LanInterfacePicker.PickLanBindAddress();
         var admins = serverConfig.Admin.Nicknames.Count == 0
             ? "(никого не задано — admin-команды недоступны)"
             : string.Join(", ", serverConfig.Admin.Nicknames);
@@ -97,11 +115,14 @@ public static class HostBootstrap
         Console.WriteLine($"[config] админы: {admins}");
         Console.WriteLine($"[config] запуск матча кому угодно: {(serverConfig.Admin.AnyoneCanStart ? "да" : "нет")}");
         Console.WriteLine($"[config] режим старта: {serverConfig.DescribeStartMode()}");
+        Console.WriteLine($"[config] приветствие: {(string.IsNullOrWhiteSpace(serverConfig.Server.WelcomeMessage) ? "(выкл)" : serverConfig.Server.WelcomeMessage)}");
+        Console.WriteLine($"[config] отладка: verbose={(serverConfig.Debug.Verbose || serverConfig.Launch.Verbose ? "да" : "нет")} " +
+                          $"captures={(serverConfig.Debug.Captures ? "да" : "нет")} health={(serverConfig.Debug.Health ? "да" : "нет")}");
         Console.WriteLine();
 
         using var game = new GameNetHost(
             lobbyTitle,
-            LanDiscoveryHost.DefaultGamePort,
+            serverConfig.Server.LobbyPort,
             discovery.BoundEndpoints,
             onRosterChanged: SyncDiscovery,
             advertiseLanIp: advertiseIp,
@@ -145,7 +166,11 @@ public static class HostBootstrap
         Console.WriteLine("After both teams: /set start | set start | start | startmatch → WarmUp.");
         Console.WriteLine("Rematch: after MatchResults wait 5s → lobby idle (7777 stopped); /play then /set start.");
         Console.WriteLine("Early end: /end | set end | stopmatch — immediate teardown (no 5s).");
-        Console.WriteLine("Captures: server/bin/Release/net8.0/captures/");
+        Console.WriteLine(
+            serverConfig.Debug.Captures
+                ? $"Captures: {(string.IsNullOrWhiteSpace(serverConfig.Debug.CapturesDir) ? "captures/" : serverConfig.Debug.CapturesDir)}"
+                : "Captures: off (debug.captures)");
+        Console.WriteLine($"Config: {ServerConfig.LastLoadedPath}");
         Console.WriteLine("Commands: play|start|end|mode|map|set|help|status|binds|roster|plugins|quit");
         Console.WriteLine($"  defaults: {MatchHostSettings.FormatStatusLine()}");
         if (MatchHostSettings.DebugMatchChat)

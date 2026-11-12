@@ -1,3 +1,5 @@
+using StandChillow.LanServer.Config;
+
 namespace StandChillow.LanServer.Net.Match;
 
 /// <summary>
@@ -101,6 +103,58 @@ public static class MatchHostSettings
         get { lock (Gate) return _bombFuseSeconds; }
         set { lock (Gate) _bombFuseSeconds = Math.Clamp(value, 5, 120); }
     }
+
+    /// <summary>
+    /// Применяет блок <c>timings</c> конфига. Только выделенный сервер:
+    /// в режиме пробы (<c>--client</c>) этот метод не вызывается.
+    /// </summary>
+    public static void Apply(TimingsConfig timings)
+    {
+        var t = Resolve(timings);
+        TotalRounds = t.TotalRounds;
+        WinsNeededFromConfig = t.WinsFromConfig;
+        if (t.WinsFromConfig)
+            WinsNeeded = t.WinsNeeded;
+        RoundStartMoney = t.RoundStartMoney;
+        WarmupSeconds = t.WarmupSeconds;
+        PreStartSeconds = t.PreStartSeconds;
+        PrepSeconds = t.PrepSeconds;
+        RoundSeconds = t.RoundSeconds;
+        RoundEndPauseSeconds = t.RoundEndPauseSeconds;
+        BombFuseSeconds = t.BombFuseSeconds;
+    }
+
+    /// <summary>Значения таймингов из конфига. Чистая функция — без побочных эффектов.</summary>
+    public readonly record struct TimingsSnapshot(
+        int TotalRounds,
+        int WinsNeeded,
+        bool WinsFromConfig,
+        int RoundStartMoney,
+        int WarmupSeconds,
+        int PreStartSeconds,
+        int PrepSeconds,
+        int RoundSeconds,
+        int RoundEndPauseSeconds,
+        int BombFuseSeconds);
+
+    /// <summary>Раскладывает конфиг по полям (в тех же пределах, что и сеттеры).</summary>
+    public static TimingsSnapshot Resolve(TimingsConfig timings) => new(
+        TotalRounds: Math.Clamp(timings.TotalRounds, 1, 64),
+        WinsNeeded: Math.Clamp(timings.WinsNeeded, 1, 64),
+        WinsFromConfig: timings.WinsNeeded > 0,
+        RoundStartMoney: Math.Clamp(timings.RoundStartMoney, 0, 16000),
+        WarmupSeconds: Math.Clamp(timings.Warmup, 0, 120),
+        PreStartSeconds: Math.Clamp(timings.PreStart, 1, 120),
+        PrepSeconds: Math.Clamp(timings.Prep, 1, 120),
+        RoundSeconds: Math.Clamp(timings.RoundTime, 10, 600),
+        RoundEndPauseSeconds: Math.Clamp(timings.RoundEndPause, 1, 30),
+        BombFuseSeconds: Math.Clamp(timings.BombFuse, 5, 120));
+
+    /// <summary>true — победа до N задана конфигом и НЕ перебивается дефолтом режима.</summary>
+    public static bool WinsNeededFromConfig { get; private set; }
+
+    /// <summary>true — debug-chat включён вручную (CLI/env) и конфиг его не перебивает.</summary>
+    public static bool DebugMatchChatLocked { get; set; }
 
     public static TimeSpan Warmup => TimeSpan.FromSeconds(WarmupSeconds);
     public static TimeSpan PreStart => TimeSpan.FromSeconds(PreStartSeconds);

@@ -15,7 +15,9 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 using StandChillow.LanServer;
+using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Dashboard;
+using StandChillow.LanServer.Diagnostics;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Startup;
 
@@ -24,6 +26,8 @@ using StandChillow.LanServer.Startup;
 //   ConnectAsClient learning: dotnet run -c Release -- --client [--team ct|tr] [options]
 // Captures are evidence only — never replay them into dedicated-host replies.
 
+// Проба (--client) идёт первой веткой и конфиг НЕ читает вообще:
+// ни debug, ни captures, ни timings — поведение пробы от конфига не зависит.
 if (IsClientMode(args, out var clientArgs))
 {
     var clientLog = RunLog.Start(dashboardMode: false);
@@ -34,9 +38,21 @@ if (IsClientMode(args, out var clientArgs))
     return;
 }
 
+// Дальше — только выделенный сервер: config.json создаётся/читается здесь.
+// launch.args дописываются к реальным аргументам (консоль главнее).
+var serverConfig = ServerConfig.Load();
+args = MergeLaunchArgs(args, serverConfig.Launch.Args);
+
+if (IsClientMode(args, out clientArgs))
+{
+    // Подстраховка: даже если в launch.args что-то просочилось, в пробу не уходим.
+    Console.WriteLine("[config] launch.args не может включать режим пробы — игнорирую");
+    return;
+}
+
 // Never emit full-screen ANSI into redirected/legacy terminals: use readable plain logs there.
 // --dashboard forces the UI explicitly; --no-dashboard / --console selects the plain command loop.
-var dashboardOverride = ConsumeDashboardFlag(ref args);
+var dashboardOverride = ConsumeDashboardFlag(ref args) ?? serverConfig.Launch.Dashboard;
 var useDashboard = dashboardOverride ?? TerminalCapabilities.CanUseDashboard();
 var logPath = RunLog.Start(dashboardMode: useDashboard);
 if (!useDashboard)
@@ -47,7 +63,39 @@ if (!useDashboard)
 }
 
 ConsumeDebugMatchChatFlag(ref args);
-await HostBootstrap.RunAsync(args, useDashboard);
+ConsumeVerboseFlag(ref args, serverConfig);
+try
+{
+    await HostBootstrap.RunAsync(args, useDashboard, serverConfig);
+}
+finally
+{
+    // Drain queued log lines before the process exits (writer is a background thread).
+    RunLog.Shutdown();
+}
+
+/// <summary>
+/// Доп. аргументы из <c>launch.args</c> дописываются после реальных: консоль главнее.
+/// </summary>
+static string[] MergeLaunchArgs(string[] args, List<string>? extra)
+{
+    if (extra is null || extra.Count == 0)
+        return args;
+
+    var merged = new List<string>(args);
+    foreach (var raw in extra)
+    {
+        var a = raw?.Trim();
+        if (string.IsNullOrEmpty(a))
+            continue;
+        if (ServerConfig.IsProbeFlag(a))
+            continue;
+        if (!merged.Contains(a))
+            merged.Add(a);
+    }
+
+    return merged.ToArray();
+}
 
 static bool? ConsumeDashboardFlag(ref string[] args)
 {
@@ -95,18 +143,21 @@ static bool IsClientMode(string[] args, out string[] rest)
 static void ConsumeDebugMatchChatFlag(ref string[] args)
 {
     var on = EnvTruthy(Environment.GetEnvironmentVariable("DEBUG_MATCH_CHAT"));
+    var explicitFlag = on;
     var kept = new List<string>(args.Length);
     foreach (var a in args)
     {
         if (a is "--debug-chat" or "--debug-match-chat")
         {
             on = true;
+            explicitFlag = true;
             continue;
         }
 
         if (a is "--no-debug-chat")
         {
             on = false;
+            explicitFlag = true;
             continue;
         }
 
@@ -114,7 +165,56 @@ static void ConsumeDebugMatchChatFlag(ref string[] args)
     }
 
     args = kept.ToArray();
+    if (!explicitFlag)
+        return; // пусть решает конфиг (debug.matchChat)
+
     MatchHostSettings.DebugMatchChat = on;
+    MatchHostSettings.DebugMatchChatLocked = true;
+}
+
+/// <summary>
+/// <c>--verbose</c> / <c>VLAL_VERBOSE=1</c>: per-packet protocol traces + packet captures.
+/// Off by default because those are exactly the writes that melt a 10-player host.
+/// </summary>
+static void ConsumeVerboseFlag(ref string[] args, ServerConfig config)
+{
+    Diag.ApplyEnvironment();
+    var cliVerbose = false;
+    var kept = new List<string>(args.Length);
+    foreach (var a in args)
+    {
+        if (a is "--verbose" or "-v" or "--debug")
+        {
+            cliVerbose = true;
+            continue;
+        }
+
+        kept.Add(a);
+    }
+
+    args = kept.ToArray();
+    // Отладка: конфиг (debug.*) — база, флаги командной строки и launch.verbose — сверху.
+    Diag.CliVerbose |= cliVerbose;
+    Diag.CapturesForced = cliVerbose || config.Launch.Verbose || config.Debug.Verbose;
+    Diag.Apply(
+        config.Debug,
+        config.Tuning.HealthIntervalSec,
+        config.Launch.Verbose || cliVerbose);
+    if (config.Debug.Captures || Diag.CapturesForced)
+    {
+        // --verbose исторически включает и captures; явный debug.captures остаётся главным.
+        CaptureSink.Configure(
+            true,
+            config.Debug.CapturesDir is { Length: > 0 } dir
+                ? dir
+                : System.IO.Path.Combine(AppContext.BaseDirectory, "captures"),
+            config.Debug.CapturesMaxFiles,
+            config.Debug.CapturesMaxBytesMb * 1024L * 1024L);
+    }
+
+    Console.WriteLine(Diag.Verbose
+        ? "[diag] verbose ON — per-packet logs + captures (expect heavy disk I/O)"
+        : "[diag] verbose off — packet captures follow config debug.captures");
 }
 
 static bool EnvTruthy(string? value) =>

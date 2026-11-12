@@ -35,6 +35,45 @@ Mode FSMs are driven from ConnectAsClient captures and decompile — not invente
 - **ArmsRace / FreeForAll / DeathMatch** — catalog stubs or not listed as playable; refuse or incomplete wire drive
 - Maps: use each mode’s `SelectedLevels` list where the mode is playable
 
+## Load and stability
+
+The dedicated host is built to stay smooth well beyond a 4-phone lobby. Two things used to
+make it melt at ~10 players, and both are fixed:
+
+- **Per-packet disk I/O in the network thread.** Every packet used to be written synchronously
+  as a capture file *and* logged through a lock into two auto-flushed log files. At 10 players
+  that is thousands of file operations per second on the LiteNetLib poll thread: the socket
+  receive buffer overflows, reliable packets retransmit (the “ping 200” everyone sees), and
+  eventually the event queue backs up until the host stops sending. Captures are now **off by
+  default** and, when enabled, go through a single background writer with a bounded queue and
+  a file/byte budget. Log lines are queued and batched by one writer thread too.
+- **Unbounded fan-out to slow phones.** Broadcasts now check each peer’s reliable queue.
+  A peer that cannot keep up gets game ticks dropped (it will rubber-band, but it can never
+  stall the room); if the whole send fails the packet is skipped instead of throwing.
+
+Other changes that matter under load:
+
+| Area | Change |
+|------|--------|
+| Tick loop | 128 Hz busy-poll → 33 ms loop, socket drained first; phase/wipe/fuse checks stay per-tick, `WorldObjectState` ticks every 50 ms |
+| Reliable queue | `PacketPoolSize` 1000 → 4096, disconnect timeout 5 s → 10 s (a hiccup no longer kills the session) |
+| Logging | `Console.WriteLine` in hot paths is gated behind `--verbose`; silent by default |
+| Health line | `[health] peers=… reliableQueue=… worstPeer=… slowPeers=… droppedSends=… rttMax=… captures=…` every 10 s |
+
+**The wire is unchanged.** No packet format, opcode, field or client-facing timing was
+touched — only when/how the host logs and how it schedules its own work. Anything the clients
+used to receive in a round, they still receive.
+
+### Debugging a protocol issue
+
+```bash
+dotnet run -c Release -- --verbose          # or VLAL_VERBOSE=1
+```
+
+`--verbose` restores the old behaviour: per-packet RX/TX lines and capture `.bin` files under
+`captures/` (written asynchronously, capped at 4000 files / 64 MB per run). Expect heavy disk
+I/O and worse performance — use it only when capturing evidence.
+
 ## Screenshots
 
 Escalation on Prison over LAN — from lobby ready-up through round outcomes on the dedicated host.
@@ -89,25 +128,61 @@ Two steps matter:
 
 Typical flow: everyone joins lobby → host picks `mode` + `map` → host runs `play` → both teams pick CT/T → host runs `set start` → WarmUp / buy → live rounds.
 
-### Config file (admins + how the match starts)
+### Config file (`config.json`)
 
 On first launch the server writes a **commented `config.json`** next to the executable and
 prints where. Edit it, then restart the host (or run console `config reload`).
+Comments use `//` and are short on purpose — one line per knob.
 
 ```jsonc
 {
-  "admin": {
-    "nicknames": [ "влал" ],                                  // who may run admin commands
-    "adminOnlyCommands": [ "mode", "map", "set", "play", "end", "start" ],
-    "anyoneCanStart": false                                   // let everyone run /start
+  // ----- ЗАПУСК: только для выделенного сервера -------------------------
+  "launch": {
+    "args": [],              // доп. аргументы, как в командной строке: "--verbose"
+    "dashboard": null,       // true / false / null — авто
+    "title": null,           // название лобби (null — дефолтное)
+    "verbose": false
   },
-  "matchStart": {
-    "mode": "manual",        // "manual" | "auto" | "ready"   ← see below
-    "auto":  { "minPlayersPerTeam": 1 },
-    "ready": { "announceInChat": true, "resetOnLeave": true, "allowUnready": true }
-  }
+  "server":  { "welcomeMessage": "…", "maxMembers": 16, "lobbyPort": 7778 },
+  "network": { "bindAddress": "0.0.0.0", "ignoreVpn": true, "advertiseIp": null },
+  "admin":   { "nicknames": [ "влал" ], "adminOnlyCommands": [ … ], "anyoneCanStart": false },
+  "matchStart": { "mode": "manual", "auto": { … }, "ready": { … } },
+  "timings": { "warmup": 3, "preStart": 3, "prep": 10, "roundTime": 109,
+               "roundEndPause": 6, "bombFuse": 40, "totalRounds": 8,
+               "winsNeeded": 0, "roundStartMoney": 800 },
+  "tuning":  { "tickMs": 33, "stateIntervalMs": 50, "reliableQueueSoftLimit": 256,
+               "packetPoolSize": 4096, "disconnectTimeoutMs": 10000,
+               "netUpdateTimeMs": 15, "pingIntervalMs": 1000, "healthIntervalSec": 10 },
+  "debug":   { "verbose": false, "captures": false, "capturesDir": null,
+               "capturesMaxFiles": 4000, "capturesMaxBytesMb": 64,
+               "matchChat": false, "health": true,
+               "logPackets": false, "logDiscovery": false }
 }
 ```
+
+**`launch`** — параметры, которые обычно пишут в командной строке. `launch.args` дописываются
+к реальным аргументам (консоль главнее). `--client` там **запрещён**: конфиг не может
+переключить сервер в режим пробы.
+
+**`debug`** — только для выделенного сервера. Режим пробы (`--client`) `config.json` не читает
+вообще: ни `debug`, ни `tuning`, ни `timings` не влияют на пробу.
+
+**`network`** — где открывать сервер. `bindAddress: "0.0.0.0"` слушает **все** интерфейсы
+сразу; задай конкретный адрес, чтобы слушать только его. `ignoreVpn: true` (по умолчанию)
+держит VPN/Hamachi/Radmin/ZeroTier в стороне; `false` — сервер слушает и на них.
+`advertiseIp` — что писать телефонам в op9 как адрес матча (`null` — авто по LAN);
+задай вручную, если играете через Hamachi/Radmin и авто берёт не тот адрес.
+
+**`timings`** — фазы матча в секундах, применяются и через `/set`. `winsNeeded: 0` — взять
+дефолт режима (Allies 8, Defuse 6); `winsNeeded: N` — жёстко N и режим его не перебивает.
+
+**`tuning`** — темп хоста. `tickMs` — период цикла, `stateIntervalMs` — рассылка поз,
+`reliableQueueSoftLimit` — порог, после которого дропается только косметика (позы/RPC),
+`healthIntervalSec` — как часто печатать `[health]` (0 — выключить).
+
+**`debug.captures`** — писать capture-файлы (по умолчанию выключено: на 10+ игроках это
+тысячи файловых операций в секунду). Отдельные флаги `logPackets`/`logDiscovery` включают
+шумный per-packet лог без общего `verbose`.
 
 **Who is an admin.** Matched by the lobby nickname, case-insensitive. Anyone not in
 `admin.nicknames` gets a private «только для админов» reply and the command does not run.
@@ -125,7 +200,8 @@ prints where. Edit it, then restart the host (or run console `config reload`).
 match, the vote is dropped and the counter is recalculated, so a leaver can never block the
 start. `/unready` cancels a vote (disable with `ready.allowUnready`).
 
-Console helpers: `config` prints the active settings, `config reload` re-reads the file.
+Console helpers: `config` prints the active settings (admins, start mode, timings, tuning,
+debug), `config reload` re-reads the file and applies it without a restart.
 
 ### Useful console commands
 
@@ -137,7 +213,7 @@ play                     # launch / rematch
 end                      # end match / return path
 status                   # lobby + match summary
 plugins                  # list loaded plugins
-config                   # show active config (admins, start mode)
+config                   # show active config (admins, timings, debug)
 config reload            # re-read config.json without restarting
 quit
 ```

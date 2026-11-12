@@ -9,6 +9,7 @@ Goal: **no multi-thousand-line god-files**, clear homes for lobby / discovery / 
 | `server/` | Dedicated LAN server (C#) | Only place that binds UDP / answers clients |
 | `server/Startup/` | Dedicated-host and ConnectAsClient startup paths | Entry-point orchestration only |
 | `server/Dashboard/` | CLI rendering and console command routing | Shared game commands stay in `GameNetHost` |
+| `server/Diagnostics/` | Verbose switch + async capture sink | **Never** do blocking disk I/O from a network hot path |
 | `tests/` | Socket-free protocol regression tests | xUnit; run in CI on all desktop OSes |
 | `server/Lan/` | Discovery (Bonjour V2 / UDP 5056) | Stay out of match host |
 | `server/Net/Lobby/` | Lobby LiteNetLib + codecs | Stay out of match host |
@@ -49,6 +50,22 @@ Nine `GameModeId`s (probe `run-20260722_213859`) each have `server/Net/Match/Mod
 Registry: `Modes/MatchModeRegistry.cs`. Interface: `IMatchMode` — modes must not cross-import.
 
 Bomb-family (similar phase skeleton later): RankedDefuse, Ranked2v2, Ranked2v2Alt, Defuse, Escalation — share **kernel interfaces**, separate implementations.
+
+## Performance rules (hot paths)
+
+These are the invariants that keep a 10+ player room smooth; break them and the host melts:
+
+1. **No blocking I/O inside packet handlers.** No `File.*`, no `Console.WriteLine` on the
+   per-packet path (it is a synchronous write to terminal + 2 logs). Use
+   `Diagnostics.LogVerbose` or per-event logs only. Diagnostics go through
+   `CaptureSink` / `RunLog`, which are async + bounded.
+2. **Never let one peer's queue grow without bound.** All sends go through
+   `GameMatchHost.Send*`, which checks `GetPacketsCountInReliableQueue` and drops game ticks
+   for slow peers. Don't call `peer.Send` directly.
+3. **A broadcast is a snapshot loop.** Iterate `_peers` once per payload; do not nest
+   per-recipient loops inside per-payload loops.
+4. **Health line is the first place to look:** `[health] peers=… reliableQueue=… slowPeers=…
+   droppedSends=… rttMax=… captures=…` every 10 s.
 
 ## Protocol fidelity
 

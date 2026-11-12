@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Net;
 using LiteNetLib;
+using StandChillow.LanServer.Diagnostics;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
@@ -12,7 +13,8 @@ public sealed partial class GameMatchHost
 {
     private void HandleHandshake(NetPeer peer, LobbyReader body, byte[] raw)
     {
-        DumpCapture("match_rx_HandshakeRequest", raw);
+        if (Diag.LogVerbose)
+            DumpCapture("match_rx_HandshakeRequest", raw);
         var req = MatchCodec.ParseHandshakeRequestBody(body);
         Console.WriteLine(
             $"[match-host] HandshakeRequest appId='{req.AppId}' userId='{req.UserId}' proto={req.ProtocolVersion}");
@@ -46,7 +48,8 @@ public sealed partial class GameMatchHost
         var okFlag = result == HandshakeResult.Success;
         var resp = MatchCodec.BuildHandshakeResponse(result, okFlag, NextServerTime());
         Send(peer, resp);
-        DumpCapture("match_tx_HandshakeResponse", resp);
+        if (Diag.LogVerbose)
+            DumpCapture("match_tx_HandshakeResponse", resp);
         Console.WriteLine(
             $"[match-host] TX HandshakeResponse result={result} ({(byte)result}) okFlag={okFlag} " +
             $"len={resp.Length} hex={Convert.ToHexString(resp)}");
@@ -54,7 +57,8 @@ public sealed partial class GameMatchHost
 
     private void HandleHandshake207(NetPeer peer, LobbyReader body, byte[] raw)
     {
-        DumpCapture("match_rx_Handshake207Request", raw);
+        if (Diag.LogVerbose)
+            DumpCapture("match_rx_Handshake207Request", raw);
         var req = MatchCodec.ParseHandshake207RequestBody(body);
         Console.WriteLine(
             $"[match-host] Handshake207Request appId='{req.AppId}' userId='{req.UserId}' " +
@@ -88,7 +92,8 @@ public sealed partial class GameMatchHost
 
         var resp = MatchCodec.BuildHandshake207Response(result, NextServerTime());
         Send(peer, resp);
-        DumpCapture("match_tx_Handshake207Response", resp);
+        if (Diag.LogVerbose)
+            DumpCapture("match_tx_Handshake207Response", resp);
         Console.WriteLine(
             $"[match-host] TX Handshake207Response result={result} ({(byte)result}) " +
             $"len={resp.Length} hex={Convert.ToHexString(resp)}");
@@ -96,7 +101,8 @@ public sealed partial class GameMatchHost
 
     private void HandleJoinRoom(NetPeer peer, LobbyReader body, byte[] raw)
     {
-        DumpCapture("match_rx_JoinRoomRequest", raw);
+        if (Diag.LogVerbose)
+            DumpCapture("match_rx_JoinRoomRequest", raw);
         if (!_peers.TryGetValue(peer, out var st) || !st.Handshaken)
         {
             Console.WriteLine("[match-host] JoinRoom before handshake — ignore");
@@ -232,7 +238,8 @@ public sealed partial class GameMatchHost
             debugMessage: result == JoinRoomResult.Found ? LanCreateRoomPasswordKey : null,
             gap: gap);
         Send(peer, resp);
-        DumpCapture("match_tx_JoinRoomResponse", resp);
+        if (Diag.LogVerbose)
+            DumpCapture("match_tx_JoinRoomResponse", resp);
         Console.WriteLine(
             $"[match-host] TX JoinRoomResponse result={MatchCodec.JoinRoomResultName(result)} " +
             $"actor={(actor?.ToString() ?? "-")} gap={(gap is null ? "none" : $"props={gap.Value.RoomProps.Count} actors={gap.Value.Actors.Count} C2={room?.RoomC2} C0={_matchGameModeId} C1={_matchSelectedLevel}")} " +
@@ -245,7 +252,8 @@ public sealed partial class GameMatchHost
             // missing the first post-Found frame (see RoomInitReady in MatchCodec).
             var initReady = MatchCodec.BuildRoomInitReady();
             Send(peer, initReady);
-            DumpCapture("match_tx_RoomInitReady", initReady);
+            if (Diag.LogVerbose)
+                DumpCapture("match_tx_RoomInitReady", initReady);
             Console.WriteLine(
                 "[match-host] TX RoomInitReady (op15, empty body) → joiner " +
                 $"{joinerNr} — same first post-Found frame as the phone host");
