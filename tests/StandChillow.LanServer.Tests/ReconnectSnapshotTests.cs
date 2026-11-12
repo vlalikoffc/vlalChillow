@@ -78,15 +78,22 @@ public sealed class ReconnectSnapshotTests
         Assert.Equal(body, replayBody);
     }
 
+    /// <summary>
+    /// Issue #28 — the latch only skips the *repeat* of the identity batch. It must never make the
+    /// gate pass on its own, otherwise a rejoin that carries no identity would receive the live
+    /// world before the client knows which actor it is.
+    /// </summary>
     [Fact]
-    public void RejoiningPeerSkipsTheIdentityGateItAlreadyPassed()
+    public void RejoiningPeerSkipsOnlyTheRepeatOfTheIdentityBatch()
     {
         var st = new MatchPeerState();
         Assert.False(st.IsJoinerIdentityReady);
 
-        // First session: host sent the identity block, gate opens.
         st.IdentityAlreadyBootstrapped = true;
-        Assert.True(st.IsJoinerIdentityReady);
+        Assert.False(st.IsJoinerIdentityReady); // still needs this join's uid
+
+        st.JoinerUidSeen = true;
+        Assert.True(st.IsJoinerIdentityReady);  // from_lobby/avatar need not repeat
     }
 
     [Fact]

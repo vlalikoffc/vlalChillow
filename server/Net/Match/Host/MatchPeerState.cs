@@ -27,10 +27,14 @@ internal sealed class MatchPeerState
     public bool JoinerPingSeen { get; set; }
     /// <summary>
     /// Issue #28: the host already sent this peer's full identity block (uid → badgeId →
-    /// verified → from_lobby → …). A mid-match rejoin reuses the live <see cref="NetPeer"/>, so
-    /// those props never come again — without this latch the INIT gate waits for an identity
-    /// batch that will not repeat and the peer gets no world data until the next round.
+    /// verified → from_lobby → …). A rejoin that reuses the live <see cref="NetPeer"/> (same UDP
+    /// session) does not repeat that batch, so the INIT gate must not wait for it again.
     /// </summary>
+    /// <remarks>
+    /// It must NOT make the gate pass on its own: <c>IsJoinerIdentityReady</c> still requires this
+    /// join's own <c>uid</c>. Otherwise a fresh join carrying no identity would be treated as
+    /// ready and get the world snapshot before the client knows which actor it is.
+    /// </remarks>
     public bool IdentityAlreadyBootstrapped { get; set; }
     public CancellationTokenSource? BootstrapTimeoutCts { get; set; }
 
@@ -45,7 +49,13 @@ internal sealed class MatchPeerState
     /// </summary>
     public bool ReconnectSpectatorFallbackDone { get; set; }
 
+    /// <summary>
+    /// Ready for host bootstrap: this join's own <c>uid</c> is known, and the rest of the identity
+    /// batch is either seen now or was already delivered to this peer earlier
+    /// (<see cref="IdentityAlreadyBootstrapped"/> — see issue #28).
+    /// </summary>
     public bool IsJoinerIdentityReady =>
-        IdentityAlreadyBootstrapped
-        || (JoinerUidSeen && JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen));
+        JoinerUidSeen
+        && (IdentityAlreadyBootstrapped
+            || (JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen)));
 }
