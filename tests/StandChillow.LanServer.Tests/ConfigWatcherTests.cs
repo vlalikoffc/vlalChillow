@@ -12,6 +12,7 @@ namespace StandChillow.LanServer.Tests;
 /// также настройки применялись». До этого <c>config.json</c> читался один раз на старте,
 /// поэтому правки в файле не давали никакого эффекта.
 /// </remarks>
+[Collection("config-file")]
 public sealed class ConfigWatcherTests : IDisposable
 {
     private readonly string _dir;
@@ -41,6 +42,19 @@ public sealed class ConfigWatcherTests : IDisposable
         }
 
         return condition();
+    }
+
+    [Fact]
+    public void ReloadingExplicitly_AppliesTheNewValuesEvenWithoutFileEvents()
+    {
+        // На CI-ФС события FileSystemWatcher могут не приходить вовсе. Явный перечит
+        // обязан работать всегда — это и есть «при любом изменении применялись».
+        File.WriteAllText(_path, ServerConfig.Template.Replace(
+            "\"roundTime\": 109", "\"roundTime\": 150"));
+
+        var cfg = ServerConfig.Load(_path);
+
+        Assert.Equal(150, cfg.Timings.RoundTime);
     }
 
     [Fact]

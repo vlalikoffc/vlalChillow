@@ -157,7 +157,6 @@ public sealed class ConfigValidationTests
     }
 
     [Theory]
-    [InlineData("")]
     [InlineData("manual")]
     [InlineData("auto")]
     [InlineData("ready")]
@@ -166,6 +165,17 @@ public sealed class ConfigValidationTests
         var cfg = Validate(c => c.MatchStart.Mode = mode);
 
         Assert.DoesNotContain(cfg.Issues, i => i.Key == "matchStart.mode");
+    }
+
+    [Fact]
+    public void EmptyStartMode_IsReportedAndFallsBackToAuto()
+    {
+        // Пустое значение — это «ничего не задано», и оно тоже не должно молчать:
+        // сервер обязан сказать, что взял auto.
+        var cfg = Validate(c => c.MatchStart.Mode = "");
+
+        Assert.Equal(MatchStartMode.Auto, cfg.StartMode);
+        Assert.Equal("auto", Single(cfg, "matchStart.mode").Applied);
     }
 
     [Fact]
