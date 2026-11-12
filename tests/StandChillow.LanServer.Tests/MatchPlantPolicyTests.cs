@@ -111,7 +111,7 @@ public sealed class MatchPlantPolicyTests
     {
         Assert.True(MatchPlantPolicy.AllowsPlanterTeam(planterActorNr, MatchTeam.Tr));
         // Host-authored / Escalation auto-plant.
-        Assert.True(MatchPlantPolicy.AllowsPlanterTeam(actorNr: 0, MatchTeam.None));
+        Assert.True(MatchPlantPolicy.AllowsPlanterTeam(planterActorNr: 0, MatchTeam.None));
     }
 
     /// <summary>A team prop that has not landed yet must never re-open the silent-drop hole.</summary>
@@ -126,7 +126,7 @@ public sealed class MatchPlantPolicyTests
     [InlineData(MatchTeam.Spectator)]
     public void KnownDefenderOrSpectator_IsRefused(MatchTeam team)
     {
-        Assert.False(MatchPlantPolicy.AllowsPlanterTeam(planterActorNr: 9, team));
+        Assert.False(MatchPlantPolicy.AllowsPlanterTeam(planterActorNr: 9, planterTeam: team));
     }
 
     [Fact]

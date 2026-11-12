@@ -40,7 +40,7 @@ public sealed class MatchRoundIntegrityTests
 
         var flow = new MatchFlowState { Phase = MatchFlowPhase.PurchasePhase };
         MatchFlowRules.FreezeRoundRoster(flow, props);
-        Assert.Equal(2, flow.RoundRoster.Count);
+        Assert.Equal(2, flow.RoundRoster.Count); // two fighters entered the round
 
         // Actor 4 leaves mid-round — its team prop survives, the round roster does not grow.
         props.Remove((4, MatchRoomPropKeys.Team));
