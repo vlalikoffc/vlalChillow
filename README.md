@@ -11,7 +11,7 @@ Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engi
 - **Lobby** — LiteNetLib on UDP **7778** (join, full roster, chat, mode/map selection, `/end`)
 - **Auto-discovery** — 2.07 Bonjour V3 (`SC LAN Bonjour V3`) probe/reply on UDP **5056**; when phones search LAN lobbies, this host appears automatically (same as a phone-hosted lobby)
 - **Match channel** — after `play`, clients move to UDP **7777**
-- **CLI dashboard** — TTY console + phone chat slash commands (`/mode`, `/map`, `/set start`, `/play`, `/end`, …)
+- **CLI dashboard** — TTY console + phone chat slash commands (`/mode`, `/map`, `/start`, `/play`, `/end`, …)
 - **Graceful shutdown** — CTRL+C tears down cleanly; rematch via `play` again
 - **ConnectAsClient probe** — optional learning client (`--client`) can observe a real phone host or spawn a visible CT/Tr fighter from the map spawn catalog (see `server/Net/PROBE_README.md`)
 
@@ -124,15 +124,30 @@ Phones: open StandChillow → LAN → your lobby should appear → join → chat
 Two steps matter:
 
 1. **`play`** (or phone **`/play`**) — creates the match channel and moves clients to UDP 7777. Use again for rematch (tears down the previous match).
-2. **`set start`** / **`start`** / **`/set start`** — arms WarmUp / waiting exit once both teams have at least one player. Without this, the match stays in waiting (C2=10).
+2. **`/start`** (alias of `start` / `set start` when `anyoneCanStart: true`) — arms WarmUp / waiting exit once both teams have at least one player. Without this, the match stays in waiting (C2=10). With `matchStart.mode: "auto"` the server does this itself.
 
 Typical flow: everyone joins lobby → host picks `mode` + `map` → host runs `play` → both teams pick CT/T → host runs `set start` → WarmUp / buy → live rounds.
 
 ### Config file (`config.json`)
 
 On first launch the server writes a **commented `config.json`** next to the executable and
-prints where. Edit it, then restart the host (or run console `config reload`).
-Comments use `//` and are short on purpose — one line per knob.
+prints where. Edit and save it — running server **picks the change up on its own**, no restart
+needed. Comments use `//` and are short on purpose — one line per knob.
+
+A setting that cannot be changed on a live socket (`server.lobbyPort`, `network.*`,
+`tuning.packetPoolSize` / `disconnectTimeoutMs` / `netUpdateTimeMs` / `pingIntervalMs`) is
+accepted but logged as **«нужен перезапуск»**. A value that is out of range or unparsable is
+**never applied silently**: one log line per problem names the bad value and the standard
+one that was used instead, e.g.
+
+```
+[config] некорректных значений: 1 — применены стандартные
+[config]   timings.roundTime: '-5' вне диапазона 10..600 → 109
+```
+
+If the file is saved half-written or is not valid JSON, the running server keeps the
+settings it already had and says so in the log — it does not fall back to defaults.
+The console command `config reload` forces a re-read.
 
 ```jsonc
 {
@@ -145,8 +160,9 @@ Comments use `//` and are short on purpose — one line per knob.
   },
   "server":  { "welcomeMessage": "…", "maxMembers": 16, "lobbyPort": 7778 },
   "network": { "bindAddress": "0.0.0.0", "ignoreVpn": true, "advertiseIp": null },
-  "admin":   { "nicknames": [ "влал" ], "adminOnlyCommands": [ … ], "anyoneCanStart": false },
-  "matchStart": { "mode": "manual", "auto": { … }, "ready": { … } },
+  "admin":   { "nicknames": [ "влал" ], "adminOnlyCommands": [ "set", "end" ],
+               "anyoneCanStart": true },
+  "matchStart": { "mode": "auto", "auto": { … }, "ready": { … } },
   "timings": { "warmup": 3, "preStart": 3, "prep": 10, "roundTime": 109,
                "roundEndPause": 6, "bombFuse": 40, "totalRounds": 8,
                "winsNeeded": 0, "roundStartMoney": 800 },
@@ -185,8 +201,19 @@ Comments use `//` and are short on purpose — one line per knob.
 шумный per-packet лог без общего `verbose`.
 
 **Who is an admin.** Matched by the lobby nickname, case-insensitive. Anyone not in
-`admin.nicknames` gets a private «только для админов» reply and the command does not run.
-`/help`, `/ready` and `/unready` are always open to everyone.
+`admin.nicknames` gets a private «только для админов» reply naming the reason, and the
+command does not run. `/help`, `/ready` and `/unready` are always open to everyone.
+
+**`admin.adminOnlyCommands`** defaults to `[ "set", "end" ]`: `/set` changes match parameters,
+`/end` stops the match. `/mode`, `/map`, `/start` and `/play` stay open — anyone can run the
+match, which is the point of `anyoneCanStart: true`.
+
+> **Careful:** if `admin.nicknames` is empty, **nobody** can run the admin-only commands —
+> there is no one left to authorise them. Fill in your nickname:
+
+```json
+"admin": { "nicknames": [ "влал" ], "adminOnlyCommands": [ "set", "end" ] }
+```
 
 **Three ways to start a match** — pick one with `matchStart.mode`:
 
@@ -218,7 +245,7 @@ config reload            # re-read config.json without restarting
 quit
 ```
 
-Phone chat accepts the same slash commands (`/mode`, `/map`, `/set start`, `/play`, `/end`, …).
+Phone chat accepts the same slash commands (`/mode`, `/map`, `/start`, `/play`, `/end`, …).
 
 Optional lobby title as first argument:
 
