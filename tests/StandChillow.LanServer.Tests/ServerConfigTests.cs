@@ -48,19 +48,34 @@ public sealed class ServerConfigTests
     }
 
     [Fact]
-    public void Template_LeavesEveryCommandOpenByDefault()
+    public void Template_ClosesOnlyParameterChangingCommandsByDefault()
     {
         var cfg = Parse(ServerConfig.Template);
         cfg.Normalize();
 
-        // LAN по умолчанию: никаких админ-гейтов. Раньше /mode, /map, /start, /play
-        // были за админом, а список админов пустой — команды молча не работали.
+        // /set меняет параметры хоста (раунды, победу, состав), /end обрывает катку.
+        Assert.True(cfg.IsAdminOnly("set"));
+        Assert.True(cfg.IsAdminOnly("end"));
+
+        // Запуск матча закрывать нельзя — катку начинает кто угодно.
         Assert.False(cfg.IsAdminOnly("start"));
         Assert.False(cfg.IsAdminOnly("mode"));
         Assert.False(cfg.IsAdminOnly("map"));
         Assert.False(cfg.IsAdminOnly("play"));
-        Assert.False(cfg.IsAdminOnly("set"));
-        Assert.False(cfg.IsAdminOnly("end"));
+        Assert.True(cfg.Admin.AnyoneCanStart);
+    }
+
+    [Fact]
+    public void EverySetSubcommand_IsAdminOnly_NotJustSetStart()
+    {
+        // «любая команда, что начинается на /set» — иначе /set round 99 или
+        // /set team tr менял бы хост без прав.
+        var cfg = Parse(ServerConfig.Template);
+        cfg.Normalize();
+
+        Assert.True(cfg.IsAdminOnly("set"));
+        // /set start разрешён всем через anyoneCanStart — это отдельное правило,
+        // а не дыра в админ-гейте на set.
         Assert.True(cfg.Admin.AnyoneCanStart);
     }
 
@@ -166,7 +181,10 @@ public sealed class ServerConfigTests
 
         cfg.Normalize();
 
-        Assert.Empty(cfg.Admin.AdminOnlyCommands);
+        // Старый набор заменён новым: только set и end.
+        Assert.Equal(2, cfg.Admin.AdminOnlyCommands.Count);
+        Assert.Contains("set", cfg.Admin.AdminOnlyCommands);
+        Assert.Contains("end", cfg.Admin.AdminOnlyCommands);
         Assert.True(cfg.Admin.AnyoneCanStart);
         Assert.Equal(MatchStartMode.Manual, cfg.StartMode); // явный manual уважаем
     }
@@ -177,6 +195,7 @@ public sealed class ServerConfigTests
         // Есть админ — значит гейт выставлен осознанно, миграция не вмешивается.
         var cfg = new ServerConfig();
         cfg.Admin.Nicknames.Add("влал");
+        cfg.Admin.AdminOnlyCommands.Clear();
         cfg.Admin.AdminOnlyCommands.AddRange(["mode", "map", "set", "play", "end", "start"]);
         cfg.Admin.AnyoneCanStart = false;
 
@@ -192,6 +211,7 @@ public sealed class ServerConfigTests
     {
         // Набор команд не совпадает со старым дефолтом — это ручная настройка.
         var cfg = new ServerConfig();
+        cfg.Admin.AdminOnlyCommands.Clear();
         cfg.Admin.AdminOnlyCommands.AddRange(["mode", "map"]);
         cfg.Admin.AnyoneCanStart = false;
 

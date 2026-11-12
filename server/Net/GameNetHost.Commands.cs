@@ -28,59 +28,19 @@ public sealed partial class GameNetHost
     /// </summary>
     private bool IsCommandAllowedFor(ConnectedPlayer player, string message, out string denyReason)
     {
-        denyReason = string.Empty;
-
-        var body = message.Trim();
-        if (body.StartsWith('/'))
-            body = body[1..].Trim();
-        if (body.Length == 0)
-            return true;
-
-        var space = body.IndexOf(' ');
-        var command = (space < 0 ? body : body[..space]).Trim();
-        var args = space < 0 ? string.Empty : body[(space + 1)..].Trim();
-
-        // «/set start» — это по сути команда start, права проверяем по ней же.
-        var effective = command;
-        if (command.Equals("set", StringComparison.OrdinalIgnoreCase)
-            && args.Equals("start", StringComparison.OrdinalIgnoreCase))
-            effective = "start";
-
-        // Справка и готовность доступны всем всегда.
-        if (IsPublicCommand(effective))
-            return true;
-
-        // Явное разрешение запускать матч кому угодно.
-        if (effective.Equals("start", StringComparison.OrdinalIgnoreCase)
-            && _config.Admin.AnyoneCanStart)
-            return true;
-
-        if (!_config.IsAdminOnly(effective))
-            return true;
-
-        if (_config.IsAdmin(player.Name))
+        // Само решение — в CommandAccessPolicy (чистая функция, покрыта тестами).
+        var allowed = CommandAccessPolicy.IsAllowed(_config, player.Name, message, out denyReason);
+        if (allowed)
             return true;
 
         // Отказ виден и в консоли: иначе игрок получает только приватный ответ, а
         // оператор не понимает, почему команда «не работает».
+        var parsed = CommandAccessPolicy.Parse(message);
         Console.WriteLine(
-            $"[chat] /{effective} ОТКЛОНЕНО: ник '{player.Name}' не в admin.nicknames " +
+            $"[chat] /{parsed.Command} ОТКЛОНЕНО: ник '{player.Name}' не в admin.nicknames " +
             $"[{string.Join(", ", _config.Admin.Nicknames)}]");
-        denyReason = $"команда /{effective} только для админов (твой ник: {player.Name})";
         return false;
     }
-
-    /// <summary>Команды, которые никогда не требуют прав администратора.</summary>
-    private static bool IsPublicCommand(string command) =>
-        command.Equals("help", StringComparison.OrdinalIgnoreCase)
-        || command.Equals("?", StringComparison.OrdinalIgnoreCase)
-        || command.Equals("команды", StringComparison.OrdinalIgnoreCase)
-        || command.Equals("ready", StringComparison.OrdinalIgnoreCase)
-        || command.Equals("unready", StringComparison.OrdinalIgnoreCase)
-        || command.Equals("готов", StringComparison.OrdinalIgnoreCase)
-        || command.Equals("неготов", StringComparison.OrdinalIgnoreCase)
-        || command.Equals("г", StringComparison.OrdinalIgnoreCase)
-        || command.Equals("нг", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Shared host command dispatch for lobby chat <c>/</c>, mid-match ChatManager <c>/</c>,

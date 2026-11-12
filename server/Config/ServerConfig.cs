@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace StandChillow.LanServer.Config;
 
@@ -29,12 +30,21 @@ public sealed class AdminConfig
     public List<string> Nicknames { get; set; } = new();
 
     /// <summary>
-    /// Команды только для админов. Пусто (по умолчанию) — админ-гейта нет вообще.
+    /// Команды только для админов. По умолчанию <c>set</c> и <c>end</c>: они меняют важные
+    /// параметры хоста (раунды, победу, состав команды) и обрывают идущую катку.
     /// </summary>
-    public List<string> AdminOnlyCommands { get; set; } = new();
+    /// <remarks>
+    /// Запуск матча <b>специально</b> сюда не входит: <c>/mode</c>, <c>/map</c>, <c>/start</c>,
+    /// <c>/play</c> остаются доступны всем — катку может начать кто угодно. Это же покрывает
+    /// <see cref="AnyoneCanStart"/> для <c>/start</c> и <c>/set start</c>.
+    /// </remarks>
+    public List<string> AdminOnlyCommands { get; set; } = DefaultAdminOnlyCommands();
 
     /// <summary>Разрешить /start и /set start любому игроку (по умолчанию да).</summary>
     public bool AnyoneCanStart { get; set; } = true;
+
+    /// <summary>Команды, закрытые админом «из коробки».</summary>
+    public static List<string> DefaultAdminOnlyCommands() => new() { "set", "end" };
 }
 
 /// <summary>Настройки автостарта (<c>matchStart.mode = "auto"</c>).</summary>
@@ -247,6 +257,31 @@ public sealed class ServerConfig
 
     public DebugConfig Debug { get; set; } = new();
 
+    /// <summary>
+    /// Замечание к конфигу: какое значение недопустимо и что применилось вместо него.
+    /// </summary>
+    /// <remarks>
+    /// Раньше «битое» значение молча заменялось стандартным, и понять, почему сервер
+    /// играет не так, как написано в файле, было невозможно. Теперь каждое такое
+    /// исправление попадает в лог одной строкой.
+    /// </remarks>
+    public readonly record struct ConfigIssue(
+        string Key,
+        string Detail,
+        string Applied,
+        bool RequiresRestart = false);
+
+    private readonly List<ConfigIssue> _issues = new();
+
+    /// <summary>Что пришлось исправить в этом конфиге (пусто — всё как написано).</summary>
+    /// <remarks>
+    /// <see cref="JsonIgnoreAttribute"/> обязателен: без него <c>System.Text.Json</c> при
+    /// десериализации попытается заполнить это свойство без сеттера и бросит исключение —
+    /// ровно так «конфиг никогда не читается» и выглядело.
+    /// </remarks>
+    [JsonIgnore]
+    public IReadOnlyList<ConfigIssue> Issues => _issues;
+
     /// <summary>Откуда конфиг загружен в последний раз.</summary>
     public static string LastLoadedPath { get; private set; } = DefaultPath;
 
@@ -293,27 +328,70 @@ public sealed class ServerConfig
             return Current;
         }
 
-        try
+        if (TryLoad(target, out var cfg, out var error))
         {
-            var cfg = JsonSerializer.Deserialize<ServerConfig>(
-                File.ReadAllText(target), JsonOptions) ?? new ServerConfig();
-            cfg.Normalize();
             Current = cfg;
             Console.WriteLine($"[config] загружен: {target}");
             return cfg;
         }
+
+        Console.WriteLine($"[config] ошибка чтения '{target}': {error}");
+        Console.WriteLine("[config] работаю на дефолтах — файл НЕ изменён");
+        Current = new ServerConfig();
+        Current.Normalize();
+        return Current;
+    }
+
+    /// <summary>
+    /// Пытается прочитать существующий файл. <c>false</c> — файла нет, он недоступен или
+    /// это не валидный JSON; в этом случае <paramref name="config"/> не используется.
+    /// </summary>
+    /// <remarks>
+    /// Отдельно от <see cref="Load"/> нужно живому перечитыванию: если файл сохранился
+    /// «полузаписанным», сервер обязан остаться на прежних настройках, а не заменить
+    /// весь конфиг дефолтами.
+    /// </remarks>
+    public static bool TryLoad(string path, out ServerConfig config, out string error)
+    {
+        config = new ServerConfig();
+        error = string.Empty;
+
+        try
+        {
+            if (!File.Exists(path))
+            {
+                error = "файл не найден";
+                return false;
+            }
+
+            var parsed = JsonSerializer.Deserialize<ServerConfig>(
+                File.ReadAllText(path), JsonOptions);
+            if (parsed is null)
+            {
+                error = "файл пустой";
+                return false;
+            }
+
+            parsed.Normalize();
+            parsed.LogIssues();
+            config = parsed;
+            return true;
+        }
         catch (Exception ex)
         {
-            Console.WriteLine($"[config] ошибка чтения '{target}': {ex.Message}");
-            Console.WriteLine("[config] работаю на дефолтах — файл НЕ изменён");
-            Current = new ServerConfig();
-            return Current;
+            error = ex.Message;
+            return false;
         }
     }
 
-    /// <summary>Приводит значения к безопасным.</summary>
+    /// <summary>
+    /// Проверяет значения и заменяет недопустимые стандартными.
+    /// Каждая замена попадает в <see cref="Issues"/> — молча ничего не исправляется.
+    /// </summary>
     public void Normalize()
     {
+        _issues.Clear();
+
         Launch ??= new LaunchConfig();
         Launch.Args ??= new List<string>();
         Server ??= new ServerSectionConfig();
@@ -332,8 +410,8 @@ public sealed class ServerConfig
         // Регистр не важен: --client / -c / ConnectAsClient / --connectasclient.
         Launch.Args.RemoveAll(IsProbeFlag);
 
-        if (MatchStart.Auto.MinPlayersPerTeam < 1)
-            MatchStart.Auto.MinPlayersPerTeam = 1;
+        MatchStart.Auto.MinPlayersPerTeam = Check(
+            MatchStart.Auto.MinPlayersPerTeam, 1, 16, 1, "matchStart.auto.minPlayersPerTeam");
 
         MigrateLegacyAdminGate();
 
@@ -341,6 +419,8 @@ public sealed class ServerConfig
         // иначе правка конфига руками молча выключала автостарт.
         if (!TryParseMode(MatchStart.Mode, out var startMode))
         {
+            Report("matchStart.mode", MatchStart.Mode, "auto",
+                "не manual/auto/ready — старт по игрокам");
             MatchStart.Mode = "auto";
         }
         else
@@ -353,38 +433,132 @@ public sealed class ServerConfig
             };
         }
 
-        Server.MaxMembers = Clamp(Server.MaxMembers, 1, 255, 16);
-        Server.LobbyPort = Clamp(Server.LobbyPort, 1, 65535, 7778);
+        // Лобби: порт меняется только перезапуском — слушатель создаётся один раз.
+        Server.MaxMembers = Check(Server.MaxMembers, 1, 255, 16, "server.maxMembers");
+        Server.LobbyPort = CheckRestart(Server.LobbyPort, 1, 65535, 7778, "server.lobbyPort");
 
-        // Пустой/битый bindAddress — значит «как раньше»: 0.0.0.0 (все интерфейсы).
+        // Пустой bindAddress — «как раньше»: 0.0.0.0 (все интерфейсы).
         var bind = (Network.BindAddress ?? string.Empty).Trim();
-        Network.BindAddress = IPAddress.TryParse(bind, out _) ? bind : "0.0.0.0";
+        if (bind.Length == 0)
+            Network.BindAddress = "0.0.0.0";
+        else if (!IPAddress.TryParse(bind, out _))
+        {
+            Report("network.bindAddress", Network.BindAddress, "0.0.0.0",
+                "не IP-адрес — слушаю все интерфейсы", requiresRestart: true);
+            Network.BindAddress = "0.0.0.0";
+        }
+        else
+            Network.BindAddress = bind;
 
-        if (!string.IsNullOrWhiteSpace(Network.AdvertiseIp)
-            && !IPAddress.TryParse(Network.AdvertiseIp.Trim(), out _))
-            Network.AdvertiseIp = null;
+        if (!string.IsNullOrWhiteSpace(Network.AdvertiseIp))
+        {
+            var advertise = Network.AdvertiseIp.Trim();
+            if (IPAddress.TryParse(advertise, out _))
+            {
+                Network.AdvertiseIp = advertise;
+            }
+            else
+            {
+                Report("network.advertiseIp", Network.AdvertiseIp, "(авто)",
+                    "не IP-адрес — адрес матча выбирается автоматически", requiresRestart: true);
+                Network.AdvertiseIp = null;
+            }
+        }
 
-        Timings.Warmup = Clamp(Timings.Warmup, 0, 120, 3);
-        Timings.PreStart = Clamp(Timings.PreStart, 1, 120, 3);
-        Timings.Prep = Clamp(Timings.Prep, 1, 120, 10);
-        Timings.RoundTime = Clamp(Timings.RoundTime, 10, 600, 109);
-        Timings.RoundEndPause = Clamp(Timings.RoundEndPause, 1, 30, 6);
-        Timings.BombFuse = Clamp(Timings.BombFuse, 5, 120, 40);
-        Timings.TotalRounds = Clamp(Timings.TotalRounds, 1, 64, 8);
-        Timings.WinsNeeded = Clamp(Timings.WinsNeeded, 0, 64, 0);
-        Timings.RoundStartMoney = Clamp(Timings.RoundStartMoney, 0, 16000, 800);
+        Timings.Warmup = Check(Timings.Warmup, 0, 120, 3, "timings.warmup");
+        Timings.PreStart = Check(Timings.PreStart, 1, 120, 3, "timings.preStart");
+        Timings.Prep = Check(Timings.Prep, 1, 120, 10, "timings.prep");
+        Timings.RoundTime = Check(Timings.RoundTime, 10, 600, 109, "timings.roundTime");
+        Timings.RoundEndPause = Check(Timings.RoundEndPause, 1, 30, 6, "timings.roundEndPause");
+        Timings.BombFuse = Check(Timings.BombFuse, 5, 120, 40, "timings.bombFuse");
+        Timings.TotalRounds = Check(Timings.TotalRounds, 1, 64, 8, "timings.totalRounds");
+        Timings.WinsNeeded = Check(Timings.WinsNeeded, 0, 64, 0, "timings.winsNeeded");
+        Timings.RoundStartMoney = Check(Timings.RoundStartMoney, 0, 16000, 800, "timings.roundStartMoney");
 
-        Tuning.TickMs = Clamp(Tuning.TickMs, 5, 200, 33);
-        Tuning.StateIntervalMs = Clamp(Tuning.StateIntervalMs, 10, 500, 50);
-        Tuning.ReliableQueueSoftLimit = Clamp(Tuning.ReliableQueueSoftLimit, 16, 4096, 256);
-        Tuning.PacketPoolSize = Clamp(Tuning.PacketPoolSize, 64, 65536, 4096);
-        Tuning.DisconnectTimeoutMs = Clamp(Tuning.DisconnectTimeoutMs, 2000, 60000, 10000);
-        Tuning.NetUpdateTimeMs = Clamp(Tuning.NetUpdateTimeMs, 1, 100, 15);
-        Tuning.PingIntervalMs = Clamp(Tuning.PingIntervalMs, 100, 10000, 1000);
-        Tuning.HealthIntervalSec = Clamp(Tuning.HealthIntervalSec, 0, 3600, 10);
+        Tuning.TickMs = Check(Tuning.TickMs, 5, 200, 33, "tuning.tickMs");
+        Tuning.StateIntervalMs = Check(Tuning.StateIntervalMs, 10, 500, 50, "tuning.stateIntervalMs");
+        Tuning.ReliableQueueSoftLimit = Check(
+            Tuning.ReliableQueueSoftLimit, 16, 4096, 256, "tuning.reliableQueueSoftLimit");
+        // Пул пакетов и таймауты зашиты в LiteNetLib при создании слушателя — только рестарт.
+        Tuning.PacketPoolSize = CheckRestart(
+            Tuning.PacketPoolSize, 64, 65536, 4096, "tuning.packetPoolSize");
+        Tuning.DisconnectTimeoutMs = CheckRestart(
+            Tuning.DisconnectTimeoutMs, 2000, 60000, 10000, "tuning.disconnectTimeoutMs");
+        Tuning.NetUpdateTimeMs = CheckRestart(
+            Tuning.NetUpdateTimeMs, 1, 100, 15, "tuning.netUpdateTimeMs");
+        Tuning.PingIntervalMs = CheckRestart(
+            Tuning.PingIntervalMs, 100, 10000, 1000, "tuning.pingIntervalMs");
+        Tuning.HealthIntervalSec = Check(
+            Tuning.HealthIntervalSec, 0, 3600, 10, "tuning.healthIntervalSec");
 
-        Debug.CapturesMaxFiles = Clamp(Debug.CapturesMaxFiles, 0, 1_000_000, 4000);
-        Debug.CapturesMaxBytesMb = Clamp(Debug.CapturesMaxBytesMb, 0, 65536, 64);
+        Debug.CapturesMaxFiles = Check(
+            Debug.CapturesMaxFiles, 0, 1_000_000, 4000, "debug.capturesMaxFiles");
+        Debug.CapturesMaxBytesMb = Check(
+            Debug.CapturesMaxBytesMb, 0, 65536, 64, "debug.capturesMaxBytesMb");
+    }
+
+    /// <summary>Разбирает JSON конфига тем же парсером, что и <see cref="Load"/>.</summary>
+    /// <remarks>Нужен тестам: проверяют и шаблон, и «битые» файлы без обращения к диску.</remarks>
+    public static ServerConfig ParseForTests(string json) =>
+        JsonSerializer.Deserialize<ServerConfig>(json, JsonOptions) ?? new ServerConfig();
+
+    /// <summary>
+    /// Печатает замечания к конфигу. Ничего не «проглатывается»: оператор видит и
+    /// ключ, и что там было написано, и что применилось вместо этого.
+    /// </summary>
+    public void LogIssues(Action<string>? log = null)
+    {
+        log ??= Console.WriteLine;
+
+        if (_issues.Count == 0)
+        {
+            log("[config] все значения корректны");
+            return;
+        }
+
+        log($"[config] некорректных значений: {_issues.Count} — применены стандартные");
+        foreach (var issue in _issues)
+        {
+            var restart = issue.RequiresRestart ? " (нужен перезапуск)" : "";
+            log($"[config]   {issue.Key}: {issue.Detail} → {issue.Applied}{restart}");
+        }
+    }
+
+    /// <summary>
+    /// Проверяет число: вне диапазона → стандартное значение + запись в <see cref="Issues"/>.
+    /// </summary>
+    private int Check(int value, int min, int max, int fallback, string key)
+    {
+        if (value >= min && value <= max)
+            return value;
+
+        _issues.Add(new ConfigIssue(
+            key,
+            $"{value} вне диапазона {min}..{max}",
+            fallback.ToString()));
+        return fallback;
+    }
+
+    /// <summary>Как <see cref="Check"/>, но значение применяется только после перезапуска.</summary>
+    private int CheckRestart(int value, int min, int max, int fallback, string key)
+    {
+        if (value >= min && value <= max)
+            return value;
+
+        _issues.Add(new ConfigIssue(
+            key,
+            $"{value} вне диапазона {min}..{max}",
+            fallback.ToString(),
+            RequiresRestart: true));
+        return fallback;
+    }
+
+    /// <summary>Записывает замечание по конфигу (значение уже заменено вызывающим).</summary>
+    private void Report(string key, string? raw, string applied, string detail,
+        bool requiresRestart = false)
+    {
+        var shown = string.IsNullOrWhiteSpace(raw) ? "(пусто)" : $"'{raw}'";
+        _issues.Add(new ConfigIssue(key, $"{shown} {detail}", applied, requiresRestart));
     }
 
     /// <summary>
@@ -410,11 +584,15 @@ public sealed class ServerConfig
         if (!IsLegacyDefaultAdminOnlySet())
             return;
 
+        // Новый дефолт: закрыты только set и end — они меняют параметры хоста и
+        // обрывают катку. Запуск матча (/mode /map /start /play) остаётся всем.
         Admin.AdminOnlyCommands.Clear();
+        Admin.AdminOnlyCommands.AddRange(AdminConfig.DefaultAdminOnlyCommands());
         Admin.AnyoneCanStart = true;
         Console.WriteLine(
             "[config] миграция: старый дефолт «все команды только для админов» при пустом " +
-            "admin.nicknames блокировал команды всем — снял adminOnlyCommands, anyoneCanStart=true");
+            "admin.nicknames блокировал команды всем — теперь админские только " +
+            $"{string.Join(", ", Admin.AdminOnlyCommands)}, запуск катки доступен всем");
     }
 
     /// <summary>Точный набор команд из прежнего шаблона (<c>mode,map,set,play,end,start</c>).</summary>
@@ -443,9 +621,6 @@ public sealed class ServerConfig
                 || a.Equals("connectasclient", StringComparison.OrdinalIgnoreCase)
                 || a.Equals("--connectasclient", StringComparison.OrdinalIgnoreCase));
     }
-
-    private static int Clamp(int value, int min, int max, int fallback) =>
-        value < min || value > max ? fallback : value;
 
     /// <summary>
     /// Разобранный режим старта. Непонятное значение — <c>auto</c> (тот же фолбэк, что и в
@@ -626,14 +801,15 @@ public sealed class ServerConfig
 
   // ===== АДМИНЫ =====
   "admin": {
-    // Ники как в лобби, регистр не важен. Пусто — админов нет, и это нормально.
+    // Ники как в лобби, регистр не важен. Пусто — админов нет.
     "nicknames": [],
 
-    // Команды только для админов. Пусто — команды доступны всем (LAN по умолчанию).
-    // Пример ограничения: [ "mode", "map", "set", "play", "end", "start" ]
-    "adminOnlyCommands": [],
+    // Команды только для админов. По умолчанию set и end: они меняют параметры
+    // хоста (раунды, победу, состав) и обрывают катку.
+    // /mode /map /start /play НЕ входят — запускать матч может кто угодно.
+    "adminOnlyCommands": [ "set", "end" ],
 
-    // /start и /set start может любой
+    // /start и /set start может любой (даже если set закрыт админом)
     "anyoneCanStart": true
   },
 

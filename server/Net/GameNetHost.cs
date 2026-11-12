@@ -741,8 +741,14 @@ public sealed partial class GameNetHost : IDisposable
 
         feedback($"config: {ServerConfig.LastLoadedPath}");
         feedback($"  админы: {admins}");
-        feedback($"  только для админов: {string.Join(", ", _config.Admin.AdminOnlyCommands)}");
-        feedback($"  /start разрешён всем: {(_config.Admin.AnyoneCanStart ? "да" : "нет")}");
+        feedback($"  только для админов: " +
+                 (_config.Admin.AdminOnlyCommands.Count == 0
+                     ? "(нет)"
+                     : string.Join(", ", _config.Admin.AdminOnlyCommands)));
+        feedback($"  катку запускает кто угодно: {(_config.Admin.AnyoneCanStart ? "да" : "нет")}");
+        feedback(_config.Issues.Count == 0
+            ? "  значения: все корректны"
+            : $"  значения: некорректных {_config.Issues.Count} — применены стандартные");
         feedback($"  режим старта: {_config.DescribeStartMode()}");
         feedback($"  тайминги: {MatchHostSettings.FormatStatusLine()}");
         feedback($"  темп: tick={MatchTuning.TickMs}ms state={MatchTuning.StateIntervalMs}ms " +
@@ -758,15 +764,30 @@ public sealed partial class GameNetHost : IDisposable
     /// <summary>Перечитать <c>config.json</c> без перезапуска (консоль: <c>config reload</c>).</summary>
     public void ReloadConfig(Action<string> feedback)
     {
-        _config = ServerConfig.Load(ServerConfig.LastLoadedPath);
+        var config = ServerConfig.Load(ServerConfig.LastLoadedPath);
+        ApplyConfig(config);
+        feedback($"config перечитан: {ServerConfig.LastLoadedPath}");
+        ShowConfig(feedback);
+    }
+
+    /// <summary>
+    /// Применяет уже разобранный конфиг к живому хосту — общий путь для старта,
+    /// ручного <c>config reload</c> и автоматического перечитая при изменении файла.
+    /// </summary>
+    /// <remarks>
+    /// Перенос<i>имени</i> лобби здесь не применяется: оно уже уехало в discovery-пакеты,
+    /// и менять его на лету — отдельная задача (см. <c>/title</c> в дашборде).
+    /// Порт лобби и параметры LiteNetLib тоже требуют перезапуска — об этом сообщает
+    /// <see cref="ServerConfig.LogIssues"/>.
+    /// </remarks>
+    public void ApplyConfig(ServerConfig config)
+    {
+        _config = config;
         ApplyRuntimeConfig(_config);
 
         // Голоса /ready имеют смысл только в режиме ready — иначе это мусор.
         if (_config.StartMode != MatchStartMode.Ready)
             _startGate.Clear();
-
-        feedback($"config перечитан: {ServerConfig.LastLoadedPath}");
-        ShowConfig(feedback);
     }
 
     /// <summary>
