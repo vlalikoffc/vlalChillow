@@ -8,4 +8,6 @@ namespace StandChillow.LanServer.Tests;
 /// выполнять параллельно с теми, кто эти статики читает.
 /// </summary>
 [CollectionDefinition("config-file", DisableParallelization = true)]
-public sealed class ConfigFileCollection;
+public sealed class ConfigFileCollection
+{
+}
