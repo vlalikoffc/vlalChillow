@@ -165,11 +165,17 @@ jobs:
             exit 1
           fi
 
-      - name: Reject committed captures and logs
+      # The gold capture set (captures/captures.zip, session 20261112_0351..0404) IS
+      # committed on purpose: it is the evidence the whole match decoder is built
+      # from (see ARCHITECTURE.md). Everything else under captures/ and any run log
+      # still stays out — see .gitignore.
+      - name: Reject committed logs and stray captures
         run: |
-          bad=$(git ls-files | grep -E '(^|/)(captures|logs)/|\.log$' || true)
+          bad=$(git ls-files | grep -E '(^|/)logs/|\.log$' || true)
+          stray=$(git ls-files 'captures/*' | grep -vE '^captures/(README\.md|captures\.zip)$' || true)
+          bad="$bad$([ -n "$bad" ] && [ -n "$stray" ] && echo $'\n')$stray"
           if [ -n "$bad" ]; then
-            echo "::error::Runtime captures and logs are evidence-only, do not commit:"
+            echo "::error::Only the gold capture set may be committed; run logs never:"
             echo "$bad"
             exit 1
           fi
