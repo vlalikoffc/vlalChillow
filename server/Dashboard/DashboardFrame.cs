@@ -28,7 +28,10 @@ internal sealed class DashboardFrame
         Width = Math.Max(MinWidth, width);
         Height = Math.Max(MinHeight, height);
         _rows = new string[Height];
-        Array.Fill(_rows, string.Empty);
+        // Start as *blank but full-width* rows: every row must always be exactly Width cells,
+        // otherwise the renderer's contract (and the self-check) would be violated, and a row
+        // left over from the previous frame would not be cleared.
+        Array.Fill(_rows, new string(' ', Width));
     }
 
     public const int MinWidth = 60;
@@ -71,8 +74,9 @@ internal sealed class DashboardFrame
     /// <summary>Blank rows from <paramref name="startRow"/> to the bottom (clears stale content).</summary>
     public void ClearRows(int startRow)
     {
+        var blank = new string(' ', Width);
         for (var r = Math.Max(0, startRow); r < Height; r++)
-            _rows[r] = string.Empty;
+            _rows[r] = blank;
     }
 
     /// <summary>Cursor position for the input caret (1-based row + column, clamped).</summary>
