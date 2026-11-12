@@ -83,19 +83,4 @@ internal static class Ansi
 
     /// <summary>Strips every escape sequence.</summary>
     public static string StripAnsi(string? s) => Layout.StripAnsi(s);
-
-    /// <summary>True when the payload only contains printable, single-width-safe characters.</summary>
-    public static bool IsPlainAscii(string? s)
-    {
-        if (string.IsNullOrEmpty(s))
-            return true;
-        foreach (var c in s)
-        {
-            if (c < 32 || c > 126)
-                return false;
-        }
-
-        return true;
-    }
-
 }
