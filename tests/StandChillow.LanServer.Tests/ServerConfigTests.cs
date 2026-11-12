@@ -148,6 +148,7 @@ public sealed class ServerConfigTests
 
         Assert.DoesNotContain("--client", cfg.Launch.Args);
         Assert.DoesNotContain("-c", cfg.Launch.Args);
+        Assert.DoesNotContain("ConnectAsClient", cfg.Launch.Args);
         Assert.Single(cfg.Launch.Args);
         Assert.Equal("--verbose", cfg.Launch.Args[0]);
     }

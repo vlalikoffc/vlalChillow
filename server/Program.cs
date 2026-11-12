@@ -88,7 +88,7 @@ static string[] MergeLaunchArgs(string[] args, List<string>? extra)
         var a = raw?.Trim();
         if (string.IsNullOrEmpty(a))
             continue;
-        if (a is "--client" or "-c" or "connectasclient" or "--connectasclient")
+        if (ServerConfig.IsProbeFlag(a))
             continue;
         if (!merged.Contains(a))
             merged.Add(a);

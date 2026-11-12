@@ -317,8 +317,8 @@ public sealed class ServerConfig
         Debug ??= new DebugConfig();
 
         // Прова в пробу конфигом запрещена — иначе весь блок debug «утечёт» в пробу.
-        Launch.Args.RemoveAll(a =>
-            a is "--client" or "-c" or "connectasclient" or "--connectasclient");
+        // Регистр не важен: --client / -c / ConnectAsClient / --connectasclient.
+        Launch.Args.RemoveAll(IsProbeFlag);
 
         if (MatchStart.Auto.MinPlayersPerTeam < 1)
             MatchStart.Auto.MinPlayersPerTeam = 1;
@@ -330,10 +330,8 @@ public sealed class ServerConfig
         Server.LobbyPort = Clamp(Server.LobbyPort, 1, 65535, 7778);
 
         // Пустой/битый bindAddress — значит «как раньше»: 0.0.0.0 (все интерфейсы).
-        if (string.IsNullOrWhiteSpace(Network.BindAddress))
-            Network.BindAddress = "0.0.0.0";
-        if (!IPAddress.TryParse(Network.BindAddress.Trim(), out _))
-            Network.BindAddress = "0.0.0.0";
+        var bind = (Network.BindAddress ?? string.Empty).Trim();
+        Network.BindAddress = IPAddress.TryParse(bind, out _) ? bind : "0.0.0.0";
 
         if (!string.IsNullOrWhiteSpace(Network.AdvertiseIp)
             && !IPAddress.TryParse(Network.AdvertiseIp.Trim(), out _))
@@ -360,6 +358,17 @@ public sealed class ServerConfig
 
         Debug.CapturesMaxFiles = Clamp(Debug.CapturesMaxFiles, 0, 1_000_000, 4000);
         Debug.CapturesMaxBytesMb = Clamp(Debug.CapturesMaxBytesMb, 0, 65536, 64);
+    }
+
+    /// <summary>Флаг, который включил бы режим пробы (запрещён в <c>launch.args</c>).</summary>
+    public static bool IsProbeFlag(string? arg)
+    {
+        var a = arg?.Trim();
+        return a is not null
+            && (a.Equals("--client", StringComparison.OrdinalIgnoreCase)
+                || a.Equals("-c", StringComparison.OrdinalIgnoreCase)
+                || a.Equals("connectasclient", StringComparison.OrdinalIgnoreCase)
+                || a.Equals("--connectasclient", StringComparison.OrdinalIgnoreCase));
     }
 
     private static int Clamp(int value, int min, int max, int fallback) =>
