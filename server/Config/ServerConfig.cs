@@ -543,7 +543,7 @@ public sealed class ServerConfig
         // Новый дефолт: закрыты только set и end — они меняют параметры хоста и
         // обрывают катку. Запуск матча (/mode /map /start /play) остаётся всем.
         Admin.AdminOnlyCommands.Clear();
-        Admin.AdminOnlyCommands.AddRange(DefaultAdminOnlyCommands());
+        Admin.AdminOnlyCommands.AddRange(AdminConfig.DefaultAdminOnlyCommands());
         Admin.AnyoneCanStart = true;
         Console.WriteLine(
             "[config] миграция: старый дефолт «все команды только для админов» при пустом " +

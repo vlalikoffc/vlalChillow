@@ -12,7 +12,6 @@ namespace StandChillow.LanServer.Tests;
 /// также настройки применялись». До этого <c>config.json</c> читался один раз на старте,
 /// поэтому правки в файле не давали никакого эффекта.
 /// </remarks>
-[Collection("config-watcher")]
 public sealed class ConfigWatcherTests : IDisposable
 {
     private readonly string _dir;

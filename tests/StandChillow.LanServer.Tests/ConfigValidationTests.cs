@@ -90,11 +90,15 @@ public sealed class ConfigValidationTests
         });
 
         var issue = Single(cfg, key);
-        Assert.Contains("-999", issue.Detail);
+        // В Detail попало именно то, что мы написали в файле.
+        var written = key == "server.lobbyPort" ? "0" : "-999";
+        Assert.Contains(written, issue.Detail);
         Assert.False(string.IsNullOrWhiteSpace(issue.Applied));
 
         // И значение действительно стандартное, а не «как было».
         Assert.NotEqual(-999, ReadNumber(cfg, key));
+        if (key == "server.lobbyPort")
+            Assert.NotEqual(0, ReadNumber(cfg, key));
     }
 
     [Fact]
