@@ -13,12 +13,45 @@ public sealed partial class GameMatchHost
 {
     /// <summary>
     /// Сколько надёжных пакетов терпим в очереди LiteNetLib на одного пира, прежде чем
-    /// считать его «отстающим». Дальше ему шлём только критичное (handshake/INIT/раунд),
-    /// а игровой поток (State/Rpc/пауны) — дропаем: лучше пропустить кадр, чем копить
-    /// очередь, которая растёт быстрее, чем клиент успевает вычитывать, и в итоге
-    /// выжирает память и превращает весь матч в лаг.
+    /// считать его «отстающим». Дальше ему шлём только критичное, а <b>косметический</b>
+    /// поток (WorldObjectState, спавн-позы, лёгкие Rpc) — дропаем: лучше пропустить тик,
+    /// чем копить очередь, которая растёт быстрее, чем клиент успевает вычитывать.
     /// </summary>
+    /// <remarks>
+    /// <b>Никогда не дропаем</b> структурные надёжные пакеты: CreateWorldObject /
+    /// DestroyWorldObject / SetProperties / ActorJoined+Left / C2-фазы / handshake /
+    /// JoinRoom. Пропуск Destroy или CWO — это ровно те «object reference» на клиенте,
+    /// которых мы не хотим. Такие пакеты уходят всегда, даже в переполненную очередь:
+    /// их немного, и они задают состояние мира.
+    /// </remarks>
     private const int ReliableQueueSoftLimit = 256;
+
+    /// <summary>Какие надёжные пакеты можно дропнуть отстающему пиру (только косметика/позы).</summary>
+    internal static bool IsDroppableWhenBacklogged(MatchOpcode op) => op switch
+    {
+        // Поза/состояние мира — следующий тик всё равно перезапишет.
+        MatchOpcode.WorldObjectState => true,
+        // Rpc-поток спавнов/эффектов: устаревает на следующем кадре.
+        MatchOpcode.WorldObjectRpc => true,
+        // Create/Destroy/SetProperty(-ies), ActorJoined/Left, CustomEvent, handshake,
+        // JoinRoom, фазы (C2 идут как SetProperty) — структурные, НЕ дропаем.
+        _ => false,
+    };
+
+    /// <summary>Опкод надёжного пакета (для решения о дропе); не распознан → не дропаем.</summary>
+    private bool TryGetReliableOpcode(byte[] payload, out MatchOpcode op)
+    {
+        op = default;
+        try
+        {
+            return MatchCodec.TryParseEnvelope(
+                payload, out _, out op, out _, out _);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     /// <summary>Пир помечается «медленным», если отправка не удалась или очередь переполнена.</summary>
     private static bool IsBacklogged(NetPeer peer, int softLimit = ReliableQueueSoftLimit)
@@ -179,11 +212,15 @@ public sealed partial class GameMatchHost
     /// </summary>
     private bool Send(NetPeer peer, byte[] payload)
     {
-        if (IsBacklogged(peer))
+        // Backpressure only for droppable (cosmetic) traffic. Structural packets always go,
+        // otherwise a slow queue would cause client-side desync / object references.
+        if (IsBacklogged(peer) && TryGetReliableOpcode(payload, out var op)
+            && IsDroppableWhenBacklogged(op))
         {
             Interlocked.Increment(ref _droppedSends);
             return false;
         }
+
         try
         {
             // gcv.Reliable → LiteNetLib ReliableOrdered (same as client match TX).
