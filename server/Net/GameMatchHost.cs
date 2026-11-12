@@ -184,11 +184,11 @@ public sealed partial class GameMatchHost : IDisposable
             // Bigger UDP buffers: a burst of 10 players' state ticks must never overflow
             // the kernel receive buffer (that shows up as lag + reliable retransmits).
             // LiteNetLib's OS default is ~1 MB; ask for more where the OS allows it.
-            UpdateTime = 15,
-            PingInterval = 1000,
-            DisconnectTimeout = 10_000,
+            UpdateTime = MatchTuning.NetUpdateTimeMs,
+            PingInterval = MatchTuning.PingIntervalMs,
+            DisconnectTimeout = MatchTuning.DisconnectTimeoutMs,
             // More packets in flight per reliable channel before stalling the queue.
-            PacketPoolSize = 4096,
+            PacketPoolSize = MatchTuning.PacketPoolSize,
         };
 
         _listener.ConnectionRequestEvent += request =>
@@ -230,7 +230,7 @@ public sealed partial class GameMatchHost : IDisposable
         _listener.NetworkErrorEvent += (ep, error) =>
             Console.WriteLine($"[match-host] error {ep}: {error}");
 
-        if (!_manager.Start(port))
+        if (!_manager.Start(NetBind.Address, IPAddress.IPv6Any, port))
             throw new InvalidOperationException(
                 $"Failed to bind match LiteNetLib on UDP {port} — " +
                 "7777 must be a process singleton (no second GameMatchHost while first is bound)");
@@ -330,7 +330,7 @@ public sealed partial class GameMatchHost : IDisposable
             return true;
         }
 
-        if (!_manager.Start(_listenPort))
+        if (!_manager.Start(NetBind.Address, IPAddress.IPv6Any, _listenPort))
         {
             Console.WriteLine(
                 $"[match-host] FATAL: failed to rebind UDP {_listenPort} after suspend");
@@ -415,7 +415,8 @@ public sealed partial class GameMatchHost : IDisposable
             _matchSelectedLevel = selectedLevel.Trim();
         }
 
-        if (MatchHostSettings.TryDefaultWinsForMode(_matchGameModeId, out var wins))
+        if (!MatchHostSettings.WinsNeededFromConfig
+            && MatchHostSettings.TryDefaultWinsForMode(_matchGameModeId, out var wins))
         {
             MatchHostSettings.WinsNeeded = wins;
             Console.WriteLine(
@@ -533,19 +534,23 @@ public sealed partial class GameMatchHost : IDisposable
     /// loop spent most of its budget on <see cref="NetManager.PollEvents"/> + per-packet
     /// logging, which is what made 10-player matches melt.
     /// </summary>
-    private static readonly TimeSpan HostTickPeriod = TimeSpan.FromMilliseconds(33);
+    private static TimeSpan HostTickPeriod => MatchTuning.Tick;
+
+    /// <summary>Те же значения, но зафиксированные на момент старта — только для лога.</summary>
+    private static readonly TimeSpan StartupTickPeriod = MatchTuning.Tick;
+    private static readonly TimeSpan StartupStateTick = MatchTuning.StateInterval;
 
     /// <summary>WorldObjectState thin re-broadcast cadence (~20 Hz, same as phone ≈50ms).</summary>
-    private static readonly TimeSpan StateTickInterval = TimeSpan.FromMilliseconds(50);
+    private static TimeSpan StateTickInterval => MatchTuning.StateInterval;
 
     private long _nextStateTickUtc;
 
     private async Task PollLoop()
     {
         Console.WriteLine(
-            $"[match-host] poll loop period={HostTickPeriod.TotalMilliseconds:0}ms " +
+            $"[match-host] poll loop period={StartupTickPeriod.TotalMilliseconds:0}ms " +
             "(socket drain every tick; phase/wipe/fuse checks every tick; " +
-            "WorldObjectState thin ticks every 50ms)");
+            $"WorldObjectState thin ticks every {StartupStateTick.TotalMilliseconds:0}ms)");
 
         while (!_cts.IsCancellationRequested)
         {
@@ -566,7 +571,8 @@ public sealed partial class GameMatchHost : IDisposable
                 // Match flow each tick: wipe / fuse expiry / phase deadlines.
                 TickMatchFlow();
 
-                if (Diag.StatsEnabled && now - _lastStatsTickUtc >= 10_000)
+                if (Diag.StatsEnabled
+                    && now - _lastStatsTickUtc >= Diag.HealthIntervalSec * 1000L)
                 {
                     _lastStatsTickUtc = now;
                     LogHealthSnapshot();

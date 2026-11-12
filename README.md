@@ -128,25 +128,61 @@ Two steps matter:
 
 Typical flow: everyone joins lobby → host picks `mode` + `map` → host runs `play` → both teams pick CT/T → host runs `set start` → WarmUp / buy → live rounds.
 
-### Config file (admins + how the match starts)
+### Config file (`config.json`)
 
 On first launch the server writes a **commented `config.json`** next to the executable and
 prints where. Edit it, then restart the host (or run console `config reload`).
+Comments use `//` and are short on purpose — one line per knob.
 
 ```jsonc
 {
-  "admin": {
-    "nicknames": [ "влал" ],                                  // who may run admin commands
-    "adminOnlyCommands": [ "mode", "map", "set", "play", "end", "start" ],
-    "anyoneCanStart": false                                   // let everyone run /start
+  // ----- ЗАПУСК: только для выделенного сервера -------------------------
+  "launch": {
+    "args": [],              // доп. аргументы, как в командной строке: "--verbose"
+    "dashboard": null,       // true / false / null — авто
+    "title": null,           // название лобби (null — дефолтное)
+    "verbose": false
   },
-  "matchStart": {
-    "mode": "manual",        // "manual" | "auto" | "ready"   ← see below
-    "auto":  { "minPlayersPerTeam": 1 },
-    "ready": { "announceInChat": true, "resetOnLeave": true, "allowUnready": true }
-  }
+  "server":  { "welcomeMessage": "…", "maxMembers": 16, "lobbyPort": 7778 },
+  "network": { "bindAddress": "0.0.0.0", "ignoreVpn": true, "advertiseIp": null },
+  "admin":   { "nicknames": [ "влал" ], "adminOnlyCommands": [ … ], "anyoneCanStart": false },
+  "matchStart": { "mode": "manual", "auto": { … }, "ready": { … } },
+  "timings": { "warmup": 3, "preStart": 3, "prep": 10, "roundTime": 109,
+               "roundEndPause": 6, "bombFuse": 40, "totalRounds": 8,
+               "winsNeeded": 0, "roundStartMoney": 800 },
+  "tuning":  { "tickMs": 33, "stateIntervalMs": 50, "reliableQueueSoftLimit": 256,
+               "packetPoolSize": 4096, "disconnectTimeoutMs": 10000,
+               "netUpdateTimeMs": 15, "pingIntervalMs": 1000, "healthIntervalSec": 10 },
+  "debug":   { "verbose": false, "captures": false, "capturesDir": null,
+               "capturesMaxFiles": 4000, "capturesMaxBytesMb": 64,
+               "matchChat": false, "health": true,
+               "logPackets": false, "logDiscovery": false }
 }
 ```
+
+**`launch`** — параметры, которые обычно пишут в командной строке. `launch.args` дописываются
+к реальным аргументам (консоль главнее). `--client` там **запрещён**: конфиг не может
+переключить сервер в режим пробы.
+
+**`debug`** — только для выделенного сервера. Режим пробы (`--client`) `config.json` не читает
+вообще: ни `debug`, ни `tuning`, ни `timings` не влияют на пробу.
+
+**`network`** — где открывать сервер. `bindAddress: "0.0.0.0"` слушает **все** интерфейсы
+сразу; задай конкретный адрес, чтобы слушать только его. `ignoreVpn: true` (по умолчанию)
+держит VPN/Hamachi/Radmin/ZeroTier в стороне; `false` — сервер слушает и на них.
+`advertiseIp` — что писать телефонам в op9 как адрес матча (`null` — авто по LAN);
+задай вручную, если играете через Hamachi/Radmin и авто берёт не тот адрес.
+
+**`timings`** — фазы матча в секундах, применяются и через `/set`. `winsNeeded: 0` — взять
+дефолт режима (Allies 8, Defuse 6); `winsNeeded: N` — жёстко N и режим его не перебивает.
+
+**`tuning`** — темп хоста. `tickMs` — период цикла, `stateIntervalMs` — рассылка поз,
+`reliableQueueSoftLimit` — порог, после которого дропается только косметика (позы/RPC),
+`healthIntervalSec` — как часто печатать `[health]` (0 — выключить).
+
+**`debug.captures`** — писать capture-файлы (по умолчанию выключено: на 10+ игроках это
+тысячи файловых операций в секунду). Отдельные флаги `logPackets`/`logDiscovery` включают
+шумный per-packet лог без общего `verbose`.
 
 **Who is an admin.** Matched by the lobby nickname, case-insensitive. Anyone not in
 `admin.nicknames` gets a private «только для админов» reply and the command does not run.
@@ -164,7 +200,8 @@ prints where. Edit it, then restart the host (or run console `config reload`).
 match, the vote is dropped and the counter is recalculated, so a leaver can never block the
 start. `/unready` cancels a vote (disable with `ready.allowUnready`).
 
-Console helpers: `config` prints the active settings, `config reload` re-reads the file.
+Console helpers: `config` prints the active settings (admins, start mode, timings, tuning,
+debug), `config reload` re-reads the file and applies it without a restart.
 
 ### Useful console commands
 
@@ -176,7 +213,7 @@ play                     # launch / rematch
 end                      # end match / return path
 status                   # lobby + match summary
 plugins                  # list loaded plugins
-config                   # show active config (admins, start mode)
+config                   # show active config (admins, timings, debug)
 config reload            # re-read config.json without restarting
 quit
 ```

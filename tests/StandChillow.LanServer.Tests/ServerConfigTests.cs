@@ -34,6 +34,17 @@ public sealed class ServerConfigTests
         Assert.True(cfg.MatchStart.Ready.AllowUnready);
         Assert.False(cfg.Admin.AnyoneCanStart);
         Assert.Contains("влал", cfg.Admin.Nicknames);
+        Assert.Empty(cfg.Launch.Args);
+        Assert.False(cfg.Debug.Captures);
+        Assert.False(cfg.Debug.Verbose);
+        Assert.True(cfg.Debug.Health);
+        Assert.Equal(33, cfg.Tuning.TickMs);
+        Assert.Equal(256, cfg.Tuning.ReliableQueueSoftLimit);
+        Assert.Equal(109, cfg.Timings.RoundTime);
+        // Сеть по умолчанию: слушаем везде, VPN не трогаем.
+        Assert.Equal("0.0.0.0", cfg.Network.BindAddress);
+        Assert.True(cfg.Network.IgnoreVpn);
+        Assert.Null(cfg.Network.AdvertiseIp);
     }
 
     [Fact]
@@ -123,6 +134,124 @@ public sealed class ServerConfigTests
         Assert.Equal("manual", cfg.MatchStart.Mode);
         Assert.Equal(MatchStartMode.Manual, cfg.StartMode);
         Assert.Equal(1, cfg.MatchStart.Auto.MinPlayersPerTeam);
+    }
+
+    [Fact]
+    public void LaunchArgs_CannotSwitchDedicatedServerIntoProbeMode()
+    {
+        // Иначе весь блок debug/launch «утечёт» в пробу: программа ушла бы в --client
+        // и сама себя перевела в режим, где конфиг запрещён.
+        var cfg = new ServerConfig();
+        cfg.Launch.Args.AddRange(new[] { "--client", "-c", "ConnectAsClient", "--verbose" });
+
+        cfg.Normalize();
+
+        Assert.DoesNotContain("--client", cfg.Launch.Args);
+        Assert.DoesNotContain("-c", cfg.Launch.Args);
+        Assert.Single(cfg.Launch.Args);
+        Assert.Equal("--verbose", cfg.Launch.Args[0]);
+    }
+
+    [Fact]
+    public void Normalize_ClampsTimingAndTuningIntoTheLiveRanges()
+    {
+        var cfg = new ServerConfig
+        {
+            Timings = new TimingsConfig
+            {
+                Warmup = 9999,
+                RoundTime = 1,
+                TotalRounds = 0,
+                WinsNeeded = 999,
+                BombFuse = 0,
+            },
+            Tuning = new TuningConfig
+            {
+                TickMs = 0,
+                StateIntervalMs = 10_000,
+                ReliableQueueSoftLimit = 0,
+                PacketPoolSize = 1,
+                HealthIntervalSec = -5,
+            },
+        };
+
+        cfg.Normalize();
+
+        Assert.Equal(3, cfg.Timings.Warmup);
+        Assert.Equal(109, cfg.Timings.RoundTime);
+        Assert.Equal(8, cfg.Timings.TotalRounds);
+        Assert.Equal(0, cfg.Timings.WinsNeeded);
+        Assert.Equal(40, cfg.Timings.BombFuse);
+        Assert.Equal(33, cfg.Tuning.TickMs);
+        Assert.Equal(50, cfg.Tuning.StateIntervalMs);
+        Assert.Equal(256, cfg.Tuning.ReliableQueueSoftLimit);
+        Assert.Equal(4096, cfg.Tuning.PacketPoolSize);
+        Assert.Equal(10, cfg.Tuning.HealthIntervalSec);
+    }
+
+    [Fact]
+    public void DebugSection_HasItsOwnDefaultsIndependentOfProbe()
+    {
+        // Проба не читает config.json вообще; блок debug — только для дедика.
+        var debug = new DebugConfig();
+
+        Assert.False(debug.Captures);
+        Assert.False(debug.Verbose);
+        Assert.False(debug.LogPackets);
+        Assert.True(debug.Health);
+        Assert.Equal(4000, debug.CapturesMaxFiles);
+        Assert.Equal(64, debug.CapturesMaxBytesMb);
+    }
+
+    [Theory]
+    [InlineData("0.0.0.0", "0.0.0.0")]
+    [InlineData(" 192.168.1.5 ", "192.168.1.5")]
+    [InlineData("25.7.7.7", "25.7.7.7")] // Hamachi
+    public void Normalize_KeepsAValidBindAddress(string raw, string expected)
+    {
+        var cfg = new ServerConfig { Network = new NetworkConfig { BindAddress = raw } };
+        cfg.Normalize();
+        Assert.Equal(expected, cfg.Network.BindAddress);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("не-айпи")]
+    [InlineData("999.1.1.1")]
+    public void Normalize_FallsBackToAnyBindWhenAddressIsGarbage(string raw)
+    {
+        var cfg = new ServerConfig { Network = new NetworkConfig { BindAddress = raw } };
+        cfg.Normalize();
+
+        // Пустой/битый адрес не должен ронять сервер: слушаем все интерфейсы.
+        Assert.Equal("0.0.0.0", cfg.Network.BindAddress);
+    }
+
+    [Fact]
+    public void Normalize_DropsGarbageAdvertiseIp()
+    {
+        var cfg = new ServerConfig { Network = new NetworkConfig { AdvertiseIp = "не-айпи" } };
+        cfg.Normalize();
+        Assert.Null(cfg.Network.AdvertiseIp);
+    }
+
+    [Fact]
+    public void NetworkConfig_DefaultsLiveEverywhereButIgnoreVpn()
+    {
+        var net = new NetworkConfig();
+
+        Assert.Equal("0.0.0.0", net.BindAddress); // все интерфейсы, включая VPN
+        Assert.True(net.IgnoreVpn);               // но виртуальные адаптеры по умолчанию мимо
+        Assert.Null(net.AdvertiseIp);
+    }
+
+    [Fact]
+    public void ProbeDefaults_DoNotDependOnNetworkConfig()
+    {
+        // Проба читает LanInterfacePicker, а не конфиг: значения по умолчанию
+        // остаются такими, какими были до появления блока network.
+        Assert.True(StandChillow.LanServer.Lan.LanInterfacePicker.IgnoreVpn);
     }
 
     [Fact]

@@ -36,7 +36,7 @@ public sealed partial class GameNetHost : IDisposable
     private readonly Action? _onRosterChanged;
     private readonly Action? _onMatchStarted;
 
-    /// <summary>Конфиг сервера (админы + режим старта). Меняется только через <see cref="ReloadConfig"/>.</summary>
+    /// <summary>Конфиг выделенного сервера. Меняется только через <see cref="ReloadConfig"/>.</summary>
     private ServerConfig _config;
 
     /// <summary>Кто нажал /ready и какой режим старта активен.</summary>
@@ -56,7 +56,7 @@ public sealed partial class GameNetHost : IDisposable
         ServerConfig? config = null)
     {
         _config = config ?? new ServerConfig();
-        _startGate.Apply(_config);
+        ApplyRuntimeConfig(_config);
         _session = new LobbySession(lobbyName);
         _onRosterChanged = onRosterChanged;
         _onMatchStarted = onMatchStarted;
@@ -90,8 +90,10 @@ public sealed partial class GameNetHost : IDisposable
             IPv6Enabled = false,
             UnconnectedMessagesEnabled = true,
             // Tolerate a laggy phone without dropping the whole session.
-            DisconnectTimeout = 10_000,
-            PacketPoolSize = 4096,
+            DisconnectTimeout = MatchTuning.DisconnectTimeoutMs,
+            PacketPoolSize = MatchTuning.PacketPoolSize,
+            UpdateTime = MatchTuning.NetUpdateTimeMs,
+            PingInterval = MatchTuning.PingIntervalMs,
         };
 
         _listener.ConnectionRequestEvent += request =>
@@ -145,9 +147,9 @@ public sealed partial class GameNetHost : IDisposable
         _listener.NetworkErrorEvent += (ep, error) =>
             Console.WriteLine($"[net] error {ep}: {error}");
 
-        if (!_manager.Start(port))
+        if (!_manager.Start(NetBind.Address, IPAddress.IPv6Any, port))
             throw new InvalidOperationException($"Failed to bind LiteNetLib on UDP {port}");
-        Console.WriteLine($"[net] LiteNetLib listen *:{port}");
+        Console.WriteLine($"[net] LiteNetLib listen {NetBind.Describe}:{port}");
         Console.WriteLine(
             $"[lobby] title='{_session.LobbyName}' lobbyId={_session.LobbyId} " +
             $"host-player='{LobbySession.ServerPlayerName}' mode={_session.GameModeId} " +
@@ -450,7 +452,9 @@ public sealed partial class GameNetHost : IDisposable
 
         Schedule(0, () =>
         {
-            SendServerChatTo(peer, LobbySession.WelcomeMessage);
+            var welcome = LobbySession.WelcomeMessageOverride ?? LobbySession.WelcomeMessage;
+            if (!string.IsNullOrWhiteSpace(welcome))
+                SendServerChatTo(peer, welcome);
             // Lobby join is quiet for match-style Подключился — that fires on JoinRoom Found.
             BroadcastServerChat(_session.BuildPlayerListMessage());
         });
@@ -698,6 +702,36 @@ public sealed partial class GameNetHost : IDisposable
         return names;
     }
 
+    /// <summary>
+    /// Применяет конфиг к живому хосту. Только выделенный сервер:
+    /// вызывается из конструктора и из <see cref="ReloadConfig"/>.
+    /// </summary>
+    private void ApplyRuntimeConfig(ServerConfig config)
+    {
+        _startGate.Apply(config);
+        MatchHostSettings.Apply(config.Timings);
+        if (!MatchHostSettings.DebugMatchChatLocked)
+            MatchHostSettings.DebugMatchChat = config.Debug.MatchChat;
+        MatchTuning.Apply(config.Tuning);
+        NetBind.Apply(config.Network);
+
+        // MaxMembers уже прокламлен в 1..255 конфигом — приведение безопасно.
+        LobbySession.MaxMembersOverride = (byte)Math.Clamp(config.Server.MaxMembers, 1, 255);
+        LobbySession.WelcomeMessageOverride = config.Server.WelcomeMessage;
+
+        // CLI/--verbose уже мог включить трейс — конфиг не должен его выключать.
+        Diag.Apply(config.Debug, config.Tuning.HealthIntervalSec, config.Launch.Verbose);
+
+        // --verbose исторически включает captures; debug.captures управляет ими явно.
+        CaptureSink.Configure(
+            config.Debug.Captures || Diag.CapturesForced,
+            config.Debug.CapturesDir is { Length: > 0 } dir
+                ? dir
+                : Path.Combine(AppContext.BaseDirectory, "captures"),
+            config.Debug.CapturesMaxFiles,
+            config.Debug.CapturesMaxBytesMb * 1024L * 1024L);
+    }
+
     /// <summary>Показать действующий конфиг (консоль: <c>config</c>).</summary>
     public void ShowConfig(Action<string> feedback)
     {
@@ -710,13 +744,22 @@ public sealed partial class GameNetHost : IDisposable
         feedback($"  только для админов: {string.Join(", ", _config.Admin.AdminOnlyCommands)}");
         feedback($"  /start разрешён всем: {(_config.Admin.AnyoneCanStart ? "да" : "нет")}");
         feedback($"  режим старта: {_config.DescribeStartMode()}");
+        feedback($"  тайминги: {MatchHostSettings.FormatStatusLine()}");
+        feedback($"  темп: tick={MatchTuning.TickMs}ms state={MatchTuning.StateIntervalMs}ms " +
+                 $"queueLimit={MatchTuning.ReliableQueueSoftLimit} pool={MatchTuning.PacketPoolSize}");
+        feedback($"  отладка: verbose={(Diag.Verbose ? "да" : "нет")} " +
+                 $"captures={(CaptureSink.Enabled ? "да" : "нет")} health={(Diag.StatsEnabled ? "да" : "нет")}");
+        feedback($"  сеть: bind={_config.Network.BindAddress} " +
+                 $"ignoreVpn={(_config.Network.IgnoreVpn ? "да" : "нет")} " +
+                 $"advertiseIp={_config.Network.AdvertiseIp ?? "авто"}");
+        feedback($"  лобби: порт={_config.Server.LobbyPort} maxMembers={_config.Server.MaxMembers}");
     }
 
     /// <summary>Перечитать <c>config.json</c> без перезапуска (консоль: <c>config reload</c>).</summary>
     public void ReloadConfig(Action<string> feedback)
     {
         _config = ServerConfig.Load(ServerConfig.LastLoadedPath);
-        _startGate.Apply(_config);
+        ApplyRuntimeConfig(_config);
 
         // Голоса /ready имеют смысл только в режиме ready — иначе это мусор.
         if (_config.StartMode != MatchStartMode.Ready)

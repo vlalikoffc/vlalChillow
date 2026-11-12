@@ -24,7 +24,7 @@ public sealed partial class GameMatchHost
     /// которых мы не хотим. Такие пакеты уходят всегда, даже в переполненную очередь:
     /// их немного, и они задают состояние мира.
     /// </remarks>
-    private const int ReliableQueueSoftLimit = 256;
+    private static int ReliableQueueSoftLimit => MatchTuning.ReliableQueueSoftLimit;
 
     /// <summary>Какие надёжные пакеты можно дропнуть отстающему пиру (только косметика/позы).</summary>
     internal static bool IsDroppableWhenBacklogged(MatchOpcode op) => op switch
@@ -54,11 +54,11 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>Пир помечается «медленным», если отправка не удалась или очередь переполнена.</summary>
-    private static bool IsBacklogged(NetPeer peer, int softLimit = ReliableQueueSoftLimit)
+    private static bool IsBacklogged(NetPeer peer)
     {
         try
         {
-            return peer.GetPacketsCountInReliableQueue(0, true) >= softLimit;
+            return peer.GetPacketsCountInReliableQueue(0, true) >= ReliableQueueSoftLimit;
         }
         catch
         {

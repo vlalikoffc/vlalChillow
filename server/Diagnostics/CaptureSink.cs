@@ -59,12 +59,22 @@ public static class CaptureSink
     }
 
     /// <summary>
-    /// Включает/выключает дамп. Безопасно вызывать один раз на старте процесса.
+    /// Включает/выключает дамп и задаёт бюджет (<c>debug.captures*</c>).
+    /// Повторный вызов безопасен: писатель один на процесс.
     /// </summary>
-    public static void Configure(bool enabled, string directory)
+    public static void Configure(
+        bool enabled,
+        string directory,
+        int maxFiles = 4000,
+        long maxBytes = 64L * 1024 * 1024)
     {
         lock (StateGate)
         {
+            // 0 в конфиге = «без лимита»; так и переводим в int/long.MaxValue.
+            MaxFiles = maxFiles > 0 ? maxFiles : int.MaxValue;
+            MaxBytes = maxBytes > 0 ? maxBytes : long.MaxValue;
+
+            // Если выключают — просто перестаём принимать пакеты, писатель доживает.
             Enabled = enabled;
             _dir = directory;
             if (!enabled || _writer is not null)
