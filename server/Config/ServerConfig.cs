@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace StandChillow.LanServer.Config;
 
@@ -273,6 +274,12 @@ public sealed class ServerConfig
     private readonly List<ConfigIssue> _issues = new();
 
     /// <summary>Что пришлось исправить в этом конфиге (пусто — всё как написано).</summary>
+    /// <remarks>
+    /// <see cref="JsonIgnoreAttribute"/> обязателен: без него <c>System.Text.Json</c> при
+    /// десериализации попытается заполнить это свойство без сеттера и бросит исключение —
+    /// ровно так «конфиг никогда не читается» и выглядело.
+    /// </remarks>
+    [JsonIgnore]
     public IReadOnlyList<ConfigIssue> Issues => _issues;
 
     /// <summary>Откуда конфиг загружен в последний раз.</summary>
