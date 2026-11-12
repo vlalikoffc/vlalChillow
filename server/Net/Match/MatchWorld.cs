@@ -19,6 +19,15 @@ public static class MatchRoomPropKeys
     public const string Time = "Time";
     /// <summary>Round index int (<c>bbs.cabu</c> / <c>omt</c>).</summary>
     public const string Round = "Round";
+    /// <summary>
+    /// Phase length in seconds on 2.07 — <c>Duration</c> (Double), carried by <b>every</b>
+    /// C2 bag (C2=11/21/22/31/101/111/112/113/201) in gold
+    /// <c>captures/captures.zip</c> (session <c>20261112_0351…0404</c>): buy 10.0,
+    /// combat 110.0, round-end pause 6.0, warm-up 3.0, half-time 5/1/7. This is the field the
+    /// 2.07 client uses for its countdown; without it the timer reads 00:00 (issue #27).
+    /// <c>Time</c> stays a fresh anchor (<c>Time ≈ now</c>), not a deadline.
+    /// </summary>
+    public const string Duration = "Duration";
     /// <summary>Round start absolute double (<c>bbs.cabv</c> / <c>omv</c> via <c>NetManager.bfqt</c>).</summary>
     public const string RoundStartTime = "RoundStartTime";
     public const string RoundCount = "round_count";
@@ -386,6 +395,15 @@ public static class AlliesFlowParams
     /// Do not invent wire Live <c>Time=now+109</c> — phone gold omits combat Time refresh.
     /// </summary>
     public static TimeSpan RoundDuration => MatchHostSettings.RoundDuration;
+    /// <summary>
+    /// Combat round length the <b>client</b> is told in the C2=31 <c>Duration</c> prop.
+    /// Gold <c>captures/captures.zip</c> (session 20261112_0351…0404) is 110.0 on every
+    /// combat bag, so the countdown starts at 1:50. Kept separate from
+    /// <see cref="RoundDuration"/> on purpose: the host's own 109s deadline is an
+    /// implementation detail (guarded by <c>ProtocolInvariantTests</c>) and #27 is a
+    /// transmission fix — phase timings must not move.
+    /// </summary>
+    public const double ClientCombatCountdownSeconds = 110.0;
 
     /// <summary>C2=111 half-time intro — gold RX R7 end→111 ≈6s; 111→112 ≈5s hold.</summary>
     public static readonly TimeSpan HalfTimeIntro = TimeSpan.FromSeconds(5);

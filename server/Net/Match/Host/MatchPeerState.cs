@@ -25,6 +25,13 @@ internal sealed class MatchPeerState
     public bool JoinerFromLobbySeen { get; set; }
     public bool JoinerAvatarSeen { get; set; }
     public bool JoinerPingSeen { get; set; }
+    /// <summary>
+    /// Issue #28: the host already sent this peer's full identity block (uid → badgeId →
+    /// verified → from_lobby → …). A mid-match rejoin reuses the live <see cref="NetPeer"/>, so
+    /// those props never come again — without this latch the INIT gate waits for an identity
+    /// batch that will not repeat and the peer gets no world data until the next round.
+    /// </summary>
+    public bool IdentityAlreadyBootstrapped { get; set; }
     public CancellationTokenSource? BootstrapTimeoutCts { get; set; }
 
     /// <summary>
@@ -39,5 +46,6 @@ internal sealed class MatchPeerState
     public bool ReconnectSpectatorFallbackDone { get; set; }
 
     public bool IsJoinerIdentityReady =>
-        JoinerUidSeen && JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen);
+        IdentityAlreadyBootstrapped
+        || (JoinerUidSeen && JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen));
 }

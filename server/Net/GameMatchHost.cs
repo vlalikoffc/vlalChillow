@@ -562,6 +562,9 @@ public sealed partial class GameMatchHost : IDisposable
                 _manager.PollEvents();
 
                 var now = Environment.TickCount64;
+                // Issue #24: host no longer authors synthetic WorldObjectState (that zeroed
+                // avatar record made clients throw on `weaponType`). Owner State is relayed in
+                // HandleWorldObjectStateRelay; this tick only logs pawns still waiting for it.
                 if (now >= _nextStateTickUtc)
                 {
                     _nextStateTickUtc = now + (long)StateTickInterval.TotalMilliseconds;

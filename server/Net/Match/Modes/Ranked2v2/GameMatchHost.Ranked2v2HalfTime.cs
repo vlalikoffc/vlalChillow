@@ -35,6 +35,7 @@ public sealed partial class GameMatchHost
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Duration, LobbyVariant.FromDouble(dur.TotalSeconds)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.RoundEnd)),
         ], reason: "HalfTime intro C2=111");
         Console.WriteLine(
@@ -74,6 +75,8 @@ public sealed partial class GameMatchHost
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Duration,
+                LobbyVariant.FromDouble(AlliesFlowParams.HalfTimeSwapHold.TotalSeconds)),
             (MatchRoomPropKeys.CtScore, LobbyVariant.FromInt(scoreCt)),
             (MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)),
             (MatchRoomPropKeys.SwappedTeam, LobbyVariant.FromBool(true)),
@@ -102,6 +105,7 @@ public sealed partial class GameMatchHost
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Duration, LobbyVariant.FromDouble(dur.TotalSeconds)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.HalfTimeTransition)),
         ], reason: "HalfTime transition C2=113");
         Console.WriteLine(
