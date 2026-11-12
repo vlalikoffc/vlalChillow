@@ -42,6 +42,13 @@ public static class RunLog
     /// <summary>Lines dropped because the background writer could not keep up.</summary>
     public static long LinesDropped => Interlocked.Read(ref _dropped);
 
+    /// <summary>
+    /// Optional observer for formatted log batches (used by the dashboard log panel).
+    /// Invoked on the single log-writer thread, so implementations must be cheap and
+    /// thread-safe. Must never throw; exceptions are swallowed by the writer.
+    /// </summary>
+    public static Action<string>? Tap { get; set; }
+
     private static long _dropped;
     private static long _written;
     private static long _bytes;
@@ -231,6 +238,14 @@ public static class RunLog
             if (_terminal is not null)
             {
                 try { _terminal.Write(text); _terminal.Flush(); } catch { /* ignore */ }
+            }
+
+            // Non-blocking observer (dashboard log panel). Runs on this writer thread only —
+            // never on a network thread — and must not throw.
+            var tap = Tap;
+            if (tap is not null)
+            {
+                try { tap(text); } catch { /* display-only */ }
             }
 
             Interlocked.Increment(ref _written);
