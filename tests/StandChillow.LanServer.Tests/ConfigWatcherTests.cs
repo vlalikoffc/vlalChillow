@@ -84,10 +84,15 @@ public sealed class ConfigWatcherTests : IDisposable
         using var watcher = new ConfigWatcher(_path, _ => Interlocked.Increment(ref applied), log: _ => { });
 
         File.WriteAllText(_path, "{ это не json ");
-        Thread.Sleep(1200);
+        // Детерминированно «дёргаем» перечит, не полагаясь на события ФС контейнера.
+        watcher.ReloadNow();
 
         // Ни одного «применения» мусора; сервер не упал.
         Assert.Equal(0, Volatile.Read(ref applied));
+
+        // И сам разбор честно сообщает причину, а не делает вид, что всё хорошо.
+        Assert.False(ServerConfig.TryLoad(_path, out _, out var error));
+        Assert.False(string.IsNullOrWhiteSpace(error));
     }
 
     [Fact]
@@ -98,6 +103,7 @@ public sealed class ConfigWatcherTests : IDisposable
 
         File.WriteAllText(_path, ServerConfig.Template.Replace(
             "\"roundTime\": 109", "\"roundTime\": -5"));
+        watcher.ReloadNow(); // не зависим от событий ФС
 
         Assert.True(WaitFor(() => applied is not null));
         // Некорректное значение заменено стандартным и отмечено в Issues,
