@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace StandChillow.LanServer.Dashboard;
 
 /// <summary>
@@ -65,25 +63,23 @@ internal static class Ansi
     /// <summary>Visible width in terminal cells (kept for callers that only need the measurement).</summary>
     public static int VisibleLength(string? s) => Layout.CellWidth(s);
 
-    /// <summary>Apply a background SGR to every cell of a line, keeping foreground colours.</summary>
-    public static string Paint(string content, string background) =>
-        background + content.Replace(Reset, Reset + background) + Reset;
-
-    /// <summary>Write colored text inside a reversed block of exactly <paramref name="cells"/> cells.</summary>
-    public static string Block(string text, string background, int cells) =>
-        background + Layout.Fit(text, cells) + Reset;
-
     public static string Sanitize(string? text) => Layout.SingleLine(text);
 
     public static string Truncate(string s, int width) => Layout.ClipPlain(s, width);
 
-    /// <summary>Encode text for a stream that may not be UTF-8 aware (best effort, no throw).</summary>
-    public static string EscapeForStream(string text) => text;
+    /// <summary>True when the payload only contains printable ASCII (tests / log hygiene).</summary>
+    public static bool IsPlainAscii(string? s)
+    {
+        if (string.IsNullOrEmpty(s))
+            return true;
+        foreach (var c in s)
+        {
+            if (c < 32 || c > 126)
+                return false;
+        }
 
-    internal static bool IsEscapeStart(char c) => c == Esc;
-
-    /// <summary>Detect whether a string carries ANSI escapes (tests / log hygiene).</summary>
-    public static bool HasAnsi(string? s) => s is not null && s.IndexOf(Esc) >= 0;
+        return true;
+    }
 
     /// <summary>Strips every escape sequence.</summary>
     public static string StripAnsi(string? s) => Layout.StripAnsi(s);
@@ -102,6 +98,4 @@ internal static class Ansi
         return true;
     }
 
-    /// <summary>Convenience wrapper used by renderers that build a StringBuilder line.</summary>
-    public static void Appendf(StringBuilder sb, string value) => sb.Append(value);
 }

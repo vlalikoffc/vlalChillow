@@ -41,9 +41,6 @@ internal sealed class DashboardFrame
 
     public int Height { get; }
 
-    /// <summary>Rows currently filled (for a cheap "did anything change" check).</summary>
-    public int Filled { get; private set; }
-
     /// <summary>Write one row; index is clamped into the frame, so a layout bug cannot scroll.</summary>
     public void Set(int row, string? content)
     {
@@ -51,10 +48,6 @@ internal sealed class DashboardFrame
             return;
         _rows[row] = Layout.Fit(Layout.SingleLinePreservingAnsi(content), Width);
     }
-
-    /// <summary>Write one row with a background/band applied end-to-end.</summary>
-    public void SetBanded(int row, string? content, string background) =>
-        Set(row, background + Layout.Fit(content, Width) + Ansi.Reset);
 
     /// <summary>Append a block of rows starting at <paramref name="startRow"/> (bottom-clipped).</summary>
     public int AddRange(int startRow, IEnumerable<string?> rows)

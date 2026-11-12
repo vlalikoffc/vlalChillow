@@ -260,10 +260,6 @@ internal static class Layout
         };
     }
 
-    /// <summary>Fit a plain (no ANSI) string into exactly <paramref name="cells"/> cells.</summary>
-    public static string FitPlain(string? plain, int cells, Align align = Align.Left) =>
-        Fit(plain, cells, align);
-
     /// <summary>Repeat a character to fill <paramref name="cells"/> cells (0 when non-positive).</summary>
     public static string Bar(int cells, char ch) =>
         cells <= 0 ? string.Empty : new string(ch, cells);

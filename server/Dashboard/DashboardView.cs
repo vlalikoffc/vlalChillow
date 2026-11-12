@@ -536,7 +536,7 @@ internal static class DashboardView
             MatchFlowPhase.PurchasePhase => $"ПОДГОТОВКА  ·  раунд {snap.Round}{c2}",
             MatchFlowPhase.RoundLive => $"БОЙ  ·  раунд {snap.Round}{c2}",
             MatchFlowPhase.BombPlanted => $"БОМБА ЗАЛОЖЕНА  ·  раунд {snap.Round}{c2}",
-            MatchFlowPhase.RoundEndPause => $"КОНЕЦ РАУНДА  ·  {snap.Round}{c2}",
+            MatchFlowPhase.RoundEndPause => $"КОНЕЦ РАУНДА  ·  раунд {snap.Round}{c2}",
             MatchFlowPhase.HalfTimeIntro => "ПЕРЕРЫВ  ·  СМЕНА СТОРОН",
             MatchFlowPhase.HalfTimeSwap => "ПЕРЕРЫВ  ·  СТОРОНЫ ПОМЕНЯЛИСЬ",
             MatchFlowPhase.HalfTimeTransition => "ПЕРЕРЫВ  ·  ПРОДОЛЖЕНИЕ",
