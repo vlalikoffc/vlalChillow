@@ -61,6 +61,11 @@ public sealed partial class GameNetHost
         if (_config.IsAdmin(player.Name))
             return true;
 
+        // Отказ виден и в консоли: иначе игрок получает только приватный ответ, а
+        // оператор не понимает, почему команда «не работает».
+        Console.WriteLine(
+            $"[chat] /{effective} ОТКЛОНЕНО: ник '{player.Name}' не в admin.nicknames " +
+            $"[{string.Join(", ", _config.Admin.Nicknames)}]");
         denyReason = $"команда /{effective} только для админов (твой ник: {player.Name})";
         return false;
     }
@@ -173,7 +178,12 @@ public sealed partial class GameNetHost
             // Bare start only — "set start" is under /set.
             if (args.Length == 0)
             {
-                TryArmWarmupOrFirstPlay(who);
+                var startedNow = TryArmWarmupOrFirstPlay(who);
+                // Персональный ответ обязателен: BroadcastServerChat идёт в лобби-канал,
+                // а игрок в катке его не видит — команда выглядела «проигнорированной».
+                reply(startedNow
+                    ? "start — матч запущен (первый запуск)"
+                    : "start — armed: WarmUp пойдёт, когда в обеих командах будет по игроку");
                 return true;
             }
         }
@@ -213,8 +223,19 @@ public sealed partial class GameNetHost
     private static string FormatUnknownCommandHelp(string message) =>
         $"неизвестная команда '{message}' — /help";
 
-    private void ReplyPrivate(ConnectedPlayer player, string text) =>
-        SendServerChatTo(player.Peer, text);
+    private void ReplyPrivate(ConnectedPlayer player, string text)
+    {
+        // Лобби-сокет: игрок ещё в лобби — увидит сразу.
+        Send(player.Peer, LobbyCodec.BuildChatEvent(LobbySession.ServerMemberId, text));
+
+        // И в катку, но адресно: приватный ответ не должен всплыть в общем чате матча.
+        // Без этого любая команда из матча выглядела проигнорированной.
+        var peers = _match.SendServerChat(text, nick: player.Name);
+        if (peers > 0)
+            Console.WriteLine($"[chat] Server → {player.Name} (match, peers={peers}): {text}");
+        else
+            Console.WriteLine($"[chat] Server → {player.Name}: ответ только в лобби (в катке не найден)");
+    }
 
     private void NotifyMatchPlayerJoined(string name)
     {

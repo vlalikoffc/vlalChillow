@@ -234,8 +234,25 @@ public sealed partial class GameMatchHost
             if (parsed.ObjectId == MatchSceneManagers.ChatManagerObjectId
                 && TryDecodeChatManagerText(parsed.Payload, out var chatText))
             {
+                var chatActorName = ResolveActorName(st.Room, st.ActorNr);
                 Console.WriteLine(
-                    $"[match-host] ChatManager text actor={st.ActorNr}: {chatText}");
+                    $"[match-host] ChatManager text actor={st.ActorNr}" +
+                    (chatActorName.Length > 0 ? $" ({chatActorName})" : "") +
+                    $": {chatText}");
+
+                // Обычный чат катки живёт только на 7777 — сервер и дашборд его раньше
+                // не видели (в консоли была строка, но в панели чата пусто).
+                // Команды сюда не отдаём: это не сообщения, их не должно быть в дашборде.
+                if (!chatText.StartsWith('/'))
+                {
+                    try { OnMatchChatText?.Invoke(chatActorName, chatText); }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[match-host] ChatManager text sink failed: {ex.Message}");
+                    }
+                }
+
                 if (chatText.StartsWith('/'))
                 {
                     dropRelay = true;
@@ -735,29 +752,12 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// ChatManager Rpc payload: single length byte + UTF-8 text (live Dedik captures
-    /// <c>payloadLen=9</c> «херь», <c>payloadLen=10</c> «ну да»). Returns false if layout
-    /// does not match — never invents a chat string from opaque bytes.
+    /// <c>payloadLen=9</c> «херь», <c>payloadLen=10</c> «ну да»). Lives in
+    /// <see cref="MatchCodec.TryParseChatManagerText"/> so the same rule is used by the host
+    /// when it <b>sends</b> chat and covered by tests; never invents text from opaque bytes.
     /// </summary>
-    private static bool TryDecodeChatManagerText(ReadOnlySpan<byte> payload, out string text)
-    {
-        text = "";
-        if (payload.Length < 2)
-            return false;
-        var n = payload[0];
-        if (n == 0 || n > payload.Length - 1)
-            return false;
-        if (n != payload.Length - 1)
-            return false;
-        try
-        {
-            text = System.Text.Encoding.UTF8.GetString(payload.Slice(1, n));
-            return text.Length > 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private static bool TryDecodeChatManagerText(ReadOnlySpan<byte> payload, out string text) =>
+        MatchCodec.TryParseChatManagerText(payload, out text);
 
     /// <summary>
     /// Ник актора из ростера комнаты. Пустая строка, если комната про него не знает —

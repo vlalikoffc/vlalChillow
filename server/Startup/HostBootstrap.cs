@@ -109,10 +109,14 @@ public static class HostBootstrap
             ? forcedIp
             : LanInterfacePicker.PickLanBindAddress();
         var admins = serverConfig.Admin.Nicknames.Count == 0
-            ? "(никого не задано — admin-команды недоступны)"
+            ? "(список пуст — админ-команд нет)"
             : string.Join(", ", serverConfig.Admin.Nicknames);
         Console.WriteLine($"[config] файл: {ServerConfig.LastLoadedPath}");
         Console.WriteLine($"[config] админы: {admins}");
+        Console.WriteLine(serverConfig.Admin.AdminOnlyCommands.Count == 0
+            ? "[config] команд только для админов: нет — все команды доступны всем"
+            : $"[config] команд только для админов: " +
+              string.Join(", ", serverConfig.Admin.AdminOnlyCommands));
         Console.WriteLine($"[config] запуск матча кому угодно: {(serverConfig.Admin.AnyoneCanStart ? "да" : "нет")}");
         Console.WriteLine($"[config] режим старта: {serverConfig.DescribeStartMode()}");
         Console.WriteLine($"[config] приветствие: {(string.IsNullOrWhiteSpace(serverConfig.Server.WelcomeMessage) ? "(выкл)" : serverConfig.Server.WelcomeMessage)}");

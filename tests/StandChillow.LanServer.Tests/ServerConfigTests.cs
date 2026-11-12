@@ -27,13 +27,13 @@ public sealed class ServerConfigTests
         var cfg = Parse(ServerConfig.Template);
         cfg.Normalize();
 
-        Assert.Equal(MatchStartMode.Manual, cfg.StartMode);
+        Assert.Equal(MatchStartMode.Auto, cfg.StartMode);
         Assert.Equal(1, cfg.MatchStart.Auto.MinPlayersPerTeam);
         Assert.True(cfg.MatchStart.Ready.AnnounceInChat);
         Assert.True(cfg.MatchStart.Ready.ResetOnLeave);
         Assert.True(cfg.MatchStart.Ready.AllowUnready);
-        Assert.False(cfg.Admin.AnyoneCanStart);
-        Assert.Contains("влал", cfg.Admin.Nicknames);
+        Assert.True(cfg.Admin.AnyoneCanStart);
+        Assert.Empty(cfg.Admin.Nicknames);
         Assert.Empty(cfg.Launch.Args);
         Assert.False(cfg.Debug.Captures);
         Assert.False(cfg.Debug.Verbose);
@@ -48,23 +48,29 @@ public sealed class ServerConfigTests
     }
 
     [Fact]
-    public void Template_RequiresStartToBeAdminOnly()
+    public void Template_LeavesEveryCommandOpenByDefault()
     {
         var cfg = Parse(ServerConfig.Template);
         cfg.Normalize();
 
-        // Иначе любой игрок сможет начать матч, как это было до админки.
-        Assert.True(cfg.IsAdminOnly("start"));
-        Assert.True(cfg.IsAdminOnly("mode"));
-        Assert.True(cfg.IsAdminOnly("play"));
+        // LAN по умолчанию: никаких админ-гейтов. Раньше /mode, /map, /start, /play
+        // были за админом, а список админов пустой — команды молча не работали.
+        Assert.False(cfg.IsAdminOnly("start"));
+        Assert.False(cfg.IsAdminOnly("mode"));
+        Assert.False(cfg.IsAdminOnly("map"));
+        Assert.False(cfg.IsAdminOnly("play"));
+        Assert.False(cfg.IsAdminOnly("set"));
+        Assert.False(cfg.IsAdminOnly("end"));
+        Assert.True(cfg.Admin.AnyoneCanStart);
     }
 
     [Fact]
-    public void DefaultConfig_IsManualAndHasNoAdmins()
+    public void DefaultConfig_IsAutoAndHasNoAdmins()
     {
         var cfg = new ServerConfig();
 
-        Assert.Equal(MatchStartMode.Manual, cfg.StartMode);
+        // auto — единственный режим, который у пользователя работал без /start.
+        Assert.Equal(MatchStartMode.Auto, cfg.StartMode);
         Assert.False(cfg.IsAdmin("кто-угодно"));
         Assert.False(cfg.IsAdmin(null));
         Assert.False(cfg.IsAdmin("   "));
@@ -86,11 +92,34 @@ public sealed class ServerConfigTests
     public void AnyoneCanStart_OverridesTheAdminGateForStart()
     {
         var cfg = new ServerConfig();
+        cfg.Admin.AdminOnlyCommands.Add("start");
         Assert.True(cfg.IsAdminOnly("start"));
 
-        // Флаг из конфига — единственный способ пустить всех к запуску.
+        // Флаг из конфига пускает всех к запуску даже при админ-гейте на start.
         cfg.Admin.AnyoneCanStart = true;
         Assert.True(cfg.Admin.AnyoneCanStart);
+    }
+
+    [Fact]
+    public void IsAdmin_TreatsVisuallyIdenticalNicksAsEqual()
+    {
+        var cfg = new ServerConfig();
+        cfg.Admin.Nicknames.Add("влал");
+
+        Assert.True(cfg.IsAdmin("влал"));
+        Assert.True(cfg.IsAdmin("\u200Bвлал\u00AD"));
+        Assert.True(cfg.IsAdmin("влал".Normalize(System.Text.NormalizationForm.FormD)));
+        Assert.False(cfg.IsAdmin("влал2"));
+    }
+
+    [Fact]
+    public void IsAdminOnly_AcceptsTheSlashForm()
+    {
+        var cfg = new ServerConfig();
+        cfg.Admin.AdminOnlyCommands.Add("start");
+
+        Assert.True(cfg.IsAdminOnly("/start"));
+        Assert.True(cfg.IsAdminOnly(" start "));
     }
 
     [Theory]
@@ -118,7 +147,62 @@ public sealed class ServerConfigTests
     }
 
     [Fact]
-    public void Normalize_ClampsMinPlayersPerTeamAndFallsBackToManual()
+    public void LegacyConfigWithEmptyAdminsAndFullAdminGate_IsUnlockedOnLoad()
+    {
+        // Ровно то, что лежит у пользователя в C:\Users\vlal\Desktop\vltest\config.json:
+        // админов нет, зато все команды «только для админов», anyoneCanStart=false.
+        // Такой файл не перезаписывается при запуске, поэтому без миграции команды
+        // остались бы заблокированными навсегда.
+        var cfg = Parse("""
+        {
+          "admin": {
+            "nicknames": [],
+            "adminOnlyCommands": [ "mode", "map", "set", "play", "end", "start" ],
+            "anyoneCanStart": false
+          },
+          "matchStart": { "mode": "manual" }
+        }
+        """);
+
+        cfg.Normalize();
+
+        Assert.Empty(cfg.Admin.AdminOnlyCommands);
+        Assert.True(cfg.Admin.AnyoneCanStart);
+        Assert.Equal(MatchStartMode.Manual, cfg.StartMode); // явный manual уважаем
+    }
+
+    [Fact]
+    public void DeliberateAdminSetup_IsNeverOverwrittenByTheMigration()
+    {
+        // Есть админ — значит гейт выставлен осознанно, миграция не вмешивается.
+        var cfg = new ServerConfig();
+        cfg.Admin.Nicknames.Add("влал");
+        cfg.Admin.AdminOnlyCommands.AddRange(["mode", "map", "set", "play", "end", "start"]);
+        cfg.Admin.AnyoneCanStart = false;
+
+        cfg.Normalize();
+
+        Assert.Equal(6, cfg.Admin.AdminOnlyCommands.Count);
+        Assert.False(cfg.Admin.AnyoneCanStart);
+        Assert.True(cfg.IsAdmin("влал"));
+    }
+
+    [Fact]
+    public void CustomAdminGateWithoutAdmins_IsLeftAlone()
+    {
+        // Набор команд не совпадает со старым дефолтом — это ручная настройка.
+        var cfg = new ServerConfig();
+        cfg.Admin.AdminOnlyCommands.AddRange(["mode", "map"]);
+        cfg.Admin.AnyoneCanStart = false;
+
+        cfg.Normalize();
+
+        Assert.Equal(2, cfg.Admin.AdminOnlyCommands.Count);
+        Assert.False(cfg.Admin.AnyoneCanStart);
+    }
+
+    [Fact]
+    public void Normalize_ClampsMinPlayersPerTeamAndFallsBackToAuto()
     {
         var cfg = new ServerConfig
         {
@@ -131,8 +215,10 @@ public sealed class ServerConfigTests
 
         cfg.Normalize();
 
-        Assert.Equal("manual", cfg.MatchStart.Mode);
-        Assert.Equal(MatchStartMode.Manual, cfg.StartMode);
+        // Непонятный режим больше не откатывается тихо в manual: битый
+        // matchStart.mode берёт рабочий дефолт auto.
+        Assert.Equal("auto", cfg.MatchStart.Mode);
+        Assert.Equal(MatchStartMode.Auto, cfg.StartMode);
         Assert.Equal(1, cfg.MatchStart.Auto.MinPlayersPerTeam);
     }
 

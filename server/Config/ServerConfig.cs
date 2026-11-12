@@ -17,17 +17,24 @@ public enum MatchStartMode
 }
 
 /// <summary>Кто имеет право крутить серверные команды.</summary>
+/// <remarks>
+/// LAN по умолчанию: играют свои, поэтому никто не обязан быть админом. Пустой
+/// <see cref="AdminOnlyCommands"/> + <see cref="AnyoneCanStart"/> = true значит «команды доступны
+/// всем». Кто хочет ограничить — вписывает ники в <see cref="Nicknames"/> и команды в
+/// <see cref="AdminOnlyCommands"/>.
+/// </remarks>
 public sealed class AdminConfig
 {
-    /// <summary>Ники администраторов (регистр не важен).</summary>
+    /// <summary>Ники администраторов (регистр не важен, пробелы по краям игнорируются).</summary>
     public List<string> Nicknames { get; set; } = new();
 
-    /// <summary>Команды только для админов: mode, map, set, play, end, start.</summary>
-    public List<string> AdminOnlyCommands { get; set; } =
-        new() { "mode", "map", "set", "play", "end", "start" };
+    /// <summary>
+    /// Команды только для админов. Пусто (по умолчанию) — админ-гейта нет вообще.
+    /// </summary>
+    public List<string> AdminOnlyCommands { get; set; } = new();
 
-    /// <summary>Разрешить /start и /set start любому игроку.</summary>
-    public bool AnyoneCanStart { get; set; }
+    /// <summary>Разрешить /start и /set start любому игроку (по умолчанию да).</summary>
+    public bool AnyoneCanStart { get; set; } = true;
 }
 
 /// <summary>Настройки автостарта (<c>matchStart.mode = "auto"</c>).</summary>
@@ -53,8 +60,8 @@ public sealed class ReadyStartConfig
 /// <summary>Как начинается матч.</summary>
 public sealed class MatchStartConfig
 {
-    /// <summary>manual | auto | ready</summary>
-    public string Mode { get; set; } = "manual";
+    /// <summary>manual | auto | ready. По умолчанию auto — матч стартует сам.</summary>
+    public string Mode { get; set; } = "auto";
 
     public AutoStartConfig Auto { get; set; } = new();
 
@@ -270,14 +277,19 @@ public sealed class ServerConfig
                 Directory.CreateDirectory(Path.GetDirectoryName(target) ?? ".");
                 File.WriteAllText(target, Template);
                 Console.WriteLine($"[config] создан шаблон: {target}");
-                Console.WriteLine("[config] впиши свои ники в admin.nicknames");
+                Console.WriteLine(
+                    "[config] команды открыты всем; ограничить — admin.nicknames + " +
+                    "admin.adminOnlyCommands");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[config] не смог создать '{target}': {ex.Message}");
             }
 
+            // Только что созданный файл = новый шаблон; Normalize нужен, чтобы
+            // действующие значения совпадали с тем, что написано на диске.
             Current = new ServerConfig();
+            Current.Normalize();
             return Current;
         }
 
@@ -323,8 +335,23 @@ public sealed class ServerConfig
         if (MatchStart.Auto.MinPlayersPerTeam < 1)
             MatchStart.Auto.MinPlayersPerTeam = 1;
 
-        if (!TryParseMode(MatchStart.Mode, out _))
-            MatchStart.Mode = "manual";
+        MigrateLegacyAdminGate();
+
+        // Пустая строка — «как в дефолте» (auto), а не тихий откат в manual:
+        // иначе правка конфига руками молча выключала автостарт.
+        if (!TryParseMode(MatchStart.Mode, out var startMode))
+        {
+            MatchStart.Mode = "auto";
+        }
+        else
+        {
+            MatchStart.Mode = startMode switch
+            {
+                MatchStartMode.Auto => "auto",
+                MatchStartMode.Ready => "ready",
+                _ => "manual",
+            };
+        }
 
         Server.MaxMembers = Clamp(Server.MaxMembers, 1, 255, 16);
         Server.LobbyPort = Clamp(Server.LobbyPort, 1, 65535, 7778);
@@ -360,6 +387,52 @@ public sealed class ServerConfig
         Debug.CapturesMaxBytesMb = Clamp(Debug.CapturesMaxBytesMb, 0, 65536, 64);
     }
 
+    /// <summary>
+    /// Старые версии писали в <c>config.json</c> «админ-гейт по умолчанию»: список админов
+    /// пустой, а <c>adminOnlyCommands</c> — полный набор команд с <c>anyoneCanStart: false</c>.
+    /// Такая комбинация блокирует команды <b>у всех сразу</b> (админов нет — значит нет и того,
+    /// кому они разрешены), поэтому это не намеренная настройка, а дефект прошлого дефолта.
+    /// </summary>
+    /// <remarks>
+    /// Важно: <see cref="Load"/> не перезаписывает существующий файл, поэтому без этой
+    /// миграции у того, кто уже запускал сервер, старые значения остались бы навсегда —
+    /// и «поменять дефолты» ничего бы ему не дало. Пользовательские настройки не затираются:
+    /// миграция срабатывает только на точном старом наборе и только когда админов нет.
+    /// </remarks>
+    private void MigrateLegacyAdminGate()
+    {
+        if (Admin.Nicknames.Any(n => !string.IsNullOrWhiteSpace(n)))
+            return;
+
+        if (Admin.AnyoneCanStart)
+            return;
+
+        if (!IsLegacyDefaultAdminOnlySet())
+            return;
+
+        Admin.AdminOnlyCommands.Clear();
+        Admin.AnyoneCanStart = true;
+        Console.WriteLine(
+            "[config] миграция: старый дефолт «все команды только для админов» при пустом " +
+            "admin.nicknames блокировал команды всем — снял adminOnlyCommands, anyoneCanStart=true");
+    }
+
+    /// <summary>Точный набор команд из прежнего шаблона (<c>mode,map,set,play,end,start</c>).</summary>
+    private bool IsLegacyDefaultAdminOnlySet()
+    {
+        string[] legacy = ["mode", "map", "set", "play", "end", "start"];
+        if (Admin.AdminOnlyCommands.Count != legacy.Length)
+            return false;
+
+        var actual = new HashSet<string>(
+            Admin.AdminOnlyCommands
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c.Trim().ToLowerInvariant()),
+            StringComparer.Ordinal);
+
+        return legacy.All(actual.Contains);
+    }
+
     /// <summary>Флаг, который включил бы режим пробы (запрещён в <c>launch.args</c>).</summary>
     public static bool IsProbeFlag(string? arg)
     {
@@ -374,9 +447,14 @@ public sealed class ServerConfig
     private static int Clamp(int value, int min, int max, int fallback) =>
         value < min || value > max ? fallback : value;
 
+    /// <summary>
+    /// Разобранный режим старта. Непонятное значение — <c>auto</c> (тот же фолбэк, что и в
+    /// <see cref="Normalize"/>): тихий уход в <c>manual</c> означал «матч сам не начнётся»,
+    /// и это выглядело как будто сервер игнорирует игроков.
+    /// </summary>
     public MatchStartMode StartMode => TryParseMode(MatchStart.Mode, out var mode)
         ? mode
-        : MatchStartMode.Manual;
+        : MatchStartMode.Auto;
 
     public static bool TryParseMode(string? raw, out MatchStartMode mode)
     {
@@ -406,20 +484,63 @@ public sealed class ServerConfig
         }
     }
 
-    /// <summary>Админ ли ник (без учёта регистра и пробелов).</summary>
+    /// <summary>
+    /// Админ ли ник: без учёта регистра, пробелов по краям, невидимых символов и
+    /// формы Unicode (NFC/NFD). Кириллический ник, набранный «одинаково», может
+    /// отличаться байтами — из-за этого «влал» не находился в списке.
+    /// </summary>
     public bool IsAdmin(string? nick)
     {
-        if (string.IsNullOrWhiteSpace(nick))
+        var normalized = NormalizeNick(nick);
+        if (normalized.Length == 0)
             return false;
 
-        var trimmed = nick.Trim();
         foreach (var candidate in Admin.Nicknames)
         {
-            if (string.Equals(candidate?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(NormalizeNick(candidate), normalized, StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Приводит ник к сравнимому виду: обрезка, NFC-нормализация Unicode, удаление
+    /// невидимых символов (zero-width, BOM, мягкие переносы) и регистронезависимое
+    /// сравнение на стороне вызывающего.
+    /// </summary>
+    public static string NormalizeNick(string? nick)
+    {
+        if (string.IsNullOrWhiteSpace(nick))
+            return string.Empty;
+
+        var text = nick.Normalize(System.Text.NormalizationForm.FormC);
+        var buffer = new System.Text.StringBuilder(text.Length);
+        var pendingSpace = false;
+        foreach (var ch in text)
+        {
+            // Cf (format) = zero-width space/joiner, BOM, soft hyphen и подобное.
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch)
+                == System.Globalization.UnicodeCategory.Format)
+                continue;
+
+            if (char.IsWhiteSpace(ch))
+            {
+                // Внутренние пробелы схлопываем в один, по краям не оставляем вовсе.
+                pendingSpace = buffer.Length > 0;
+                continue;
+            }
+
+            if (pendingSpace)
+            {
+                buffer.Append(' ');
+                pendingSpace = false;
+            }
+
+            buffer.Append(ch);
+        }
+
+        return buffer.ToString();
     }
 
     /// <summary>Нужны ли права на эту команду.</summary>
@@ -428,10 +549,11 @@ public sealed class ServerConfig
         if (string.IsNullOrWhiteSpace(command))
             return false;
 
-        var trimmed = command.Trim();
+        var trimmed = command.Trim().TrimStart('/');
         foreach (var candidate in Admin.AdminOnlyCommands)
         {
-            if (string.Equals(candidate?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(candidate?.Trim().TrimStart('/'), trimmed,
+                    StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 
@@ -504,20 +626,21 @@ public sealed class ServerConfig
 
   // ===== АДМИНЫ =====
   "admin": {
-    // Ники как в лобби, регистр не важен
-    "nicknames": [ "влал" ],
+    // Ники как в лобби, регистр не важен. Пусто — админов нет, и это нормально.
+    "nicknames": [],
 
-    // Команды только для админов
-    "adminOnlyCommands": [ "mode", "map", "set", "play", "end", "start" ],
+    // Команды только для админов. Пусто — команды доступны всем (LAN по умолчанию).
+    // Пример ограничения: [ "mode", "map", "set", "play", "end", "start" ]
+    "adminOnlyCommands": [],
 
     // /start и /set start может любой
-    "anyoneCanStart": false
+    "anyoneCanStart": true
   },
 
   // ===== СТАРТ МАТЧА =====
   "matchStart": {
     // manual — по /start, auto — по игрокам, ready — по /ready
-    "mode": "manual",
+    "mode": "auto",
 
     "auto": {
       // Минимум игроков в каждой команде

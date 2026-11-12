@@ -773,6 +773,93 @@ public static class MatchCodec
     }
 
     /// <summary>
+    /// Chat bubble in a live match: <b>ChatManager</b> scene object (id=7), <c>rpc=1</c>,
+    /// <c>gaa=AllCachedViaServer(3)</c>, <c>field=1</c>, payload = length byte + UTF-8 text.
+    /// </summary>
+    /// <remarks>
+    /// Rebuilt from three Dedik <b>host→client</b> captures of real chat
+    /// (<c>20261112_040303_23056_match_rx65980_WorldObjectRpc_len38.bin</c> «уебище »,
+    /// <c>…_040308_23079_…len36</c> «играй », <c>…_040310_23085_…len35</c> «сучка»): all three are
+    /// <c>04 cb &lt;stime:i32&gt; 00000000 0700 01 03 0100 &lt;double&gt; &lt;len&gt;&lt;utf8&gt;</c>.
+    /// Only <c>field</c> differs (1/1/2), so it is <b>not</b> a text discriminator — the text
+    /// itself is the payload. Nothing about the layout is guessed: the phone host put exactly
+    /// this on the wire, and phones already relay each other's chat through the same shape.
+    /// </remarks>
+    public static byte[] BuildChatManagerText(
+        int serverTime,
+        string text,
+        byte gaaTarget = 3,
+        short field = 1)
+    {
+        var utf8 = TruncateUtf8(text, MaxChatTextBytes);
+
+        var payload = new byte[1 + utf8.Length];
+        payload[0] = (byte)utf8.Length;
+        Array.Copy(utf8, 0, payload, 1, utf8.Length);
+
+        return BuildWorldObjectRpc(
+            serverTime,
+            objectId: MatchSceneManagers.ChatManagerObjectId,
+            rpcId: ChatRpcId,
+            gaaTarget: gaaTarget,
+            field: field,
+            timeValue: serverTime / 1000.0,
+            payload: payload);
+    }
+
+    /// <summary>ChatManager <c>rpc</c> observed on every live chat capture (host and relayed).</summary>
+    public const byte ChatRpcId = 1;
+
+    /// <summary>
+    /// Payload begins with a single length byte, so at most 255 UTF-8 bytes of text fit.
+    /// </summary>
+    public const int MaxChatTextBytes = 255;
+
+    /// <summary>
+    /// Truncate to at most <paramref name="maxBytes"/> of UTF-8 <b>without splitting a character</b>:
+    /// a half-written multi-byte sequence would make the client drop the whole bubble.
+    /// </summary>
+    private static byte[] TruncateUtf8(string text, int maxBytes)
+    {
+        var utf8 = System.Text.Encoding.UTF8.GetBytes(text);
+        if (utf8.Length <= maxBytes)
+            return utf8;
+
+        // maxBytes < utf8.Length here, so utf8[cut] is always a valid index.
+        var cut = maxBytes;
+        // Step back off continuation bytes (10xxxxxx) to a character boundary.
+        while (cut > 0 && (utf8[cut] & 0xC0) == 0x80)
+            cut--;
+
+        return utf8.AsSpan(0, cut).ToArray();
+    }
+
+    /// <summary>
+    /// Decode a ChatManager payload: single length byte + UTF-8 text. Returns false when the
+    /// layout does not match, so opaque bytes are never presented as a chat message.
+    /// </summary>
+    public static bool TryParseChatManagerText(ReadOnlySpan<byte> payload, out string text)
+    {
+        text = "";
+        if (payload.Length < 2)
+            return false;
+
+        var n = payload[0];
+        if (n == 0 || n != payload.Length - 1)
+            return false;
+
+        try
+        {
+            text = System.Text.Encoding.UTF8.GetString(payload.Slice(1, n));
+            return text.Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Client→host WorldObjectRpc: flags=<c>None</c>, no server time
     /// (live <c>*_WorldObjectRpc_len30.bin</c>).
     /// </summary>

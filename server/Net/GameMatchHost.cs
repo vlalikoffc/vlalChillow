@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
 using LiteNetLib;
+using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Diagnostics;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
@@ -114,6 +115,14 @@ public sealed partial class GameMatchHost : IDisposable
     public Action<string, IPAddress?, string>? OnMatchChatSlashCommand { get; set; }
 
     /// <summary>
+    /// Ordinary (non-command) chat a player typed inside the match. Arguments: roster nick
+    /// (empty if the room has no name for that actor) and the text. Phones already relay this
+    /// to each other inside the match; this callback exists so the server log/dashboard can
+    /// see it too — previously the катка was a blind spot.
+    /// </summary>
+    public Action<string, string>? OnMatchChatText { get; set; }
+
+    /// <summary>
     /// Fired when a human JoinRoom Found into Dedik (enters катка). Name = roster nick.
     /// </summary>
     public Action<string>? OnMatchPlayerJoined { get; set; }
@@ -135,6 +144,70 @@ public sealed partial class GameMatchHost : IDisposable
     /// phones already see (not silent slash commands).
     /// </summary>
     public Action<string>? OnServerDebugChat { get; set; }
+
+    /// <summary>
+    /// Server-authored chat inside the match. Unlike <see cref="OnServerDebugChat"/> this is not
+    /// gated by debug flags — it is the host's real voice in the катка, and it reaches phones on
+    /// the <b>7777</b> socket, where lobby OpChat cannot.
+    /// </summary>
+    /// <remarks>
+    /// Phones talk in a match through ChatManager (scene object id=7) and the host relays those
+    /// <c>WorldObjectRpc</c> packets. The lobby-side <c>BroadcastServerChat</c> builds a lobby
+    /// OpChat event instead, so a player in the катка never saw anything the server said —
+    /// they only saw each other, because their own chat was relayed inside the match. This
+    /// method puts the server on the same wire the phones use.
+    /// </remarks>
+    /// <param name="text">Message body.</param>
+    /// <param name="nick">
+    /// When set, only that roster nick gets the bubble (private command feedback must not leak
+    /// into the shared match chat). <c>null</c>/empty — everyone in the match.
+    /// </param>
+    /// <returns>Number of match peers the bubble was sent to.</returns>
+    public int SendServerChat(string text, string? nick = null)
+    {
+        text = text.Trim();
+        if (text.Length == 0)
+            return 0;
+
+        var target = ServerConfig.NormalizeNick(nick);
+        var sent = 0;
+        List<MatchRoom> rooms;
+        lock (_roomGate)
+            rooms = _roomsByPassword.Values.Distinct().ToList();
+
+        foreach (var room in rooms)
+        {
+            if (target.Length == 0)
+            {
+                sent += BroadcastInitReady(
+                    room,
+                    MatchCodec.BuildChatManagerText(NextServerTime(), text),
+                    tag: "match_tx_ChatManager_server");
+                continue;
+            }
+
+            var payload = MatchCodec.BuildChatManagerText(NextServerTime(), text);
+            foreach (var (p, st) in _peers)
+            {
+                if (st.Room != room || !st.BootstrapSent)
+                    continue;
+                if (!string.Equals(
+                        ServerConfig.NormalizeNick(st.RosterName),
+                        target,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (Send(p, payload))
+                {
+                    sent++;
+                    // Нашли адресата — второй раз в ту же комнату не шлём, иначе он
+                    // получит два одинаковых пузыря при повторном совпадении ника.
+                    break;
+                }
+            }
+        }
+
+        return sent;
+    }
 
     /// <summary>
     /// No-op unless <see cref="MatchHostSettings.DebugMatchChat"/>. Posts via

@@ -268,18 +268,24 @@ public sealed class LobbySession
         lock (_gate) return _byPeer.TryGetValue(peer, out var p) ? p : null;
     }
 
-    public ConnectedPlayer? TryGetByIp(System.Net.IPAddress ip)
+    /// <summary>
+    /// Все joined-игроки с этим IP. Нужен, чтобы не угадывать автора команды: за NAT/Radmin
+    /// несколько телефонов сидят на одном адресе, и «первый попавшийся» — не ответ.
+    /// </summary>
+    public List<ConnectedPlayer> JoinedPlayersByIp(System.Net.IPAddress ip)
     {
+        var hits = new List<ConnectedPlayer>();
         lock (_gate)
         {
             foreach (var p in _order)
             {
                 if (!p.Joined || p.Peer.Address is null) continue;
                 if (p.Peer.Address.Equals(ip))
-                    return p;
+                    hits.Add(p);
             }
-            return null;
         }
+
+        return hits;
     }
 
     public IReadOnlyList<ConnectedPlayer> JoinedPlayers()
