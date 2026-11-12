@@ -71,6 +71,10 @@ public sealed partial class GameNetHost : IDisposable
         _match = new GameMatchHost(_session.LobbyId, GameMatchHost.DefaultMatchPort, _advertiseLanIp);
         // Mid-match phones chat via ChatManager WorldObjectRpc — wire slash cmds (/set start).
         _match.OnMatchChatSlashCommand = HandleMatchChatSlashCommand;
+        // Ordinary match chat → console + dashboard (the катка used to be a blind spot).
+        _match.OnMatchChatText = (nick, text) =>
+            DashboardHub.PostChat(
+                string.IsNullOrWhiteSpace(nick) ? "?" : nick, text, fromServer: false);
         // Decisive match reactions → Server OpChat when MatchHostSettings.DebugMatchChat.
         _match.OnServerDebugChat = BroadcastConsoleChat;
         // Wins-needed / series MatchResults + 5s → stop 7777, idle lobby (keep mode/map).
@@ -519,49 +523,41 @@ public sealed partial class GameNetHost : IDisposable
     /// </summary>
     private void HandleMatchChatSlashCommand(string actorName, IPAddress? matchPeerIp, string message)
     {
-        var player = ResolveMatchChatPlayer(actorName, matchPeerIp);
-        if (player is null)
+        var resolved = ResolveMatchChatPlayer(actorName, matchPeerIp, out var reason);
+        if (resolved is null)
         {
-            // Раньше тут был молчаливый return — команда просто исчезала, и было
-            // не понять, дошла ли она вообще. Теперь причина видна в консоли.
+            // Не молчим: и в консоль, и в лог с причиной — иначе команда выглядит
+            // «понятой, но проигнорированной», что и было в отчёте.
             Console.WriteLine(
-                $"[chat] ChatManager slash: не удалось определить игрока " +
-                $"(actor='{actorName}' ip={matchPeerIp}) — команда не выполнена: {message}");
+                $"[chat] ChatManager slash НЕ выполнен: actor='{actorName}' ip={matchPeerIp} " +
+                $"причина={reason} команда='{message}'");
             return;
         }
 
-        Console.WriteLine($"[chat] {player.Name}: {message} (ChatManager command, silent)");
+        var (player, resolvedBy) = resolved.Value;
+        Console.WriteLine(
+            $"[chat] {player.Name}: {message} (ChatManager command, silent; " +
+            $"actor='{actorName}' resolvedBy={resolvedBy})");
         if (!TryHandleSlashCommand(player, message))
             ReplyPrivate(player, FormatUnknownCommandHelp(message));
     }
 
     /// <summary>
-    /// Кто именно написал команду в катке. Порядок: ник актора → IP → единственный игрок.
+    /// Кто именно написал команду в катке (тонкая обёртка над чистым
+    /// <see cref="MatchChatAuthorResolver.Resolve"/> — его и покрывают тесты).
     /// </summary>
-    private ConnectedPlayer? ResolveMatchChatPlayer(string actorName, IPAddress? matchPeerIp)
+    private (ConnectedPlayer Player, string ResolvedBy)? ResolveMatchChatPlayer(
+        string actorName,
+        IPAddress? matchPeerIp,
+        out string reason)
     {
         var joined = _session.JoinedPlayers();
-        if (joined.Count == 0)
-            return null;
+        var byIp = matchPeerIp is null
+            ? Array.Empty<ConnectedPlayer>()
+            : _session.JoinedPlayersByIp(matchPeerIp).ToArray();
 
-        if (!string.IsNullOrWhiteSpace(actorName))
-        {
-            var nick = actorName.Trim();
-            foreach (var candidate in joined)
-            {
-                if (string.Equals(candidate.Name, nick, StringComparison.OrdinalIgnoreCase))
-                    return candidate;
-            }
-        }
-
-        if (matchPeerIp is not null)
-        {
-            var byIp = _session.TryGetByIp(matchPeerIp);
-            if (byIp is not null)
-                return byIp;
-        }
-
-        return joined.Count == 1 ? joined[0] : null;
+        var hit = MatchChatAuthorResolver.Resolve(actorName, joined, byIp, out reason);
+        return hit is { } h ? (h.Player, h.ResolvedBy) : null;
     }
 
     /// <summary>
@@ -630,7 +626,10 @@ public sealed partial class GameNetHost : IDisposable
     /// Console/chat <c>start</c>: if match not launched yet, first Play (no rematch teardown);
     /// if already in Dedik WaitingPlayers / mid-match, arm WarmUp only (never HardReset).
     /// </summary>
-    public void TryArmWarmupOrFirstPlay(string who)
+    /// <returns>
+    /// true — матч был запущен этим вызовом (первый Play); false — только armed WarmUp.
+    /// </returns>
+    public bool TryArmWarmupOrFirstPlay(string who)
     {
         bool started;
         lock (_gate)
@@ -641,10 +640,11 @@ public sealed partial class GameNetHost : IDisposable
             Console.WriteLine(
                 $"[lobby] {who}: start before Play — launching match (first start, no teardown)");
             TryStartMatch(who);
-            return;
+            return true;
         }
 
         ArmMatchStart(who);
+        return false;
     }
 
     /// <summary>
@@ -797,8 +797,32 @@ public sealed partial class GameNetHost : IDisposable
             if (except is not null && ReferenceEquals(p.Peer, except)) continue;
             Send(p.Peer, bytes);
         }
+
+        // Лобби-кадр (OpChat) не доходит до игрока в катке — там другая сессия на 7777
+        // и другой чат (ChatManager). Без этой строки сервер «говорил в пустоту»:
+        // в лобби сообщение видно, в матче — нет.
+        SendServerChatToMatch(text);
     }
 
+    /// <summary>
+    /// Продублировать серверное сообщение в матч настоящим ChatManager-пакетом
+    /// (та же форма, что телефоны шлют друг другу — см. <c>BuildChatManagerText</c>).
+    /// </summary>
+    private void SendServerChatToMatch(string text)
+    {
+        try
+        {
+            var peers = _match.SendServerChat(text);
+            if (peers > 0)
+                Console.WriteLine($"[chat] Server → match: {text} (peers={peers})");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[chat] Server → match failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Лобби-сообщение конкретному сокету (приветствие при входе, служебное).</summary>
     private void SendServerChatTo(NetPeer peer, string text) =>
         Send(peer, LobbyCodec.BuildChatEvent(LobbySession.ServerMemberId, text));
 
