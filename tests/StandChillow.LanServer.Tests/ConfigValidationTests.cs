@@ -23,7 +23,7 @@ public sealed class ConfigValidationTests
         return cfg;
     }
 
-    private static ConfigIssue Single(ServerConfig cfg, string key)
+    private static ServerConfig.ConfigIssue Single(ServerConfig cfg, string key)
     {
         var hits = cfg.Issues.Where(i => i.Key == key).ToList();
         Assert.Single(hits);
