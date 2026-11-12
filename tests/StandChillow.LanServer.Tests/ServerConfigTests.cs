@@ -195,6 +195,7 @@ public sealed class ServerConfigTests
         // Есть админ — значит гейт выставлен осознанно, миграция не вмешивается.
         var cfg = new ServerConfig();
         cfg.Admin.Nicknames.Add("влал");
+        cfg.Admin.AdminOnlyCommands.Clear();
         cfg.Admin.AdminOnlyCommands.AddRange(["mode", "map", "set", "play", "end", "start"]);
         cfg.Admin.AnyoneCanStart = false;
 
@@ -210,6 +211,7 @@ public sealed class ServerConfigTests
     {
         // Набор команд не совпадает со старым дефолтом — это ручная настройка.
         var cfg = new ServerConfig();
+        cfg.Admin.AdminOnlyCommands.Clear();
         cfg.Admin.AdminOnlyCommands.AddRange(["mode", "map"]);
         cfg.Admin.AnyoneCanStart = false;
 

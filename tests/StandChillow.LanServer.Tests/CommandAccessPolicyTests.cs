@@ -110,15 +110,20 @@ public sealed class CommandAccessPolicyTests
     }
 
     [Fact]
-    public void WhenNobodyCanStart_OnlyAdminsCanLaunchTheMatch()
+    public void WhenNobodyCanStart_StartIsClosedByTheAdminList()
     {
+        // anyoneCanStart только снимает гейт; чтобы /start стал админским,
+        // его надо явно добавить в adminOnlyCommands (по умолчанию там set и end).
         var cfg = Default();
         cfg.Admin.Nicknames.Add("влал");
         cfg.Admin.AnyoneCanStart = false;
+        cfg.Admin.AdminOnlyCommands.Add("start");
 
         Assert.False(Allowed(cfg, "случайный игрок", "/start", out _));
-        Assert.False(Allowed(cfg, "случайный игрок", "/set start", out _));
         Assert.True(Allowed(cfg, "влал", "/start", out _));
+
+        // /set start по-прежнему закрыт админ-гейтом на set.
+        Assert.False(Allowed(cfg, "случайный игрок", "/set start", out _));
         Assert.True(Allowed(cfg, "влал", "/set start", out _));
     }
 
@@ -127,7 +132,6 @@ public sealed class CommandAccessPolicyTests
     {
         // Смысл настройки: /set меняет параметры, но выбирать режим и карту может любой.
         var cfg = Default();
-        cfg.Admin.AnyoneCanStart = false;
 
         Assert.True(Allowed(cfg, "игрок", "/mode Duel", out _));
         Assert.True(Allowed(cfg, "игрок", "/map Sandstone", out _));
@@ -139,8 +143,10 @@ public sealed class CommandAccessPolicyTests
     {
         var cfg = Default();
         cfg.Admin.AdminOnlyCommands.Add("play");
+        cfg.Admin.Nicknames.Add("влал");
 
         Assert.False(Allowed(cfg, "игрок", "/play", out _));
+        Assert.True(Allowed(cfg, "влал", "/play", out _));
         Assert.True(Allowed(cfg, "игрок", "/mode", out _));
     }
 
