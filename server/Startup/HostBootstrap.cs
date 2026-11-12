@@ -117,7 +117,9 @@ public static class HostBootstrap
             ? "[config] команд только для админов: нет — все команды доступны всем"
             : $"[config] команд только для админов: " +
               string.Join(", ", serverConfig.Admin.AdminOnlyCommands));
-        Console.WriteLine($"[config] запуск матча кому угодно: {(serverConfig.Admin.AnyoneCanStart ? "да" : "нет")}");
+        Console.WriteLine(serverConfig.Admin.AnyoneCanStart
+            ? "[config] катку может запускать кто угодно (/mode /map /start /play /set start)"
+            : "[config] запускать катку может только админ");
         Console.WriteLine($"[config] режим старта: {serverConfig.DescribeStartMode()}");
         Console.WriteLine($"[config] приветствие: {(string.IsNullOrWhiteSpace(serverConfig.Server.WelcomeMessage) ? "(выкл)" : serverConfig.Server.WelcomeMessage)}");
         Console.WriteLine($"[config] отладка: verbose={(serverConfig.Debug.Verbose || serverConfig.Launch.Verbose ? "да" : "нет")} " +
@@ -231,6 +233,10 @@ public static class HostBootstrap
             Console.WriteLine($"[main] SIGTERM registration skipped: {ex.Message}");
         }
 
+        // Конфиг читался только на старте — теперь правки в config.json применяются
+        // на лету, без перезапуска сервера.
+        using var configWatcher = TryStartConfigWatcher(game);
+
         var commandRouter = new CommandRouter(
             game,
             plugins,
@@ -298,6 +304,28 @@ public static class HostBootstrap
             pluginTickCts.Cancel();
             try { await pluginTick.WaitAsync(TimeSpan.FromSeconds(2)); }
             catch { /* ignore */ }
+        }
+    }
+
+    /// <summary>
+    /// Поднимает слежение за <c>config.json</c>. Если наблюдать нельзя (нет каталога,
+    /// экзотическая ФС) — сервер продолжает работать: это удобство, не условие запуска.
+    /// </summary>
+    private static ConfigWatcher? TryStartConfigWatcher(GameNetHost game)
+    {
+        try
+        {
+            return new ConfigWatcher(
+                ServerConfig.LastLoadedPath,
+                game.ApplyConfig,
+                log: Console.WriteLine);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                $"[config] автоперечитывание выключено ({ex.Message}) — " +
+                "правки применяются через 'config reload'");
+            return null;
         }
     }
 }

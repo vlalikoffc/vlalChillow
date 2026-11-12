@@ -59,7 +59,8 @@ if (IsClientMode(args, out var clientArgs))
 }
 
 // Дальше — только выделенный сервер: config.json создаётся/читается здесь.
-// launch.args дописываются к реальным аргументам (консоль главнее).
+// load уже напечатал путь, найденные проблемы и применённые вместо них значения,
+// поэтому «конфиг не читается» больше не выглядит как тишина.
 var serverConfig = ServerConfig.Load();
 args = MergeLaunchArgs(args, serverConfig.Launch.Args);
 

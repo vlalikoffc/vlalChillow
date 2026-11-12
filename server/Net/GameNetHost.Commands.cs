@@ -40,11 +40,11 @@ public sealed partial class GameNetHost
         var command = (space < 0 ? body : body[..space]).Trim();
         var args = space < 0 ? string.Empty : body[(space + 1)..].Trim();
 
-        // «/set start» — это по сути команда start, права проверяем по ней же.
+        // «/set …» — любая команда, начинающаяся на set, меняет важные параметры хоста
+        // (раунды, победа, команда, старт), поэтому админ-гейт проверяется по самой команде
+        // «set», а не по её аргументам. Просто /start, /play, /mode, /map остаются
+        // неадминскими — катку может запускать кто угодно.
         var effective = command;
-        if (command.Equals("set", StringComparison.OrdinalIgnoreCase)
-            && args.Equals("start", StringComparison.OrdinalIgnoreCase))
-            effective = "start";
 
         // Справка и готовность доступны всем всегда.
         if (IsPublicCommand(effective))
