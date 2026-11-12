@@ -187,7 +187,9 @@ public sealed partial class GameMatchHost
         try
         {
             // gcv.Reliable → LiteNetLib ReliableOrdered (same as client match TX).
-            return peer.Send(payload, DeliveryMethod.ReliableOrdered);
+            // Note: NetPeer.Send returns void in LiteNetLib 2.1.5, so success is "did not throw".
+            peer.Send(payload, DeliveryMethod.ReliableOrdered);
+            return true;
         }
         catch (Exception ex)
         {
@@ -203,7 +205,8 @@ public sealed partial class GameMatchHost
         try
         {
             // WorldObjectState phone path: Unreliable + flags=None.
-            return peer.Send(payload, DeliveryMethod.Unreliable);
+            peer.Send(payload, DeliveryMethod.Unreliable);
+            return true;
         }
         catch
         {

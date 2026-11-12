@@ -419,7 +419,7 @@ public sealed partial class GameMatchHost
                 ? peer
                 : null;
             var n = BroadcastInitReadyExcept(
-                st.Room, exceptSender, echo, tag: "match_tx_WorldObjectRpc", dumpCapture: logRpc);
+                st.Room, exceptSender, echo, tag: "match_tx_WorldObjectRpc", capture: logRpc);
             if (logRpc)
             {
                 Console.WriteLine(
