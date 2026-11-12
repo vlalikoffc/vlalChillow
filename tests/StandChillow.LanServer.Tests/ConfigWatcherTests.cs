@@ -52,8 +52,7 @@ public sealed class ConfigWatcherTests : IDisposable
         File.WriteAllText(_path, ServerConfig.Template.Replace(
             "\"roundTime\": 109", "\"roundTime\": 150"));
 
-        var cfg = ServerConfig.Load(_path);
-
+        Assert.True(ServerConfig.TryLoad(_path, out var cfg, out var error), error);
         Assert.Equal(150, cfg.Timings.RoundTime);
     }
 

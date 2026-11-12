@@ -131,7 +131,15 @@ public sealed class ConfigWatcher : IDisposable
             _lastContentHash = content;
             _lastAppliedUtc = DateTime.UtcNow;
 
-            var config = ServerConfig.Load(Path);
+            // Битый/недописанный файл НЕ применяем: сервер остаётся на прежних
+            // настройках. Заменять весь конфиг дефолтами из-за одного кривого
+            // сохранения — хуже, чем подождать следующего.
+            if (!ServerConfig.TryLoad(Path, out var config, out var error))
+            {
+                _log($"[config] изменение не применено ({error}) — работаю на прежних настройках");
+                return;
+            }
+
             _log($"[config] изменение обнаружено — применил: {Path}");
             _apply(config);
         }

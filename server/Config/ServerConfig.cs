@@ -328,22 +328,59 @@ public sealed class ServerConfig
             return Current;
         }
 
-        try
+        if (TryLoad(target, out var cfg, out var error))
         {
-            var cfg = JsonSerializer.Deserialize<ServerConfig>(
-                File.ReadAllText(target), JsonOptions) ?? new ServerConfig();
-            cfg.Normalize();
-            cfg.LogIssues();
             Current = cfg;
             Console.WriteLine($"[config] загружен: {target}");
             return cfg;
         }
+
+        Console.WriteLine($"[config] ошибка чтения '{target}': {error}");
+        Console.WriteLine("[config] работаю на дефолтах — файл НЕ изменён");
+        Current = new ServerConfig();
+        Current.Normalize();
+        return Current;
+    }
+
+    /// <summary>
+    /// Пытается прочитать существующий файл. <c>false</c> — файла нет, он недоступен или
+    /// это не валидный JSON; в этом случае <paramref name="config"/> не используется.
+    /// </summary>
+    /// <remarks>
+    /// Отдельно от <see cref="Load"/> нужно живому перечитыванию: если файл сохранился
+    /// «полузаписанным», сервер обязан остаться на прежних настройках, а не заменить
+    /// весь конфиг дефолтами.
+    /// </remarks>
+    public static bool TryLoad(string path, out ServerConfig config, out string error)
+    {
+        config = new ServerConfig();
+        error = string.Empty;
+
+        try
+        {
+            if (!File.Exists(path))
+            {
+                error = "файл не найден";
+                return false;
+            }
+
+            var parsed = JsonSerializer.Deserialize<ServerConfig>(
+                File.ReadAllText(path), JsonOptions);
+            if (parsed is null)
+            {
+                error = "файл пустой";
+                return false;
+            }
+
+            parsed.Normalize();
+            parsed.LogIssues();
+            config = parsed;
+            return true;
+        }
         catch (Exception ex)
         {
-            Console.WriteLine($"[config] ошибка чтения '{target}': {ex.Message}");
-            Console.WriteLine("[config] работаю на дефолтах — файл НЕ изменён");
-            Current = new ServerConfig();
-            return Current;
+            error = ex.Message;
+            return false;
         }
     }
 
