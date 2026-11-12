@@ -90,6 +90,17 @@ public sealed partial class GameMatchHost
         return n;
     }
 
+    /// <summary>
+    /// Host-authored int actor prop (same packet Duel uses for <c>round_kills</c>). Keeps the
+    /// local room state and the wire in step, so a late-join snapshot and live peers agree.
+    /// </summary>
+    private void PublishActorIntProp(MatchRoom room, byte actorNr, string key, int value)
+    {
+        var pkt = MatchCodec.BuildSetProperty(
+            NextServerTime(), actorNr, key, LobbyVariant.FromInt(value));
+        BroadcastRoom(room, pkt, tag: "match_tx_SetProperty");
+    }
+
     /// <summary>Reliable to room peers except one (ActorJoined excludes the joiner).</summary>
     private int BroadcastRoomExcept(MatchRoom room, NetPeer except, byte[] payload, string? tag)
     {

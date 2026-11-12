@@ -283,15 +283,23 @@ public sealed partial class GameMatchHost
         if (reason is "bomb-defuse")
         {
             code = MatchMvpCodes.DefusingBomb;
-            preferred = PickTeamActor(room, MatchTeam.Ct, preferAlive: true);
+            // Credit who actually defused, not «some living Ct».
+            preferred = IsFighterOnTeam(room, room.Flow.RoundDefuseActorNr, MatchTeam.Ct)
+                ? room.Flow.RoundDefuseActorNr
+                : PickTeamActor(room, MatchTeam.Ct, preferAlive: true);
         }
         else if (reason is "bomb-explode" or "bomb-explode-rpc")
         {
             code = MatchMvpCodes.PlantingBomb;
-            preferred = room.Flow.BomberActorNr > 0
-                && GetActorTeam(room, (byte)room.Flow.BomberActorNr) == MatchTeam.Tr
-                    ? (byte)room.Flow.BomberActorNr
-                    : PickTeamActor(room, MatchTeam.Tr, preferAlive: false);
+            // Credit who actually planted (handoff included) — the assigned bomber may have
+            // died, dropped the bomb, or never touched it.
+            if (IsFighterOnTeam(room, room.Flow.RoundPlanterActorNr, MatchTeam.Tr))
+                preferred = room.Flow.RoundPlanterActorNr;
+            else if (room.Flow.BomberActorNr > 0
+                && GetActorTeam(room, (byte)room.Flow.BomberActorNr) == MatchTeam.Tr)
+                preferred = (byte)room.Flow.BomberActorNr;
+            else
+                preferred = PickTeamActor(room, MatchTeam.Tr, preferAlive: false);
         }
         else
         {
@@ -305,22 +313,33 @@ public sealed partial class GameMatchHost
         return (preferred, preferred == 0 ? MatchMvpCodes.None : code);
     }
 
+    /// <summary>
+    /// Top fragger of <b>this round</b> on <paramref name="team"/>.
+    /// </summary>
+    /// <remarks>
+    /// Issue #33 follow-up: the bomb family never published <c>round_kills</c>, so the old
+    /// fallback to career <c>kills</c> awarded the MVP to whoever had farmed more over the whole
+    /// match (and to an idle teammate on a tie). The counter is now written by the host
+    /// (<see cref="NoteBombModeRoundKill"/>) and mirrored in the flow state, so the ranking reads
+    /// round-scoped numbers only. No career fallback — wrong evidence is worse than a tie.
+    /// </remarks>
+    /// <summary>
+    /// Test seam for the award path. The award criteria are not configurable — this only exposes
+    /// the same pure decision the round-end bag uses, so the evidence bug above stays pinned.
+    /// </summary>
+    internal static (byte MvpActorNr, byte MvpCode) PickRoundMvpForTests(
+        MatchRoom room, MatchTeam winner, string reason) => PickRoundMvp(room, winner, reason);
+
     private static byte PickTopRoundKillsActor(MatchRoom room, MatchTeam team)
     {
         byte best = 0;
-        var bestKills = -1;
-        foreach (var ((actor, key), value) in room.ActorProps)
+        var bestKills = 0;
+        foreach (var (actor, rounds) in room.Flow.RoundKills)
         {
-            if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
+            if (!IsFighterOnTeam(room, actor, team))
                 continue;
-            if (value.Kind != LobbyVariantKind.Byte || (MatchTeam)value.Byte != team)
-                continue;
-            var kills = ReadActorIntProp(room, actor, MatchRoomPropKeys.RoundKills);
-            if (kills < 0)
-                kills = ReadActorIntProp(room, actor, MatchRoomPropKeys.Kills);
-            if (kills < 0)
-                kills = 0;
-            if (kills > bestKills || (kills == bestKills && (best == 0 || actor < best)))
+            var kills = rounds;
+            if (kills > bestKills || (kills == bestKills && best != 0 && actor < best))
             {
                 bestKills = kills;
                 best = actor;
@@ -328,6 +347,12 @@ public sealed partial class GameMatchHost
         }
         return best;
     }
+
+    /// <summary>Is this a real player (not host/0) on <paramref name="team"/>?</summary>
+    private static bool IsFighterOnTeam(MatchRoom room, byte actorNr, MatchTeam team) =>
+        actorNr != 0
+        && actorNr != MatchHostActor.ActorNr
+        && GetActorTeam(room, actorNr) == team;
 
     private static byte PickTeamActor(MatchRoom room, MatchTeam team, bool preferAlive)
     {

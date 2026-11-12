@@ -69,6 +69,25 @@ public sealed class MatchFlowState
     public bool PendingBombPlant { get; set; }
     public int BomberActorNr { get; set; }
     /// <summary>
+    /// Actor who actually planted the bomb this round (may differ from
+    /// <see cref="BomberActorNr"/>: the bomb is a carried entity and can be handed off or
+    /// dropped). Evidence for the plant MVP; 0 = no plant this round.
+    /// </summary>
+    public byte RoundPlanterActorNr { get; set; }
+    /// <summary>
+    /// Actor who actually defused the bomb this round — evidence for the defuse MVP. Previously
+    /// the award fell back to «first Ct in dictionary order», which is not the defuser.
+    /// 0 = no defuse this round.
+    /// </summary>
+    public byte RoundDefuseActorNr { get; set; }
+    /// <summary>Per-round eliminations (actor → kills), written by the host master.</summary>
+    /// <remarks>
+    /// The bomb family publishes <c>round_kills</c> actor props exactly like Duel does, and those
+    /// stay the wire truth. This mirror exists because a leaver's props can be dropped mid-round;
+    /// the award must survive that.
+    /// </remarks>
+    public Dictionary<byte, int> RoundKills { get; } = new();
+    /// <summary>
     /// Fighter actor nrs marked dead this round. Populated ONLY by a proven combat death —
     /// actor <c>death</c> SetProperty (non-zero), or the Live/BombPlanted no-respawn fallback.
     /// A bare pawn <c>DestroyWorldObject</c> is NOT a death (phase respawn) — see
@@ -253,9 +272,15 @@ public static class MatchFlowRules
     /// </summary>
     public static void FreezeRoundRoster(
         MatchFlowState flow,
-        IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps)
+        IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps,
+        IEnumerable<byte>? pawnOwners = null)
     {
         flow.RoundRoster.Clear();
+        // A pawn is the ground truth for "entered the match". A mid-round joiner takes a `team`
+        // prop while still loading and never spawns during that round (he is dead by design, see
+        // the joiner bootstrap); counting him as alive meant the enemy team could never be
+        // wiped — the round the host decided on a kill fell through to the 109s timeout.
+        HashSet<byte>? entrants = pawnOwners?.ToHashSet();
         foreach (var ((actor, key), value) in actorProps)
         {
             if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
@@ -263,13 +288,25 @@ public static class MatchFlowRules
             if (value.Kind != LobbyVariantKind.Byte)
                 continue;
             var team = (MatchTeam)value.Byte;
-            if (team is MatchTeam.Tr or MatchTeam.Ct)
-                flow.RoundRoster[actor] = team;
+            if (team is not (MatchTeam.Tr or MatchTeam.Ct))
+                continue;
+            if (entrants is { Count: > 0 } && !entrants.Contains(actor))
+                continue;
+            flow.RoundRoster[actor] = team;
         }
     }
 
     /// <summary>Tear the frozen roster down with the bomb authority (round end / PreStart).</summary>
     public static void ClearRoundRoster(MatchFlowState flow) => flow.RoundRoster.Clear();
+
+    /// <summary>
+    /// Drop one actor from the frozen roster because it left the room. Without this a player who
+    /// disconnects mid-round stays in <see cref="MatchFlowState.RoundRoster"/> as «alive», so the
+    /// opposing side can never be wiped and the round runs to the 109s timeout instead of ending
+    /// on the kill that actually decided it.
+    /// </summary>
+    public static void RemoveFromRoundRoster(MatchFlowState flow, byte actorNr) =>
+        flow.RoundRoster.Remove(actorNr);
 
     /// <summary>
     /// Is this actor part of the round that is being played? An empty roster means «not frozen
@@ -282,7 +319,9 @@ public static class MatchFlowRules
     /// others kept the player alive.
     /// </remarks>
     public static bool IsRoundParticipant(MatchFlowState flow, byte actorNr) =>
-        flow.RoundRoster.Count == 0 || flow.RoundRoster.ContainsKey(actorNr);
+        actorNr != 0
+        && actorNr != MatchHostActor.ActorNr
+        && (flow.RoundRoster.Count == 0 || flow.RoundRoster.ContainsKey(actorNr));
 
     /// <summary>
     /// Alive/total counts per side for the <b>current round</b>. Uses the frozen

@@ -162,8 +162,17 @@ public sealed partial class GameMatchHost : IDisposable
     /// When set, only that roster nick gets the bubble (private command feedback must not leak
     /// into the shared match chat). <c>null</c>/empty — everyone in the match.
     /// </param>
+    /// <param name="alsoLastChanceIp">
+    /// Address of the lobby peer that asked, when this is command feedback. The game client keeps
+    /// its lobby socket open for the whole match, so a reply that only made it there looked
+    /// delivered on the server and was invisible in the катка. Given a hint, an unmatchable
+    /// nick
+    /// still reaches one plausible requester (same IP → has a pawn → the only peer) instead of
+    /// being swallowed. Never broadcasts: a private reply must not surface in the shared chat.
+    /// </param>
     /// <returns>Number of match peers the bubble was sent to.</returns>
-    public int SendServerChat(string text, string? nick = null)
+    public int SendServerChat(
+        string text, string? nick = null, System.Net.IPAddress? alsoLastChanceIp = null)
     {
         text = text.Trim();
         if (text.Length == 0)
@@ -206,8 +215,63 @@ public sealed partial class GameMatchHost : IDisposable
             }
         }
 
+        if (sent == 0 && alsoLastChanceIp is not null && target.Length > 0)
+            sent = SendServerChatLastChance(text, alsoLastChanceIp);
+
         return sent;
     }
+
+    /// <summary>
+    /// Last resort for command feedback: one match peer that plausibly is the requester.
+    /// Never broadcasts — a private reply must not surface in the shared match chat.
+    /// </summary>
+    private int SendServerChatLastChance(string text, System.Net.IPAddress peerIp)
+    {
+        List<MatchRoom> rooms;
+        lock (_roomGate)
+            rooms = _roomsByPassword.Values.Distinct().ToList();
+        foreach (var room in rooms)
+        {
+            var candidates = new List<(NetPeer Peer, MatchPeerState State)>();
+            foreach (var (p, st) in _peers)
+            {
+                if (st.Room != room || !st.BootstrapSent)
+                    continue;
+                candidates.Add((p, st));
+            }
+            if (candidates.Count == 0)
+                continue;
+            // Prefer the peer that came from the same machine as the lobby requester.
+            var sameIp = candidates
+                .Where(c => SameAddress(c.Peer.Address, peerIp))
+                .ToList();
+            var pool = sameIp.Count > 0 ? sameIp : candidates;
+            // Then whoever already has a pawn — an observer without a pawn is the wrong target.
+            var spawned = pool.Where(c => room.SpawnedPawns.Contains(c.State.ActorNr)).ToList();
+            var final = spawned.Count > 0 ? spawned : pool;
+            // Two phones on one PC share an IP; that is still the requester, so take the lowest
+            // actor instead of swallowing the reply (exactly one peer — no double bubble).
+            if (final.Count != 1)
+            {
+                Console.WriteLine(
+                    $"[chat] last-chance: peers={final.Count} ip={peerIp}, беру actor " +
+                    $"{final[0].State.ActorNr}");
+                final = final.OrderBy(c => c.State.ActorNr).ToList();
+            }
+            var target = final[0].State;
+            var payload = MatchCodec.BuildChatManagerText(NextServerTime(), text);
+            if (!Send(final[0].Peer, payload))
+                return 0;
+            Console.WriteLine(
+                $"[chat] Server → actor={target.ActorNr} " +
+                $"(match, last-chance by ip={peerIp}): {text}");
+            return 1;
+        }
+        return 0;
+    }
+
+    private static bool SameAddress(System.Net.IPAddress a, System.Net.IPAddress b) =>
+        a.Equals(b) || a.MapToIPv4().Equals(b.MapToIPv4());
 
     /// <summary>
     /// No-op unless <see cref="MatchHostSettings.DebugMatchChat"/>. Posts via

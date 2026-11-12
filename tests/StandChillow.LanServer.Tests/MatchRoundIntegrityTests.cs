@@ -104,6 +104,7 @@ public sealed class MatchRoundIntegrityTests
     public void OnlyRoundParticipants_CanBecomeCombatDeaths()
     {
         var flow = new MatchFlowState();
+        // Before the freeze the roster is empty and accepts everyone but the host actor.
         Assert.True(MatchFlowRules.IsRoundParticipant(flow, actorNr: 9));
 
         MatchFlowRules.FreezeRoundRoster(flow, Props((2, MatchTeam.Tr, null), (3, MatchTeam.Ct, null)));
@@ -143,5 +144,75 @@ public sealed class MatchRoundIntegrityTests
         Assert.False(MatchPropAuthority.RejectsForeignCombatProp(
             senderActorNr: 2, propActorNr: 2, MatchRoomPropKeys.Ping, hostActorNr: 1));
         Assert.False(MatchPropAuthority.IsCombatOutcomeKey(MatchRoomPropKeys.Team));
+    }
+
+    /// <summary>
+    /// Fix #3: the roster is frozen from spawn evidence. A joiner who took a `team` prop while
+    /// still loading (never got a pawn) used to sit in the roster as «alive» — the enemy team
+    /// could then never be wiped and the round fell through to the 109s timeout instead of
+    /// ending on the kill that decided it.
+    /// </summary>
+    [Fact]
+    public void Freeze_UsesSpawnEvidence_WhenGiven()
+    {
+        var props = Props(
+            (2, MatchTeam.Tr, null),
+            (3, MatchTeam.Ct, null),
+            (6, MatchTeam.Tr, null)); // mid-round joiner: team prop, no pawn
+
+        var flow = new MatchFlowState { Phase = MatchFlowPhase.PurchasePhase };
+        MatchFlowRules.FreezeRoundRoster(flow, props, pawnOwners: new byte[] { 2, 3 });
+
+        Assert.Equal(2, flow.RoundRoster.Count);
+        Assert.False(flow.RoundRoster.ContainsKey(6));
+    }
+
+    /// <summary>
+    /// The same rule from the other side: the two players who spawned decide the round. Killing
+    /// Tr #2 must wipe Tr even though idle joiner #6 still carries a Tr team prop.
+    /// </summary>
+    [Fact]
+    public void SpawnedFightersOnly_ResolveTheWipe()
+    {
+        var props = Props((2, MatchTeam.Tr, 1), (3, MatchTeam.Ct, null), (6, MatchTeam.Tr, null));
+        var flow = new MatchFlowState { Phase = MatchFlowPhase.PurchasePhase };
+        MatchFlowRules.FreezeRoundRoster(flow, props, pawnOwners: new byte[] { 2, 3 });
+
+        var resolved = MatchFlowRules.TryResolveWipe(
+            flow, props, bombPlanted: false, out var winner, out var reason);
+
+        Assert.True(resolved);
+        Assert.Equal(MatchTeam.Ct, winner);
+        Assert.Equal("wipe-tr", reason);
+    }
+
+    /// <summary>A leaver leaves the frozen roster, so the round can still be decided.</summary>
+    [Fact]
+    public void Leaver_IsDroppedFromTheRoster()
+    {
+        var props = Props((2, MatchTeam.Tr, null), (3, MatchTeam.Ct, null));
+        var flow = new MatchFlowState { Phase = MatchFlowPhase.PurchasePhase };
+        MatchFlowRules.FreezeRoundRoster(flow, props);
+
+        MatchFlowRules.RemoveFromRoundRoster(flow, actorNr: 3);
+        props[(2, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(0);
+
+        var (_, aliveCt, totalTr, totalCt) = MatchFlowRules.CountAliveFighters(flow, props);
+        Assert.Equal(1, totalTr);
+        Assert.Equal(0, totalCt);
+        Assert.Equal(0, aliveCt);
+    }
+
+    /// <summary>
+    /// The host actor and actor 0 are never round participants — they must not be turned into
+    /// combat deaths even though they may own scene objects.
+    /// </summary>
+    [Fact]
+    public void HostAndZero_AreNeverRoundParticipants()
+    {
+        var flow = new MatchFlowState();
+        Assert.False(MatchFlowRules.IsRoundParticipant(flow, actorNr: 0));
+        Assert.False(MatchFlowRules.IsRoundParticipant(flow, actorNr: MatchHostActor.ActorNr));
+        Assert.True(MatchFlowRules.IsRoundParticipant(flow, actorNr: 2));
     }
 }

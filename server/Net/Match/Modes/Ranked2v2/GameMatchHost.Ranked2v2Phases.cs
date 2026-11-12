@@ -392,6 +392,8 @@ public sealed partial class GameMatchHost
             room.Flow.BomberActorNr = bomberId;
         }
 
+        // Round-scoped MVP counter: zero before anybody can score in this round.
+        ResetBombModeRoundKills(room);
         ClearBombAuthority(room, $"PreStart C2=22 round={round} bomberId={bomberId}");
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
@@ -561,7 +563,9 @@ public sealed partial class GameMatchHost
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
             // #33: wipe is judged against who entered this round, not every stale team prop.
-            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps);
+            // Spawn evidence wins: a mid-round joiner has a team prop but no pawn — he is dead
+            // by design and must not keep his side "alive" past the kill that ended the round.
+            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps, room.SpawnedPawns);
             room.Flow.PendingCombatDestroy.Clear();
         }
 
@@ -661,6 +665,8 @@ public sealed partial class GameMatchHost
                 return;
             }
 
+            if (defused)
+                room.Flow.RoundDefuseActorNr = senderActorNr;
             winner = defused ? MatchTeam.Ct : MatchTeam.Tr;
             reason = defused ? "bomb-defuse" : "bomb-explode-rpc";
             room.Flow.PendingWinner = winner;

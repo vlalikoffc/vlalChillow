@@ -282,6 +282,8 @@ public sealed partial class GameMatchHost
             room.Flow.BomberActorNr = bomberId;
         }
 
+        // Round start (buy C2=22) — the MVP counter is per round, not per match.
+        ResetBombModeRoundKills(room);
         ClearBombAuthority(room, $"Allies buy C2=22 round={round} bomberId={bomberId}");
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
@@ -354,8 +356,9 @@ public sealed partial class GameMatchHost
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
             room.Flow.PendingCombatDestroy.Clear();
-            // #33: the wipe must be judged against who actually entered this round.
-            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps);
+            // #33: the wipe must be judged against who actually entered this round —
+            // a pawn on the field is the proof of entry (see MatchFlowRules.FreezeRoundRoster).
+            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps, room.SpawnedPawns);
             (trCount, ctCount) = CountFightingTeamRoster(room);
         }
 
@@ -467,6 +470,9 @@ public sealed partial class GameMatchHost
             room.Flow.PendingBombPlant = false;
             room.Flow.BombPlanted = true;
             room.Flow.BombPlantedUtc = plantUtc;
+            // The MVP must credit whoever actually planted (the bomb is carried and can be
+            // handed off) — BomberActorNr is only the round's assigned bomber.
+            room.Flow.RoundPlanterActorNr = planterActorNr;
             room.Flow.Phase = MatchFlowPhase.BombPlanted;
             // Evidence, not policy: the family fuse constant differs from the classic one
             // (AlliesFlowParams / DefuseFlowParams vs MatchFlowTestParams), so pick by family.
