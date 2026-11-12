@@ -191,15 +191,18 @@ public sealed class ConfigValidationTests
     public void Normalize_IsRepeatable_AndDoesNotPileUpIssues()
     {
         // config reload вызывает Normalize повторно — список замечаний не должен расти.
+        // Первый проход исправляет значение (=> одно замечание), второй видит уже
+        // корректный конфиг и не добавляет ничего: накопления нет.
         var cfg = new ServerConfig();
         cfg.Timings.RoundTime = -1;
 
         cfg.Normalize();
-        var first = cfg.Issues.Count;
-        cfg.Normalize();
+        Assert.Equal(1, cfg.Issues.Count);
+        Assert.Equal(109, cfg.Timings.RoundTime);
 
-        Assert.True(first > 0);
-        Assert.Equal(first, cfg.Issues.Count);
+        cfg.Normalize();
+        Assert.Empty(cfg.Issues);
+        Assert.Equal(109, cfg.Timings.RoundTime);
     }
 
     [Fact]
