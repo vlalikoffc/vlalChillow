@@ -351,10 +351,39 @@ Server-authoritative:
 ## Implementation
 
 - `GameMatchHost.Allies.cs` — **sole** Allies FSM: `/set start`→C2=21 (skip 11)→22 anchor→31 combat stay→field=3→40→101 WinTeam
-- `GameMatchHost.WorldObjects.cs` — Allies field=3 plant observe → `TryEnterAlliesBombPlanted`; field=1/2 relay-only
+- `GameMatchHost.WorldObjects.cs` — Allies field=3 plant observe → `TryEnterBombPlanted`; field=1/2 relay-only. The router makes **no** plant decision: it only reacts to the `MatchPlantDecision` verdict (accept = keep relay, wrong phase = pose relay, other denials = drop).
 - `GameMatchHost.Ranked2v2HalfTime.cs` — half-time 111/112/113 + forced team swap (Allies-only callers)
 - `GameMatchHost.Ranked2v2RoundEnd.cs` — shared `EnterRoundEndPause` delegates bag shape to `BuildAlliesRoundEndRoomProps`; `ContinueAfterRoundEnd` redirects Allies → `ContinueAfterRoundEndAllies`
-- `GameMatchHost.Ranked2v2Phases.cs` — `TryEnterBombPlanted` redirects Allies → `TryEnterAlliesBombPlanted`; generic Ranked path never runs for `Ranked2v2` C0
+- `GameMatchHost.Allies.cs` — **single** plant entry point `TryEnterBombPlanted` for the whole bomb family (`Ranked2v2` / `Ranked2v2Alt` / `RankedDefuse` / `Defuse`) **and** the classic Ranked loop; the only wire difference is the C2=40 bag shape, driven by `IsAlliesRoom`
+- `Kernel/MatchPlantPolicy.cs` — the plant rule itself (`BombFamilyModeIds`, phase, planter team, one-bomb-per-round, pose-relay decision) + `MatchPlantDecision`
+
+### Plant rule and the carried bomb (#33)
+
+The round-start `bomberId` is an **identity, never a plant permit**. The bomb is a carried entity: the
+bomber may drop it, death drops it, and any attacker who picks it up may plant it — the plant Rpc then
+carries that planter's own pawn id, which is what the client expects. The old
+«only the assigned bomber may plant» gate (`IsAuthoritativePlanter`) discarded such plants, leaving the
+planter with a bomb nobody else had — a round-long desync. What still holds:
+
+| Rule | Where |
+|------|-------|
+| one plant per round | `MatchPlantPolicy.Deny.AlreadyPlanted` |
+| combat phase only (C2=31 for the family, Live for classic) | `Deny.Phase` |
+| attackers only (unknown team accepted — prop may not have landed) | `Deny.PlanterTeam` |
+| round already ending / over | `Deny.RoundEnding` / `Deny.RoundOver` |
+
+`bomberId` wire behaviour is unchanged (#29): C2=22 only, never re-assigned mid-round.
+
+### Round integrity (#33)
+
+- `MatchFlowRules.FreezeRoundRoster` / `ClearRoundRoster` — wipe is judged against who actually
+  entered the round, so a stale `team` prop (left / never spawned / rejoined) cannot fake a wipe on
+  some peers only. Frozen on combat entry, cleared with the bomb authority.
+- `Kernel/MatchPropAuthority.cs` — a peer may not author **another** player's combat counters
+  (`kills`, `fair_kills`, `round_kills`, `death`, `score`, `assists`); the host actor may, by design.
+- BombManager Rpc (plant / defuse / explode) are sent through the non-droppable path
+  (`SendCritical` / `BroadcastInitReadyCritical`): C2=40 is structural, so its Rpc must not be
+  droppable under backpressure either.
 - `AlliesFlowParams` in `MatchWorld.cs` — probe-verified host timers (wire vs internal)
 
 ### Match over → lobby (dedicated)

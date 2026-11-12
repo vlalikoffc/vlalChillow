@@ -6,6 +6,7 @@ using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Kernel;
 
 namespace StandChillow.LanServer.Net;
 
@@ -37,6 +38,16 @@ public sealed partial class GameMatchHost
             if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
                 return;
             var room = st.Room;
+
+            // Issue #33 trust boundary: a peer may not author another player's combat counter
+            // (death/kills/…) — that is a one-packet desync for the victim and the round maths.
+            if (MatchPropAuthority.RejectsForeignCombatProp(
+                    st.ActorNr, actorNr, key, MatchHostActor.ActorNr))
+            {
+                Console.WriteLine(
+                    $"[match-host] SetProperty {MatchPropAuthority.DescribeForeignCombatProp(st.ActorNr, actorNr, key)}");
+                return;
+            }
 
             // Host-owned room keys (actor=0): clients must not author C2 / scores / timers.
             // Blind relay of client CtScore/TrScore/C2 caused Escalation "Prep without RoundEnd"
@@ -168,6 +179,14 @@ public sealed partial class GameMatchHost
             {
                 foreach (var (k, v) in props)
                 {
+                    if (MatchPropAuthority.RejectsForeignCombatProp(
+                            st.ActorNr, actorNr, k, MatchHostActor.ActorNr))
+                    {
+                        Console.WriteLine(
+                            $"[match-host] SetProperties {MatchPropAuthority.DescribeForeignCombatProp(st.ActorNr, actorNr, k)}");
+                        continue;
+                    }
+
                     if (actorNr == 0 && IsHostOwnedRoomPropKey(k))
                     {
                         Console.WriteLine(

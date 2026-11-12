@@ -25,6 +25,17 @@ public sealed partial class GameMatchHost
             var purchaseCombat = IsAlliesRoom(room) || IsDuelRoom(room);
             // Duel-only: C2=11 FFA Destroy is a combat death (respawn), not a phase-transition wipe.
             var duelFfa = IsDuelRoom(room) && phase == MatchFlowPhase.AlliesPreWarmup;
+            // #33: only somebody who actually entered this round can die in it. A late joiner
+            // still loading, or a leftover pawn of a player who never joined the round, used to
+            // become a "death" on the peers that saw the Destroy and not on the others.
+            if (!MatchFlowRules.IsRoundParticipant(room.Flow, owner))
+            {
+                room.Flow.PendingCombatDestroy.Remove(owner);
+                Console.WriteLine(
+                    $"[match-host] match-flow: pawn Destroy owner={owner} in {phase} — not in this " +
+                    "round's roster (late joiner / leftover pawn), no combat-death grace (#33)");
+                return;
+            }
             if (!MatchFlowRules.DestroyMayBeCombatDeath(phase, bombPlanted, purchaseCombat)
                 && !duelFfa)
             {
@@ -67,6 +78,13 @@ public sealed partial class GameMatchHost
                 return;
             }
             var now = DateTime.UtcNow;
+            // #33: drop arms for actors that are not in this round (roster is authoritative).
+            foreach (var stale in room.Flow.PendingCombatDestroy.Keys
+                         .Where(o => !MatchFlowRules.IsRoundParticipant(room.Flow, o))
+                         .ToList())
+            {
+                room.Flow.PendingCombatDestroy.Remove(stale);
+            }
             foreach (var owner in room.Flow.PendingCombatDestroy.Keys.ToList())
             {
                 var respawned = room.LivingPawns.Values.Any(p => p.OwnerActorNr == owner);

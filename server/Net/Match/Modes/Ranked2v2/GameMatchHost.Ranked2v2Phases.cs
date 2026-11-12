@@ -299,6 +299,8 @@ public sealed partial class GameMatchHost
             room.Flow.LastBombPlantField = 0;
             room.Flow.LastBombPlantRpcId = 2;
             room.Flow.LastBombPlantTimeValue = 0;
+            // Round identity (who entered) dies with the round (#33) — never carried across.
+            MatchFlowRules.ClearRoundRoster(room.Flow);
         }
         Console.WriteLine(
             $"[match-host] match-flow: bomb authority clear ({reason}) " +
@@ -558,6 +560,8 @@ public sealed partial class GameMatchHost
             room.Flow.PhaseEndsUtc = DateTime.UtcNow + MatchFlowTestParams.RoundDuration;
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
+            // #33: wipe is judged against who entered this round, not every stale team prop.
+            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps);
             room.Flow.PendingCombatDestroy.Clear();
         }
 
@@ -591,81 +595,6 @@ public sealed partial class GameMatchHost
             $"money={(round <= 1 ? MatchFlowTestParams.RoundStartMoney.ToString() : "keep")} " +
             $"bomberId={bomberId}");
         PostServerDebugChat($"Live · раунд {round}");
-    }
-
-    /// <summary>
-    /// Plant authority. Allies: field=3 during C2=31 combat; Ranked: field=1/2 RoundLive only.
-    /// Returns Allies fan-out peer count (0 if no payload / non-Allies; -1 if rejected).
-    /// </summary>
-    private int TryEnterBombPlanted(
-        MatchRoom room,
-        byte sourceField,
-        byte[]? plantPayload = null,
-        double plantTimeValue = 0,
-        byte rpcId = 2,
-        byte gaaTarget = 2,
-        byte planterActorNr = 0)
-    {
-        if (IsAlliesRoom(room))
-        {
-            return TryEnterAlliesBombPlanted(
-                room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget, planterActorNr);
-        }
-
-        MatchFlowPhase fromPhase;
-        lock (_roomGate)
-        {
-            fromPhase = room.Flow.Phase;
-            if (room.Flow.BombPlanted || room.Flow.Phase == MatchFlowPhase.BombPlanted)
-            {
-                Console.WriteLine(
-                    $"[match-host] match-flow: BombManager plant field={sourceField} " +
-                    "IGNORED — already BombPlanted this round");
-                return -1;
-            }
-            if (room.Flow.PendingEndReason is not null)
-            {
-                Console.WriteLine(
-                    $"[match-host] match-flow: BombManager plant field={sourceField} " +
-                    $"IGNORED — pendingEnd={room.Flow.PendingEndReason}");
-                return -1;
-            }
-            if (fromPhase is not MatchFlowPhase.RoundLive)
-            {
-                Console.WriteLine(
-                    $"[match-host] match-flow: BombManager plant field={sourceField} " +
-                    $"IGNORED — phase={fromPhase} (evidence-only: RoundLive only; " +
-                    "no PreStart/Prep plant→C2=40 invent)");
-                return -1;
-            }
-
-            var plantUtc = DateTime.UtcNow;
-            room.Flow.PendingBombPlant = false;
-            room.Flow.BombPlanted = true;
-            room.Flow.BombPlantedUtc = plantUtc;
-            room.Flow.Phase = MatchFlowPhase.BombPlanted;
-            room.Flow.PhaseEndsUtc = DefuseTimer.FuseEndsUtc(plantUtc, MatchFlowTestParams.BombFuse);
-        }
-
-        DateTime plantedAt;
-        lock (_roomGate)
-            plantedAt = room.Flow.BombPlantedUtc;
-        var nowSec = ServerTimeSeconds();
-        var fuseSec = MatchFlowTestParams.BombFuse.TotalSeconds;
-        var deadline = DefuseTimer.FuseWireDeadlineSec(nowSec, MatchFlowTestParams.BombFuse);
-        BroadcastRoomProps(room,
-        [
-            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),
-            (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
-            (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
-        ], reason: $"BombPlanted field={sourceField}", phaseDeadlineSec: deadline);
-        Console.WriteLine(
-            $"[observe] BombManager plant field={sourceField} → BombPlanted C2=40 " +
-            $"plantUtc={plantedAt:O} fuse={fuseSec:0}s (explode only at plant+{fuseSec:0}s) " +
-            $"fromPhase={fromPhase}");
-        PostServerDebugChat($"бомба установлена (fuse {fuseSec:0}s)");
-        ApplyPlantEconomy(room, planterActorNr);
-        return 0;
     }
 
     /// <summary>

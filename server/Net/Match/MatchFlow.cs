@@ -76,6 +76,19 @@ public sealed class MatchFlowState
     /// </summary>
     public HashSet<byte> DeadActors { get; } = new();
     /// <summary>
+    /// Fighters that actually entered the current round (actor → team), frozen when combat
+    /// starts (C2=31 for the bomb family, Live for classic Ranked).
+    /// </summary>
+    /// <remarks>
+    /// Wipe must be judged against <b>who is in this round</b>, not against every team prop the
+    /// room has ever seen. Issue #33: a player who left, or who never spawned this round, kept a
+    /// stale <c>team</c> prop and made the "alive" counts wrong — one client saw a wipe, others did
+    /// not, and the round ended on some peers only. Frozen per round and torn down with the bomb
+    /// authority, so all four bomb-family modes (and classic Ranked) answer the same question the
+    /// same way.
+    /// </remarks>
+    public Dictionary<byte, MatchTeam> RoundRoster { get; } = new();
+    /// <summary>
     /// Owners whose LivingPawn was Destroyed during <see cref="MatchFlowPhase.RoundLive"/> /
     /// <see cref="MatchFlowPhase.BombPlanted"/> with no respawn yet, keyed to the Destroy time.
     /// Deferred combat-death fallback: if no CreateWorldObject re-spawns the owner within
@@ -233,6 +246,50 @@ public static class MatchFlowRules
         return false;
     }
 
+    /// <summary>
+    /// Freeze the fighters that entered this round. Call when combat starts; the roster then
+    /// survives respawns and any later <c>team</c> prop churn (half-time, rejoins, spectators)
+    /// until <see cref="ClearRoundRoster"/> at round end.
+    /// </summary>
+    public static void FreezeRoundRoster(
+        MatchFlowState flow,
+        IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps)
+    {
+        flow.RoundRoster.Clear();
+        foreach (var ((actor, key), value) in actorProps)
+        {
+            if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
+                continue;
+            if (value.Kind != LobbyVariantKind.Byte)
+                continue;
+            var team = (MatchTeam)value.Byte;
+            if (team is MatchTeam.Tr or MatchTeam.Ct)
+                flow.RoundRoster[actor] = team;
+        }
+    }
+
+    /// <summary>Tear the frozen roster down with the bomb authority (round end / PreStart).</summary>
+    public static void ClearRoundRoster(MatchFlowState flow) => flow.RoundRoster.Clear();
+
+    /// <summary>
+    /// Is this actor part of the round that is being played? An empty roster means «not frozen
+    /// yet» and accepts everyone (Warmup / pre-combat), so the check can be used unconditionally.
+    /// </summary>
+    /// <remarks>
+    /// Issue #33: a pawn that belongs to somebody who never entered this round (late joiner still
+    /// loading, spectator with a lingering pawn, player who already left) must never be turned into
+    /// a combat death — that fake kill cost a round on the peers that saw the Destroy while the
+    /// others kept the player alive.
+    /// </remarks>
+    public static bool IsRoundParticipant(MatchFlowState flow, byte actorNr) =>
+        flow.RoundRoster.Count == 0 || flow.RoundRoster.ContainsKey(actorNr);
+
+    /// <summary>
+    /// Alive/total counts per side for the <b>current round</b>. Uses the frozen
+    /// <see cref="MatchFlowState.RoundRoster"/> when it is populated, so a stale team prop (a
+    /// player who left, never spawned, or rejoined) cannot fake a wipe (#33). Falls back to the
+    /// live team props before combat freezes the roster.
+    /// </summary>
     public static (int AliveTr, int AliveCt, int TotalTr, int TotalCt) CountAliveFighters(
         MatchFlowState flow,
         IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps)
@@ -241,6 +298,21 @@ public static class MatchFlowRules
         var aliveCt = 0;
         var totalTr = 0;
         var totalCt = 0;
+
+        if (flow.RoundRoster.Count > 0)
+        {
+            foreach (var (actor, team) in flow.RoundRoster)
+            {
+                if (team == MatchTeam.Tr) totalTr++;
+                else totalCt++;
+                if (IsActorDead(flow, actorProps, actor))
+                    continue;
+                if (team == MatchTeam.Tr) aliveTr++;
+                else aliveCt++;
+            }
+            return (aliveTr, aliveCt, totalTr, totalCt);
+        }
+
         foreach (var ((actor, key), value) in actorProps)
         {
             if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)

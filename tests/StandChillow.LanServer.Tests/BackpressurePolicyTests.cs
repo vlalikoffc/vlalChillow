@@ -39,4 +39,35 @@ public sealed class BackpressurePolicyTests
         // Пропуск Destroy/CWO/SetProperties/C2 = клиент навсегда разъезжается по миру.
         Assert.False(GameMatchHost.IsDroppableWhenBacklogged(op));
     }
+
+    /// <summary>
+    /// #33: плант/дефьюз/взрыв идут опкодом WorldObjectRpc. Дроп такого пакета отстающему пиру
+    /// оставляет его в живом раунде, который у всех уже закончился, — это десинк, а не косметика.
+    /// Поэтому у решающих BombManager Rpc есть отдельный, недропаемый путь.
+    /// </summary>
+    [Fact]
+    public void CriticalRpcPath_IsNotSubjectToBackpressure()
+    {
+        var source = ServerSourceRoot();
+        var broadcast = File.ReadAllText(
+            Path.Combine(source, "Net", "Match", "Host", "GameMatchHost.Broadcast.cs"));
+        var worldObjects = File.ReadAllText(
+            Path.Combine(source, "Net", "Match", "Host", "GameMatchHost.WorldObjects.cs"));
+
+        // SendCritical bypasses the droppable check by writing straight through SendCore.
+        Assert.Contains("SendCritical(NetPeer peer, byte[] payload) => SendCore", broadcast,
+            StringComparison.Ordinal);
+        // Plant fan-out and the BombManager relay must use the critical path.
+        Assert.Contains("BroadcastInitReadyCritical", broadcast, StringComparison.Ordinal);
+        Assert.Contains("isBombManagerRpc", worldObjects, StringComparison.Ordinal);
+    }
+
+    private static string ServerSourceRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "server")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        return Path.Combine(dir!.FullName, "server");
+    }
 }
