@@ -239,8 +239,15 @@ public sealed class DashboardLayoutTests
         Assert.Equal("00:09", clock);
         Assert.Contains("БОЙ", text);
 
-        snap.PhaseEndsUtc = DateTime.MinValue;
-        var (_, noClock, _) = DashboardView.DescribePhase(snap, now);
+        // No host deadline (PhaseEndsUtc = MinValue, Time prop not a deadline for bomb modes):
+        // the dashboard must show "--:--" instead of inventing a countdown.
+        var noDeadline = new MatchSnapshot
+        {
+            GameModeId = "Ranked2v2",
+            Phase = MatchFlowPhase.PurchasePhase,
+            PhaseEndsUtc = DateTime.MinValue,
+        };
+        var (_, noClock, _) = DashboardView.DescribePhase(noDeadline, now);
         Assert.Equal("--:--", noClock);
     }
 
