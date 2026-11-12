@@ -643,17 +643,17 @@ public sealed partial class GameMatchHost
             // 2.07 gold: round-end bag also carries Duration (6.0) — issue #27.
             (MatchRoomPropKeys.Duration, LobbyVariant.FromDouble(durationSec)),
         };
-        // Key order follows gold 2.07 exactly (#27): the client walks the bag in wire order, and
-        // C2=101 is Time, Duration, CtScore, TrCoLosses, CtCoLosses, WinTeam, C2.
-        props.Add((MatchRoomPropKeys.CtScore, LobbyVariant.FromInt(scoreCt)));
-        props.Add((MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)));
+        // Gold 2.07 C2=101 is winner-shaped: only the winner's score key, then
+        // {loser}CoLosses, {winner}CoLosses, WinTeam, C2 (13/13 round-end bags).
         if (winner == MatchTeam.Tr)
         {
+            props.Add((MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)));
             props.Add((MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(coLossesCt)));
             props.Add((MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(coLossesTr)));
         }
         else
         {
+            props.Add((MatchRoomPropKeys.CtScore, LobbyVariant.FromInt(scoreCt)));
             props.Add((MatchRoomPropKeys.TrCoLosses, LobbyVariant.FromInt(coLossesTr)));
             props.Add((MatchRoomPropKeys.CtCoLosses, LobbyVariant.FromInt(coLossesCt)));
         }

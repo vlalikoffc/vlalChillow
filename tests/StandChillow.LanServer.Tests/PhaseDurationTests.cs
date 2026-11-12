@@ -78,12 +78,12 @@ public sealed class PhaseDurationTests
 
     /// <summary>
     /// Issue #27 — gold 2.07 (802 prop packets, 0 exceptions) carries <c>Duration</c> as the
-    /// <b>second</b> key, right after <c>Time</c>, in every C2 bag, and C2=101 walks
-    /// Time, Duration, CtScore, TrCoLosses, CtCoLosses, WinTeam, C2. Asserted on the built bag so
-    /// a future edit cannot reorder the anchor/countdown pair the client relies on.
+    /// <b>second</b> key, right after <c>Time</c>, in every C2 bag. C2=101 is winner-shaped:
+    /// only the winning side's score key, then {loser}CoLosses, {winner}CoLosses, WinTeam, C2
+    /// (13/13 gold round-end bags).
     /// </summary>
     [Fact]
-    public void AlliesRoundEndBag_KeepsGoldKeyOrderAndBothScores()
+    public void AlliesRoundEndBag_TrWinMatchesGoldOrder()
     {
         var props = GameMatchHost.BuildAlliesRoundEndRoomProps(
             nowSec: 10,
@@ -99,7 +99,6 @@ public sealed class PhaseDurationTests
             {
                 MatchRoomPropKeys.Time,
                 MatchRoomPropKeys.Duration,
-                MatchRoomPropKeys.CtScore,
                 MatchRoomPropKeys.TrScore,
                 MatchRoomPropKeys.CtCoLosses,
                 MatchRoomPropKeys.TrCoLosses,
@@ -109,11 +108,12 @@ public sealed class PhaseDurationTests
             props.Select(p => p.Key).ToArray());
 
         Assert.Equal(2, Single(props, MatchRoomPropKeys.TrScore).Int);
-        Assert.Equal(1, Single(props, MatchRoomPropKeys.CtScore).Int);
+        Assert.Equal(1, Single(props, MatchRoomPropKeys.CtCoLosses).Int);
+        Assert.Equal(0, Single(props, MatchRoomPropKeys.TrCoLosses).Int);
     }
 
     [Fact]
-    public void AlliesRoundEndBag_CtWinAlsoCarriesBothScores()
+    public void AlliesRoundEndBag_CtWinMatchesGoldOrder()
     {
         var props = GameMatchHost.BuildAlliesRoundEndRoomProps(
             nowSec: 20,
@@ -122,10 +122,23 @@ public sealed class PhaseDurationTests
             scoreCt: 3,
             coLossesTr: 1,
             coLossesCt: 0,
-            GameMatchHost.BuildWinTeamProps(MatchTeam.Ct, mvpNr: 2, mvpCode: 1));
+            GameMatchHost.BuildWinTeamProps(MatchTeam.Ct, mvpNr: 2, mvpCode: 2));
 
-        Assert.Equal(1, Single(props, MatchRoomPropKeys.TrScore).Int);
+        Assert.Equal(
+            new[]
+            {
+                MatchRoomPropKeys.Time,
+                MatchRoomPropKeys.Duration,
+                MatchRoomPropKeys.CtScore,
+                MatchRoomPropKeys.TrCoLosses,
+                MatchRoomPropKeys.CtCoLosses,
+                MatchRoomPropKeys.WinTeam,
+                MatchRoomPropKeys.C2,
+            },
+            props.Select(p => p.Key).ToArray());
+
         Assert.Equal(3, Single(props, MatchRoomPropKeys.CtScore).Int);
+        Assert.Equal(1, Single(props, MatchRoomPropKeys.TrCoLosses).Int);
         Assert.Equal(6.0, Single(props, MatchRoomPropKeys.Duration).Double, precision: 6);
         Assert.Equal(20.0, Single(props, MatchRoomPropKeys.Time).Double, precision: 6);
     }
