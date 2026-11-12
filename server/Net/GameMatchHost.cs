@@ -935,6 +935,9 @@ public sealed partial class GameMatchHost : IDisposable
         st.AppId = null;
         st.BootstrapPending = false;
         st.BootstrapSent = false;
+        // Issue #28: a rematch on the same peer is a fresh session — wait for the identity batch
+        // again instead of inheriting the previous match's latch.
+        st.IdentityAlreadyBootstrapped = false;
         st.JoinerUidSeen = false;
         st.JoinerFromLobbySeen = false;
         st.JoinerAvatarSeen = false;
