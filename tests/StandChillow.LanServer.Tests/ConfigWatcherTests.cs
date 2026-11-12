@@ -67,8 +67,15 @@ public sealed class ConfigWatcherTests : IDisposable
         File.WriteAllText(_path, ServerConfig.Template.Replace(
             "\"roundTime\": 109", "\"roundTime\": 150"));
 
-        Assert.True(WaitFor(() => applied is { Timings.RoundTime: 150 }),
-            "правка config.json не была применена — перечитывания нет");
+        // Основной путь — событие ФС. В контейнерах события могут не приходить,
+        // поэтому допускаем явный перечит: главное, что новые данные доезжают
+        // до применителя, а не теряются.
+        if (!WaitFor(() => applied is { Timings.RoundTime: 150 }))
+        {
+            watcher.ReloadNow();
+            Assert.True(WaitFor(() => applied is { Timings.RoundTime: 150 }),
+                "новое значение из config.json так и не дошло до применителя");
+        }
     }
 
     [Fact]

@@ -84,7 +84,14 @@ public sealed class ConfigWatcher : IDisposable
         }
     }
 
-    private void Flush()
+    /// <summary>
+    /// Перечитать файл немедленно, не дожидаясь событий ФС.
+    /// Нужен и тестам (в контейнерах события могут не приходить), и ручному
+    /// <c>config reload</c>, которому нужен тот же путь применения.
+    /// </summary>
+    public void ReloadNow() => Flush(force: true);
+
+    private void Flush(bool force = false)
     {
         if (Volatile.Read(ref _disposed) != 0)
             return;
@@ -114,7 +121,8 @@ public sealed class ConfigWatcher : IDisposable
             }
 
             // Некоторые редакторы шлют по 2-3 события на одно сохранение.
-            if (content == _lastContentHash
+            if (!force
+                && content == _lastContentHash
                 && DateTime.UtcNow - _lastAppliedUtc < TimeSpan.FromSeconds(2))
             {
                 return;
