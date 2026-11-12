@@ -34,8 +34,10 @@ internal sealed class DashboardFrame
         Array.Fill(_rows, new string(' ', Width));
     }
 
-    public const int MinWidth = 60;
-    public const int MinHeight = 16;
+    /// <summary>Absolute floor; below this the layout still clips, never wraps.</summary>
+    public const int MinWidth = 20;
+
+    public const int MinHeight = 8;
 
     public int Width { get; }
 

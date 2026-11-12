@@ -334,8 +334,11 @@ public sealed class CliDashboard : IDisposable
         {
             if (!Console.IsOutputRedirected)
             {
-                w = Math.Clamp(Console.WindowWidth, 60, 240);
-                h = Math.Clamp(Console.WindowHeight, 16, 100);
+                // One column is reserved: painting a character into the very last cell of the
+                // very last row makes most terminals scroll by a line ("scroll on bottom-right"),
+                // which is exactly the kind of drift this renderer must never cause.
+                w = Math.Max(DashboardFrame.MinWidth, Math.Min(Console.WindowWidth - 1, 240));
+                h = Math.Max(DashboardFrame.MinHeight, Math.Min(Console.WindowHeight, 100));
             }
         }
         catch
