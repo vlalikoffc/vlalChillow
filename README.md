@@ -109,7 +109,7 @@ dotnet build -c Release
 dotnet run -c Release
 ```
 
-Phones: open StandChillow → LAN → your lobby should appear → join → chat. The interactive dashboard requires an ANSI-capable TTY; use `--console` for plain logs or `--dashboard` to force the full-screen UI.
+Phones: open StandChillow → LAN → your lobby should appear → join → chat. The interactive dashboard appears automatically on a real terminal (UTF-8 is enabled for you, no manual `chcp` needed); use `--console` for plain logs, `--dashboard` to force the full-screen UI, `--dashboard-check` to verify the layout without a terminal, or `--dashboard-dump` to print the frames as plain text. See `server/Dashboard/README.md`.
 
 ### Ports
 
@@ -255,6 +255,7 @@ Plugins are admin/display sidecars only — they must not invent wire protocol o
 ```
 server/           # Dedicated host (build & run here)
 server/Net/Match/Modes/   # Per-mode FSM + probe docs
+server/Dashboard/ # CLI dashboard (display-only; UTF-8, cell-exact layout)
 server/Plugins/   # Plugin API + loader
 server/plugins-src/   # Plugin source (Telegram)
 ARCHITECTURE.md   # Internal module map for contributors

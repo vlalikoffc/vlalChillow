@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+using System.Text;
 using StandChillow.LanServer;
 using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Dashboard;
@@ -25,6 +26,25 @@ using StandChillow.LanServer.Startup;
 //   Dedicated host (default): dotnet run -c Release [--debug-chat] [-- lobbyTitle]
 //   ConnectAsClient learning: dotnet run -c Release -- --client [--team ct|tr] [options]
 // Captures are evidence only — never replay them into dedicated-host replies.
+
+// UTF-8 до первого вывода: иначе русский текст в консоли превращается в '?' или кракозябры,
+// а на Windows ещё и VT-последовательности дашборда печатаются как текст.
+TerminalCapabilities.ConfigureConsoleEncoding();
+
+// --dashboard-check: отрисовать раскладку без терминала (CI / ssh без TTY) и выйти.
+// --dashboard-dump:  напечатать кадры обычным текстом (без ANSI) для глазами-проверки.
+if (args.Contains("--dashboard-check", StringComparer.Ordinal))
+{
+    Environment.ExitCode = DashboardSelfCheck.Run(Console.Out);
+    return;
+}
+
+if (args.Contains("--dashboard-dump", StringComparer.Ordinal))
+{
+    Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    DashboardSelfCheck.Dump(Console.Out);
+    return;
+}
 
 // Проба (--client) идёт первой веткой и конфиг НЕ читает вообще:
 // ни debug, ни captures, ни timings — поведение пробы от конфига не зависит.

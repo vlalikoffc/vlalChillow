@@ -1,54 +1,124 @@
 # CLI Dashboard
 
-A full-screen terminal dashboard for the dedicated LAN host — a Standoff-2 style TAB
-scoreboard plus lobby view, chat and kill feed. **Display-only**: it renders state the host
-already tracks and events pushed through `DashboardHub`. It never touches the wire protocol.
+Полноэкранный терминальный дашборд для выделенного LAN-хоста: лобби, TAB-табло матча,
+чат, фид убийств и панель лога. **Только отображение** — он рисует состояние, которое хост уже
+знает, и события из `DashboardHub`. Провод он не трогает: ни одного байта в UDP.
 
-## Run
+## Запуск
 
 ```bash
 cd server
-dotnet run -c Release            # dedicated host + dashboard (default)
-dotnet run -c Release -- "моё лобби"   # optional lobby title
+dotnet run -c Release                    # дашборд включается сам, если есть живой терминал
+dotnet run -c Release -- "моё лобби"     # необязательное название лобби
+dotnet run -c Release -- --dashboard     # включить принудительно
+dotnet run -c Release -- --console       # только логи, без дашборда (--no-dashboard)
 ```
 
-The dashboard activates automatically whenever stdout is a real terminal. If output is piped
-/ redirected, it falls back to plain logging.
+Если stdout перенаправлен (в файл, в пайп, в CI) — дашборд не включается и печатаются обычные
+логи. Язык, кодировка и VT-поддержка терминала определяются автоматически.
 
-- **Logs** go to `server/latest.log` (truncated on start) and `bin/.../logs/run-*.log`.
-  In dashboard mode the console shows **only** the dashboard — normal `Console.WriteLine`
-  logging is routed to the files. Tail the log in another shell:
+## Почему раньше «летели строки»
 
-  ```bash
-  tail -f server/latest.log
-  ```
+Старый рендер делал три вещи, каждая из которых ломала экран сама по себе:
 
-## Views
+1. Рисовал кадр как `ESC[H` + строки через `\n`. Как только строк в кадре становилось больше,
+   чем в окне (или聊天-сообщение переносилось на вторую строку), терминал **скроллился**, и
+   следующий `ESC[H` попадал уже на другую строку — экран бесконечно уползал вверх.
+2. Ширина считалась как `string.Length`, то есть UTF-16 code units, а не ячейки терминала.
+   Кириллица, рамки, широкие глифы — и все колонки съезжали.
+3. Красился truecolor-последовательностями `38;2;r;g;b` и рисовал `██`, `◆`, `☠`, `…`.
+   Старый `conhost` (cmd.exe, PowerShell 5) этого не понимает: вместо дашборда — мусор из
+   `←[96m`, а вместо глифов — «тофу».
 
-- **Lobby** (before Play): header (mode / map / players / match state), a players card
-  (all real members with lobby / in-match presence) and a
-  chat card.
-- **Match** (after Play / match in progress): centered mode·map + phase/timer, big
-  team-colored score tiles, a two-column TAB scoreboard (**DEFENSE (CT)** cyan left,
-  **ATTACK (T)** orange right) with `# · avatar · Name · Money · K A D Score · Ping`
-  (`HOST` for the synthetic host actor), a round/MVP banner, and chat + kill feed below.
-  Kill feed is `killer  Kill ☠ victim` with team colors and no red highlight.
+Плюс UTF-8 ставился уже после первого кадра и только на вывод, поэтому русский текст
+превращался в `?`/кракозябры, а набранные кириллицей команды не доходили.
 
-## Commands (typed into the input line)
+## Как устроено сейчас
 
-`start`/`play`, `mode <m>`, `map <l>`, `title <t>`, `roster`, `status`, `binds`, `quit`.
-Phone chat slash-commands (`/mode`, `/map`, `/play`) keep working as before.
+| Файл | Роль |
+|------|------|
+| `DashboardModel.cs` | снимок состояния на один кадр (сеть/хост не трогает) |
+| `DashboardView.cs` | чистая отрисовка модели в кадр |
+| `DashboardFrame.cs` | сетка **фиксированного** размера + абсолютное позиционирование строк |
+| `Chrome.cs` / `Layout.cs` | карточки и измерение в **ячейках** терминала (ANSI = 0, CJK = 2) |
+| `Ansi.cs` | только 16 базовых цветов + bold/dim/reverse |
+| `TerminalCapabilities.cs` | UTF-8 на stdin/stdout, VT-режим, безопасные глифы |
+| `TerminalWriter.cs` | свой UTF-8-writer в обход `Console.Out` |
+| `DashboardLogSink.cs` | кольцевой буфер лога для панели «ЛОГ» |
+| `DashboardSelfCheck.cs` | рендер без терминала (`--dashboard-check`, `--dashboard-dump`) |
 
-## Kill-feed attribution caveat
+Инварианты кадра (их проверяют тесты и `--dashboard-check`):
 
-The wire only carries **victim** deaths (`death` prop / DeathMatch kill). The killer is a
-**best-effort** guess: the dashboard credits the enemy-team actor whose `kills`/`fair_kills`
-counter bumped within ~2.5s of the death. When no matching bump is seen the killer shows as
-`?`. No packets are invented to attribute kills.
+- кадр всегда ровно `height` строк и ровно `width` ячеек в каждой строке — перенос невозможен;
+- ни одной `\n`/`\t`/control-символа в готовых строках — скролл невозможен, даже если
+  содержимое длиннее окна;
+- текст из телефона (ник, чат) санитизируется: `\n` → пробел, ANSI вырезается;
+- не изменившийся кадр не перерисовывается (нет мигания);
+- при уменьшении окна панель лога исчезает первой, табло — последним.
 
-## Layout preview (dev aid)
+## Экраны
+
+- **Лобби** (до `play`): шапка (название, режим, карта, игроки, пиры, id), карточка игроков
+  (`#`, чип, имя, `host`), чат, панель лога.
+- **Матч** (после `play`): фаза и таймер, тайлы счёта CT/T, строка режим/карта/раунд/MVP,
+  двухколоночное табло (`#`, имя, `$`, `У`/`П`/`С`, `ОЧК`, `PING`), баннер раунда,
+  чат + фид убийств, лог.
+
+Узкое окно (< 104 колонки) — табло в одну колонку (CT сверху, T снизу), никаких «сжатых до
+нечитаемости» полей.
+
+## Команды (вводятся в строку внизу)
+
+`start`/`play`, `mode <m>`, `map <l>`, `set ...`, `end`, `title <t>`, `roster`, `status`,
+`config`, `plugins`, `binds`, `help`, `quit`. Слэш-формы (`/mode`, `/play`) работают как в
+чате с телефона.
+
+Горячие клавиши в строке ввода: `Enter` — отправить, `Backspace`, `Esc` — очистить,
+`Ctrl+L` — очистить панель лога, `Ctrl+C` — аккуратное завершение (как `quit`).
+
+## Логи
+
+В режиме дашборда `Console.WriteLine` не попадает в терминал: он уходит в
+`server/latest.log` и `bin/.../logs/run-*.log`, а последние строки дублируются в панель «ЛОГ»
+(цвет по префиксу: `[match-host]`, `[lobby]`, `[mode:*]`, ошибки — красным). Хвост в другом
+шелле:
 
 ```bash
-STANDCHILLOW_DASH_DEMO=match dotnet run -c Release   # seeds fake actors/chat/feed
+tail -f server/latest.log
+```
+
+## Проверка раскладки без терминала
+
+```bash
+cd server
+dotnet run -c Release -- --dashboard-check   # прогон всех размеров окна, exit code 0/1
+dotnet run -c Release -- --dashboard-dump    # напечатать кадры обычным текстом
+```
+
+`--dashboard-check` рендерит лобби, матч и пустой матч на размерах от 60×16 до 240×100 и
+падает, если хоть одна строка не совпала по ширине или в кадр просочился control-символ.
+Это же гоняют тесты в CI.
+
+## Превью раскладки (dev aid)
+
+```bash
+STANDCHILLOW_DASH_DEMO=match dotnet run -c Release   # фейковые игроки/чат/фид
 STANDCHILLOW_DASH_DEMO=lobby dotnet run -c Release
 ```
+
+## Печальное место про убийства
+
+Провод несёт только смерть **жертвы** (`death` prop / kill в DeathMatch). Убийца — это
+best-effort: дашборд засчитывает того врага, у которого в пределах ~2.5 с вырос
+`kills`/`fair_kills`. Если совпадения нет — в фиде будет `?`. Пакеты для атрибуции не
+выдумываются.
+
+## Совместимость
+
+- **Windows**: Windows Terminal / PowerShell 7 / `cmd.exe` с поддержкой VT — дашборд;
+  старый conhost без VT — автоматический откат на обычные логи (и ASCII-рамки, если
+  кодовая страница не UTF-8).
+- **Linux/macOS**: любой UTF-8 терминал (bash, zsh, tmux, ssh). При `TERM=dumb` или
+  `NO_COLOR` — обычные логи.
+- Кодировка включается на старте процесса, до первого кадра, и на ввод тоже
+  (`Console.InputEncoding`), поэтому кириллица работает и в именах, и в командах.

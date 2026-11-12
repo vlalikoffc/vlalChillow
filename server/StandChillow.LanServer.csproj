@@ -6,6 +6,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Product>влалChillow</Product>
+    <!-- Dashboard/log output must never depend on the operator's OS locale, and the runtime
+         should not fail when a machine has no ICU data. Console text is written as UTF-8
+         explicitly (see TerminalWriter / TerminalCapabilities). -->
+    <InvariantGlobalization>true</InvariantGlobalization>
     <AssemblyTitle>влалChillow LAN Server</AssemblyTitle>
   </PropertyGroup>
 
