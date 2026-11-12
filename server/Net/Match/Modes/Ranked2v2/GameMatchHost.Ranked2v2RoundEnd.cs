@@ -136,7 +136,9 @@ public sealed partial class GameMatchHost
             ? BuildDuelRoundEndRoomProps(nowSec, winner, scoreTr, scoreCt, winTeamProps)
             : IsAlliesRoom(room)
                 ? BuildAlliesRoundEndRoomProps(
-                    nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps)
+                    nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps,
+                    // #27: gold C2=101 Duration matches the pause this mode actually uses.
+                    durationSec: RoundEndPauseFor(room).TotalSeconds)
                 : BuildRoundEndRoomProps(
                     nowSec, winner, scoreTr, scoreCt, coLossesTr, coLossesCt, winTeamProps);
         var logTag = duel ? "duel" : IsAlliesRoom(room) ? "allies" : "match-flow";

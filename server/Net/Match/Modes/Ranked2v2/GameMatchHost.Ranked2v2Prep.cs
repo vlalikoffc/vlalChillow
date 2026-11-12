@@ -26,12 +26,12 @@ public sealed partial class GameMatchHost
             bomberId = actorNr;
         }
 
-        BroadcastRoomProps(room,
-        [
-            (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
-        ], reason: $"Prep Tr-join bomberId={bomberId}");
+        // Issue #29: a lone `bomberId` bag outside C2=22 hands a second C4 to the new T on every
+        // client ("several bombers, only one can plant"). 2.07 gold only ever carries bomberId in
+        // the C2=22 PreStart bag, so remember the pick and let the next C2 bag publish it.
         Console.WriteLine(
-            $"[match-host] match-flow: bomberId={bomberId} (Tr joined during Prep, was 0)");
+            $"[match-host] match-flow: bomberId={bomberId} remembered (Tr joined during Prep, was 0) " +
+            "— no lone bomberId bag (gold: C2=22 only, #29)");
     }
 
     /// <summary>
@@ -67,15 +67,11 @@ public sealed partial class GameMatchHost
             (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
         };
-        lock (_roomGate)
-        {
-            if (room.Flow.BomberActorNr > 0)
-                props.Add((MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(room.Flow.BomberActorNr)));
-        }
+        // Issue #29: no bomberId in this extra bag — gold publishes it only in C2=22.
         BroadcastRoomProps(room, props, reason: "Prep spawn-extend 5s");
         Console.WriteLine(
             "[match-host] match-flow: Prep extended 5s — living fighter awaiting spawn " +
-            $"(client Time refreshed; bomberId={(room.Flow.BomberActorNr)})");
+            $"(client Time refreshed; bomberId={(room.Flow.BomberActorNr)} stays C2=22-only)");
         return true;
     }
 

@@ -47,6 +47,8 @@ public sealed partial class GameMatchHost
             return;
 
         st.BootstrapPending = true;
+        // Issue #28: keep IdentityAlreadyBootstrapped — a rejoin on the same live peer will not
+        // repeat the identity batch, so the gate must not wait for it again.
         st.JoinerUidSeen = false;
         st.JoinerFromLobbySeen = false;
         st.JoinerAvatarSeen = false;
@@ -134,6 +136,9 @@ public sealed partial class GameMatchHost
                 return;
             st.BootstrapSent = true;
             st.BootstrapPending = false;
+            // Issue #28: identity props above are one-shot; latch them so a same-peer rejoin is
+            // not stuck behind the INIT gate waiting for a batch the client will never resend.
+            st.IdentityAlreadyBootstrapped = true;
         }
         try { st.BootstrapTimeoutCts?.Cancel(); }
         catch { /* ignore */ }
@@ -373,6 +378,11 @@ public sealed partial class GameMatchHost
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: OK actor={actorNr} team={liveTeam} " +
                         "respawned (CWO seen)");
+                    // Issue #28: the peer is a fighter again — refresh the world it may have
+                    // missed while it was away (other pawns + tracked round entities + plant).
+                    SendMatchStateSnapshotToPeer(peer, room, excludeActorNr: actorNr);
+                    SendLivingPawnSnapshotToPeer(peer, room, excludeOwnerActorNr: actorNr);
+                    SyncBombPlantStateToPeer(peer, room);
                     if (userId is { } uidOk)
                     {
                         lock (_roomGate)
@@ -428,6 +438,11 @@ public sealed partial class GameMatchHost
     /// other humans' actor props (team/avatar/money/…) so a GIP late joiner syncs to the
     /// live match instead of staying on WaitingPlayers with nameless ghosts.
     /// </summary>
+    /// <remarks>
+    /// Issue #28: the bag is only as good as what the host has actually published. A peer that
+    /// rejoins mid-round needs every room key the host still tracks, plus the tracked round
+    /// entities below, otherwise it stays behind until the next round.
+    /// </remarks>
     private void SendMatchStateSnapshotToPeer(NetPeer peer, MatchRoom room, byte excludeActorNr)
     {
         List<(string Key, LobbyVariant Value)> roomProps;
@@ -463,6 +478,47 @@ public sealed partial class GameMatchHost
             $"[match-host] TX match-state snapshot to joiner peer " +
             $"(excludeActor={excludeActorNr} roomProps={roomProps.Count} " +
             $"actorProps={actorProps.Count} liveC2={room.RoomC2})");
+
+        // Issue #28: the room/actor props above do not recreate non-pawn world objects. A peer that
+        // rejoins mid-round must still see drops and (with the BombManager plant Rpc below) the
+        // planted bomb, otherwise it walks into an empty world until the next round.
+        SendTrackedRoundEntitySnapshotToPeer(peer, room);
+    }
+
+    /// <summary>
+    /// Issue #28 — re-TX tracked round entities (weapon drops, grenades, planted-bomb props) to a
+    /// rejoining peer. Values come from what this host actually relayed this round
+    /// (<see cref="MatchRoom.TrackedRoundEntities"/>); nothing is invented. The plant Rpc itself
+    /// is sent by <c>SyncBombPlantStateToPeer</c> right after this snapshot.
+    /// </summary>
+    private void SendTrackedRoundEntitySnapshotToPeer(NetPeer peer, MatchRoom room)
+    {
+        List<TrackedRoundEntity> entities;
+        lock (_roomGate)
+            entities = room.TrackedRoundEntities.Values.ToList();
+
+        if (entities.Count == 0)
+            return;
+
+        // Rebuild each CWO from the stored decoded fields (kind, owner, fus tag and trailing
+        // payload intact) so only the host header carries a fresh server time.
+        foreach (var entity in entities)
+        {
+            var f = entity.Fields;
+            SendAndDump(peer, MatchCodec.BuildCreateWorldObject(
+                NextServerTime(),
+                f.Kind,
+                f.ObjectId,
+                f.TypeName,
+                f.FusTag,
+                ownerActorNr: f.OwnerActorNr,
+                trailingPayload: f.Trailing));
+        }
+
+        Console.WriteLine(
+            $"[match-host] TX round-entity snapshot to joiner peer " +
+            $"(entities={entities.Count} ids=[" +
+            $"{string.Join(",", entities.Select(e => e.Fields.ObjectId))}])");
     }
 
     /// <summary>

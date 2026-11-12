@@ -938,6 +938,16 @@ public static class MatchCodec
     /// standing pose + equal-run extension prefix from phone ticks. Full mid-body avatar
     /// fields still opaque — pose/seq/time/marker are enough to start the stream.
     /// </summary>
+    /// <remarks>
+    /// <b>Issue #24 — never lie about a loadout.</b> This builder emits zeros for the mid-body
+    /// avatar block. Every phone-host State in the 2.07 gold (<c>captures/captures.zip</c>,
+    /// session <c>20261112_0351…0404</c>) is <b>≥139 bytes</b> and carries a real weapon/avatar
+    /// record; the zeroed variant is only 93 bytes. A client that parses the record therefore
+    /// reads an out-of-range <c>weaponType</c> (<c>ArgumentException: weaponType</c> in
+    /// <c>WeaponrySnapshot</c>). The dedicated host must not fabricate State records at all —
+    /// only owners author them, everyone else relays. Kept for ConnectAsClient probing, where a
+    /// synthetic pose is the whole point of the stream (see <c>server/Net/PROBE_README.md</c>).
+    /// </remarks>
     public static byte[] BuildWorldObjectStateStanding(
         short objectId,
         uint seq,

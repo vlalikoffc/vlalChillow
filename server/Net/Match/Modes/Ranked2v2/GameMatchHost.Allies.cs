@@ -231,10 +231,11 @@ public sealed partial class GameMatchHost
         }
         ClearBombAuthority(room, "Allies WarmUp C2=21");
         MatchHostSettings.MatchStartArmed = false;
-        // Gold len≈28: Time, C2 — anchor; no RoundStartTime on WarmUp.
+        // 2.07 gold len≈28: Time, Duration, C2 — anchor Time (no RoundStartTime on WarmUp).
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Duration, LobbyVariant.FromDouble(dur.TotalSeconds)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.WarmUp)),
         ], reason: "Allies WarmUp C2=21");
         Console.WriteLine(
@@ -284,9 +285,11 @@ public sealed partial class GameMatchHost
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
         // Gold: Time == RoundStartTime == now (ΔTime-RST = 0). Never wire now+buy − pad.
+        // 2.07 gold (#27): every C2 bag carries `Duration` (seconds); `Time` stays an anchor.
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Duration, LobbyVariant.FromDouble(dur.TotalSeconds)),
             (MatchRoomPropKeys.Round, LobbyVariant.FromInt(round)),
             (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
             (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
@@ -354,10 +357,14 @@ public sealed partial class GameMatchHost
         }
 
         var nowSec = ServerTimeSeconds();
-        // Gold: Time ≈ stime/1000 (fresh now) — not now+10 / not now+90.
+        // Gold: Time ≈ stime/1000 (fresh now) — not now+10 / not now+90. 2.07 adds `Duration`
+        // (combat 110.0 in gold); the client derives its countdown from this, not from Time (#27).
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            // Gold C2=31 Duration is 110.0 (client 1:50) while the host deadline stays 109s.
+            (MatchRoomPropKeys.Duration,
+                LobbyVariant.FromDouble(AlliesFlowParams.ClientCombatCountdownSeconds)),
             (MatchRoomPropKeys.CtRoundStartPlayersCount, LobbyVariant.FromInt(ctCount)),
             (MatchRoomPropKeys.TrRoundStartPlayersCount, LobbyVariant.FromInt(trCount)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.PurchasePhase)),
@@ -450,6 +457,15 @@ public sealed partial class GameMatchHost
                 Console.WriteLine(
                     $"[match-host] allies: BombManager plant field={sourceField} " +
                     $"IGNORED — phase={fromPhase} (combat C2=31 only)");
+                return -1;
+            }
+            // Issue #25: gold plant Rpc always carries the assigned bomber's pawn id.
+            if (!IsAuthoritativePlanter(room, planterActorNr))
+            {
+                Console.WriteLine(
+                    $"[match-host] allies: BombManager plant field={sourceField} " +
+                    $"IGNORED — actor={planterActorNr} is not the assigned bomber " +
+                    $"(bomberId={room.Flow.BomberActorNr}); no C2=40");
                 return -1;
             }
 
@@ -618,12 +634,17 @@ public sealed partial class GameMatchHost
         int scoreCt,
         int coLossesTr,
         int coLossesCt,
-        List<(string Key, LobbyVariant Value)> winTeamProps)
+        List<(string Key, LobbyVariant Value)> winTeamProps,
+        double durationSec = 6.0)
     {
         var props = new List<(string Key, LobbyVariant Value)>
         {
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            // 2.07 gold: round-end bag also carries Duration (6.0) — issue #27.
+            (MatchRoomPropKeys.Duration, LobbyVariant.FromDouble(durationSec)),
         };
+        // Gold 2.07 C2=101 is winner-shaped: only the winner's score key, then
+        // {loser}CoLosses, {winner}CoLosses, WinTeam, C2 (13/13 round-end bags).
         if (winner == MatchTeam.Tr)
         {
             props.Add((MatchRoomPropKeys.TrScore, LobbyVariant.FromInt(scoreTr)));
@@ -651,7 +672,6 @@ public sealed partial class GameMatchHost
         if (!FightersAwaitingSpawn(room))
             return false;
 
-        int bomberId = 0;
         lock (_roomGate)
         {
             if (room.Flow.Phase != MatchFlowPhase.WarmupWillFinish)
@@ -666,17 +686,16 @@ public sealed partial class GameMatchHost
                 if (pick > 0)
                     room.Flow.BomberActorNr = pick;
             }
-            bomberId = room.Flow.BomberActorNr;
         }
 
         var nowSec = ServerTimeSeconds();
+        // Issue #29: no bomberId in this extra bag — 2.07 gold carries it only in C2=22.
         var props = new List<(string Key, LobbyVariant Value)>
         {
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),
+            (MatchRoomPropKeys.Duration, LobbyVariant.FromDouble(AlliesFlowParams.BuyPhase.TotalSeconds)),
             (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
         };
-        if (bomberId > 0)
-            props.Add((MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)));
         BroadcastRoomProps(room, props, reason: "Allies buy spawn-extend 5s");
         Console.WriteLine(
             "[match-host] allies: buy C2=22 extended 5s — spawn wait (Time=RST=now anchor)");

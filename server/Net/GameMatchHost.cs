@@ -562,6 +562,9 @@ public sealed partial class GameMatchHost : IDisposable
                 _manager.PollEvents();
 
                 var now = Environment.TickCount64;
+                // Issue #24: host no longer authors synthetic WorldObjectState (that zeroed
+                // avatar record made clients throw on `weaponType`). Owner State is relayed in
+                // HandleWorldObjectStateRelay; this tick only logs pawns still waiting for it.
                 if (now >= _nextStateTickUtc)
                 {
                     _nextStateTickUtc = now + (long)StateTickInterval.TotalMilliseconds;
@@ -932,6 +935,9 @@ public sealed partial class GameMatchHost : IDisposable
         st.AppId = null;
         st.BootstrapPending = false;
         st.BootstrapSent = false;
+        // Issue #28: a rematch on the same peer is a fresh session — wait for the identity batch
+        // again instead of inheriting the previous match's latch.
+        st.IdentityAlreadyBootstrapped = false;
         st.JoinerUidSeen = false;
         st.JoinerFromLobbySeen = false;
         st.JoinerAvatarSeen = false;

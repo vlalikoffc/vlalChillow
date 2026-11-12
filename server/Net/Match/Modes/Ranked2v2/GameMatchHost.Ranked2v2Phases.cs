@@ -563,12 +563,11 @@ public sealed partial class GameMatchHost
 
         if (txBomberFix && bomberId > 0)
         {
-            BroadcastRoomProps(room,
-            [
-                (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
-            ], reason: $"RoundLive bomberId-fix={bomberId}");
+            // Issue #29: do NOT publish a lone bomberId at the RoundLive edge — 2.07 gold only
+            // carries it inside the C2=22 PreStart bag; a mid-round bag spawns a second C4.
             Console.WriteLine(
-                $"[match-host] match-flow: bomberId={bomberId} (fixed 0→T at RoundLive edge)");
+                $"[match-host] match-flow: bomberId={bomberId} picked at RoundLive edge " +
+                "(no lone bomberId bag — C2=22 only per #29)");
         }
 
         var nowSec = ServerTimeSeconds();

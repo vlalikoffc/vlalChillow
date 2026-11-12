@@ -297,6 +297,18 @@ public sealed partial class GameMatchHost
                         "(not plantable — relay only)");
                     dropRelay = false;
                 }
+                else if (!IsAuthoritativePlanter(st.Room, st.ActorNr))
+                {
+                    // Issue #25: gold plant Rpc always carries the *assigned* bomber's pawn id
+                    // (round bomberId 4 → pawn 514, 1 → 131, …). A plant from any other T would
+                    // make the client compare the payload pawn id against its own bomber and log
+                    // "Invalid bomber, expected -1, actual <pawnId>". Drop it instead of relaying.
+                    Console.WriteLine(
+                        $"[observe] BombManager plant field={parsed.Field} " +
+                        $"from actor={st.ActorNr} IGNORED — not the assigned bomber " +
+                        $"(bomberId={st.Room.Flow.BomberActorNr}); no C2=40, no relay");
+                    dropRelay = true;
+                }
                 else
                 {
                     Console.WriteLine(
@@ -574,6 +586,37 @@ public sealed partial class GameMatchHost
         }
     }
 
+    /// <summary>
+    /// Issue #25 — plant authority belongs to the round's assigned bomber only.
+    /// Gold 2.07 (<c>captures/captures.zip</c>, 20261112_0351…0404): every BombManager field=3
+    /// plant carries the pawn net id of the round's <c>bomberId</c> (bomber 4 → pawn 514,
+    /// 1 → 131, 4 → 516, …). Any other attacker planting makes the client compare the payload
+    /// pawn id against its own bomber and log <c>Invalid bomber, expected -1, actual &lt;id&gt;</c>.
+    /// Actor 0 (host-authored path) and Escalation auto-plant (no carrier bomber, i32(-2)) pass.
+    /// </summary>
+    private bool IsAuthoritativePlanter(MatchRoom room, byte actorNr)
+    {
+        if (actorNr == 0 || IsEscalationRoom(room))
+            return true;
+        lock (_roomGate)
+        {
+            var bomber = room.Flow.BomberActorNr;
+            if (bomber <= 0)
+            {
+                // No bomber recorded for this round (T joined after C2=22, or the pick never
+                // landed). Adopt the planter instead of refusing: refusing here would leave the
+                // round with no plantable bomb at all. The plant Rpc already carries this actor's
+                // own pawn id, so the client's bomber match holds and no second C4 is created.
+                room.Flow.BomberActorNr = actorNr;
+                Console.WriteLine(
+                    $"[observe] BombManager plant from actor={actorNr} adopted as round bomber " +
+                    "(bomberId was 0 — no C2=22 bag re-TX, #25)");
+                return true;
+            }
+            return bomber == actorNr;
+        }
+    }
+
     private void TickLivingPawnStates()
     {
         List<(MatchRoom Room, MatchLivingPawn Pawn)> snapshot;
@@ -594,21 +637,20 @@ public sealed partial class GameMatchHost
             }
         }
 
-        foreach (var (room, pawn) in snapshot)
+        // Issue #24: do NOT fabricate WorldObjectState for pawns whose owner has not streamed
+        // yet. Gold phone hosts only ever forward the owner's own State record; the host-authored
+        // "standing" record has a zeroed mid-body avatar block, which the 2.07 client parses as
+        // an out-of-range `weaponType` (WeaponrySnapshot) and logs an ArgumentException on every
+        // spawn of another player. A pawn with no owner State simply keeps its CreateWorldObject
+        // pose on other clients — the same as a phone host before the first owner tick.
+        foreach (var (_, pawn) in snapshot)
         {
-            var pkt = MatchCodec.BuildWorldObjectStateStanding(
-                pawn.ObjectId, pawn.Seq, pawn.TickTime, pawn.PosX, pawn.PosY, pawn.PosZ);
-            var n = BroadcastInitReadyUnreliable(room, pkt, tag: pawn.StateCaptures < 4
-                ? "match_tx_WorldObjectState"
-                : null);
-            if (pawn.StateCaptures < 4)
-                pawn.StateCaptures++;
             if (pawn.Seq == 1 || pawn.Seq % 40 == 0)
             {
                 Console.WriteLine(
-                    $"[match-host] TX WorldObjectState Unreliable id={pawn.ObjectId} " +
-                    $"seq={pawn.Seq} len={pkt.Length} → peers={n} " +
-                    "(host standing — no owner State yet)");
+                    $"[match-host] SKIP host WorldObjectState id={pawn.ObjectId} " +
+                    $"seq={pawn.Seq} (owner has not streamed State yet — relay-only per #24; " +
+                    "fabricated State carries no real weaponType)");
             }
         }
     }
@@ -630,9 +672,6 @@ public sealed partial class GameMatchHost
     private void HandleTrackedRoundEntityCreate(
         NetPeer peer, MatchRoom room, MatchCodec.ParsedCreateWorldObject parsed)
     {
-        lock (_roomGate)
-            room.TrackedRoundEntities[parsed.ObjectId] = parsed.TypeName;
-
         var echo = MatchCodec.BuildCreateWorldObject(
             NextServerTime(),
             parsed.Kind,
@@ -641,6 +680,8 @@ public sealed partial class GameMatchHost
             parsed.FusTag,
             ownerActorNr: parsed.OwnerActorNr,
             trailingPayload: parsed.Trailing);
+        lock (_roomGate)
+            room.TrackedRoundEntities[parsed.ObjectId] = new TrackedRoundEntity(parsed);
         var n = BroadcastInitReadyExcept(room, peer, echo, tag: "match_tx_CreateWorldObject");
         Console.WriteLine(
             $"[match-host] TX relay CreateWorldObject id={parsed.ObjectId} " +
@@ -662,7 +703,7 @@ public sealed partial class GameMatchHost
         lock (_roomGate)
         {
             toDestroy = room.TrackedRoundEntities
-                .Select(kv => (kv.Key, kv.Value))
+                .Select(kv => (kv.Key, kv.Value.TypeName))
                 .ToList();
             room.TrackedRoundEntities.Clear();
         }

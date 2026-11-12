@@ -18,11 +18,16 @@ internal sealed class MatchRoom
     public readonly Dictionary<short, MatchLivingPawn> LivingPawns = new();
     /// <summary>
     /// Non-scene Entity world objects created this round (weapon drops, planted-bomb entities,
-    /// etc.) keyed by net id → type name. Scene managers (bootstrap ids 1–8) are never tracked.
-    /// Cleared via host <c>DestroyWorldObject</c> on RoundEnd / PreStart (phone-host clears
-    /// leftovers between rounds).
+    /// etc.) keyed by net id → the decoded CreateWorldObject fields this host relayed. Scene
+    /// managers (bootstrap ids 1–8) are never tracked. Cleared via host <c>DestroyWorldObject</c>
+    /// on RoundEnd / PreStart (phone-host clears leftovers between rounds).
     /// </summary>
-    public readonly Dictionary<short, string> TrackedRoundEntities = new();
+    /// <remarks>
+    /// Issue #28: keep every decoded field (kind/owner/fus/trailing) so a rejoining peer receives
+    /// the same object the others did — no re-guessed fus tag, no lost drop payload. The packet is
+    /// rebuilt on replay so its host header carries a fresh server time.
+    /// </remarks>
+    public readonly Dictionary<short, TrackedRoundEntity> TrackedRoundEntities = new();
     /// <summary>
     /// DeathMatch combat attribution — last enemy the attacker damaged via a pawn damage
     /// WorldObjectRpc (<c>field=5</c>), keyed by attacker actor nr → (victim actor nr, time).
@@ -45,4 +50,15 @@ internal sealed class MatchRoom
     public readonly Dictionary<byte, DateTime> LastAuthoredDeath = new();
     public byte RoomC2 { get; set; }
     public MatchFlowState Flow { get; } = new();
+}
+
+/// <summary>
+/// Issue #28 — a non-pawn world object this host relayed during the round, stored as decoded
+/// <see cref="MatchCodec.ParsedCreateWorldObject"/> fields so it can be re-sent to a rejoining
+/// peer exactly as other peers saw it.
+/// </summary>
+internal readonly record struct TrackedRoundEntity(
+    MatchCodec.ParsedCreateWorldObject Fields)
+{
+    public string TypeName => Fields.TypeName;
 }
