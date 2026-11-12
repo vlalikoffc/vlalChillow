@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
 using LiteNetLib;
+using StandChillow.LanServer.Diagnostics;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
@@ -43,10 +44,14 @@ public sealed partial class GameMatchHost : IDisposable
     private readonly ConcurrentDictionary<NetPeer, MatchPeerState> _peers = new();
     private readonly Dictionary<string, MatchRoom> _roomsByPassword = new(StringComparer.Ordinal);
     private readonly object _roomGate = new();
-    private readonly string _captureDir;
     private readonly string _lobbyId;
-    private int _captureIndex;
     private int _serverTimeSeed;
+
+    /// <summary>
+    /// Packets skipped on purpose because a peer's reliable queue was over
+    /// <see cref="ReliableQueueSoftLimit"/> (or the send threw). Surfaced in <c>[health]</c>.
+    /// </summary>
+    private long _droppedSends;
 
     /// <summary>
     /// Match gap <c>C0</c>/<c>C1</c> — must follow lobby <c>GameModeId</c>/<c>SelectedLevels[0]</c>.
@@ -167,8 +172,6 @@ public sealed partial class GameMatchHost : IDisposable
     {
         _lobbyId = lobbyId;
         _listenPort = port;
-        _captureDir = Path.Combine(AppContext.BaseDirectory, "captures");
-        Directory.CreateDirectory(_captureDir);
         _serverTimeSeed = Environment.TickCount;
 
         _listener = new EventBasedNetListener();
@@ -177,6 +180,14 @@ public sealed partial class GameMatchHost : IDisposable
             AutoRecycle = true,
             IPv6Enabled = false,
             ChannelsCount = ChannelsCount,
+            // Bigger UDP buffers: a burst of 10 players' state ticks must never overflow
+            // the kernel receive buffer (that shows up as lag + reliable retransmits).
+            // LiteNetLib's OS default is ~1 MB; ask for more where the OS allows it.
+            UpdateTime = 15,
+            PingInterval = 1000,
+            DisconnectTimeout = 10_000,
+            // More packets in flight per reliable channel before stalling the queue.
+            PacketPoolSize = 4096,
         };
 
         _listener.ConnectionRequestEvent += request =>
@@ -514,34 +525,100 @@ public sealed partial class GameMatchHost : IDisposable
     }
 
     private int _stateTickCounter;
+    private long _lastStatsTickUtc;
 
     /// <summary>
-    /// Host simulation tick — 128 Hz for wipe / fuse / phase-deadline detection.
-    /// Wire timers (fuse 40s, pause 6s, …) stay gold durations; only the poll cadence
-    /// is raised so decisive outcomes EnterRoundEnd on the same tick they become true.
+    /// Host simulation tick. Phase/wipe/fuse decisions only need ~30 Hz; polling the
+    /// socket faster than the OS can deliver packets just burns CPU. The earlier 128 Hz
+    /// loop spent most of its budget on <see cref="NetManager.PollEvents"/> + per-packet
+    /// logging, which is what made 10-player matches melt.
     /// </summary>
-    private static readonly TimeSpan HostTickPeriod = TimeSpan.FromMilliseconds(1000.0 / 128.0);
+    private static readonly TimeSpan HostTickPeriod = TimeSpan.FromMilliseconds(33);
+
+    /// <summary>WorldObjectState thin re-broadcast cadence (~20 Hz, same as phone ≈50ms).</summary>
+    private static readonly TimeSpan StateTickInterval = TimeSpan.FromMilliseconds(50);
+
+    private long _nextStateTickUtc;
 
     private async Task PollLoop()
     {
         Console.WriteLine(
-            $"[match-host] poll loop tickrate=128 Hz period={HostTickPeriod.TotalMilliseconds:0.###}ms " +
-            "(wipe/fuse/phase checks every tick; WorldObjectState thin ticks ~every 3rd)");
+            $"[match-host] poll loop period={HostTickPeriod.TotalMilliseconds:0}ms " +
+            "(socket drain every tick; phase/wipe/fuse checks every tick; " +
+            "WorldObjectState thin ticks every 50ms)");
+
         while (!_cts.IsCancellationRequested)
         {
             var tickStart = Environment.TickCount64;
-            _manager.PollEvents();
-            _stateTickCounter++;
-            // Phone WorldObjectState ≈50ms; at 128 Hz ≈7.8ms → every 6th–7th poll ≈50ms.
-            if (_stateTickCounter % 6 == 0)
-                TickLivingPawnStates();
-            // Match flow every tick: wipe / fuse expiry / phase deadlines.
-            TickMatchFlow();
+            try
+            {
+                // Drain the socket. This is the only thing that must never be delayed:
+                // every millisecond spent here before PollEvents is receive-buffer risk.
+                _manager.PollEvents();
+
+                var now = Environment.TickCount64;
+                if (now >= _nextStateTickUtc)
+                {
+                    _nextStateTickUtc = now + (long)StateTickInterval.TotalMilliseconds;
+                    TickLivingPawnStates();
+                }
+
+                // Match flow each tick: wipe / fuse expiry / phase deadlines.
+                TickMatchFlow();
+
+                if (Diagnostics.StatsEnabled && now - _lastStatsTickUtc >= 10_000)
+                {
+                    _lastStatsTickUtc = now;
+                    LogHealthSnapshot();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[match-host] poll tick failed: {FormatException(ex)}");
+            }
+
             var elapsed = Environment.TickCount64 - tickStart;
             var delayMs = (int)Math.Max(0, HostTickPeriod.TotalMilliseconds - elapsed);
             try { await Task.Delay(delayMs, _cts.Token); }
             catch (OperationCanceledException) { break; }
         }
+    }
+
+    /// <summary>
+    /// One-line health snapshot every 10 s: peers, per-peer reliable backlog, dropped sends,
+    /// capture/log pressure. This is the line to look at when «сервер тормозит» — it shows
+    /// whether the host is the bottleneck or one phone is.
+    /// </summary>
+    private void LogHealthSnapshot()
+    {
+        var totalQueue = 0;
+        var backlogged = 0;
+        var worst = 0;
+        var peers = 0;
+        foreach (var (p, st) in _peers)
+        {
+            peers++;
+            var q = 0;
+            try { q = p.GetPacketsCountInReliableQueue(0, true); } catch { /* ignore */ }
+            totalQueue += q;
+            if (q > worst) worst = q;
+            if (q >= ReliableQueueSoftLimit) backlogged++;
+            _ = st;
+        }
+
+        var dropped = Interlocked.Read(ref _droppedSends);
+        var rttMax = 0;
+        foreach (var (p, _) in _peers)
+        {
+            try { if (p.RoundTripTime > rttMax) rttMax = p.RoundTripTime; } catch { /* ignore */ }
+        }
+
+        Console.WriteLine(
+            $"[health] peers={peers} roomPeers={_manager.ConnectedPeersCount} " +
+            $"reliableQueue={totalQueue} worstPeer={worst} slowPeers={backlogged} " +
+            $"droppedSends={dropped} rttMax={rttMax}ms " +
+            $"stateRx={Volatile.Read(ref _stateRxSeen)} rpcRx={Volatile.Read(ref _dropRpcRxSeen)} " +
+            $"{CaptureSink.Describe()} {RunLog.DescribeStats()}");
     }
 
     private void OnNetworkReceive(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod method)
@@ -584,11 +661,16 @@ public sealed partial class GameMatchHost : IDisposable
             && payload.Length >= bodyOffset + 2
             && BinaryPrimitives.ReadInt16LittleEndian(payload.AsSpan(bodyOffset, 2))
                 == WeaponDropManagerObjectId;
-        var logRx = opcode == MatchOpcode.WorldObjectState
-            ? AllowStateLog()
-            : dropRpcNoise
-                ? AllowDropRpcLog()
-                : true;
+        // Per-packet RX logging is a hot-path cost: at 10 players this is thousands of
+        // formatted strings per second. Only emit it when verbose or rate-limited
+        // (State/Rpc floods) — but always count, so [health] can show the rate.
+        var logRx = true;
+        if (opcode == MatchOpcode.WorldObjectState)
+            logRx = AllowStateLog();
+        if (dropRpcNoise)
+            logRx = AllowDropRpcLog() && logRx;
+        if (Diagnostics.LogVerbose)
+            logRx = true;
         if (logRx)
         {
             Console.WriteLine(

@@ -3,6 +3,7 @@ using System.Net;
 using LiteNetLib;
 using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Dashboard;
+using StandChillow.LanServer.Diagnostics;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
@@ -25,12 +26,10 @@ public sealed partial class GameNetHost : IDisposable
     private readonly LobbySession _session;
     private readonly object _gate = new();
     private readonly ConcurrentQueue<Action> _deferred = new();
-    private readonly string _captureDir;
     private readonly IPAddress _advertiseLanIp;
     private readonly GameMatchHost _match;
     private long _connectRequests;
     private long _unconnected;
-    private int _captureIndex;
     private bool _matchStarted;
     private int _disposed;
 
@@ -61,8 +60,6 @@ public sealed partial class GameNetHost : IDisposable
         _session = new LobbySession(lobbyName);
         _onRosterChanged = onRosterChanged;
         _onMatchStarted = onMatchStarted;
-        _captureDir = Path.Combine(AppContext.BaseDirectory, "captures");
-        Directory.CreateDirectory(_captureDir);
 
         _advertiseLanIp = advertiseLanIp
             ?? LanInterfacePicker.PickLanBindAddress()
@@ -91,7 +88,10 @@ public sealed partial class GameNetHost : IDisposable
             AutoRecycle = true,
             BroadcastReceiveEnabled = true,
             IPv6Enabled = false,
-            UnconnectedMessagesEnabled = true
+            UnconnectedMessagesEnabled = true,
+            // Tolerate a laggy phone without dropping the whole session.
+            DisconnectTimeout = 10_000,
+            PacketPoolSize = 4096,
         };
 
         _listener.ConnectionRequestEvent += request =>
@@ -370,7 +370,8 @@ public sealed partial class GameNetHost : IDisposable
 
         var r = new LobbyReader(payload);
         var opcode = (LobbyOpcode)r.ReadByte();
-        Console.WriteLine($"[lobby] from {peer.Address}:{peer.Port} op={opcode} ({(byte)opcode}) len={payload.Length}");
+        if (Diagnostics.LogVerbose)
+            Console.WriteLine($"[lobby] from {peer.Address}:{peer.Port} op={opcode} ({(byte)opcode}) len={payload.Length}");
 
         switch (opcode)
         {
@@ -777,29 +778,28 @@ public sealed partial class GameNetHost : IDisposable
         // Lobby ops use gcv.Reliable. ReliableSequenced cannot fragment (>~1020B throws);
         // real phone JoinResponse is ~13KB with avatars → ReliableOrdered (same as match TX).
         const DeliveryMethod delivery = DeliveryMethod.ReliableOrdered;
-        peer.Send(payload, delivery);
-        Console.WriteLine(
-            $"[lobby] TX → {peer.Address}:{peer.Port} delivery={delivery} len={payload.Length} " +
-            $"op={(LobbyOpcode)payload[0]}");
-        // Capture every lobby TX — JoinResponse (~13KB with avatars) and chat are the
-        // join-phase payloads; without this the lobby half of the capture is blind.
-        DumpCapture($"lobby_tx_{(LobbyOpcode)payload[0]}", payload);
-    }
-
-    private void DumpCapture(string tag, byte[] payload)
-    {
         try
         {
-            var i = Interlocked.Increment(ref _captureIndex);
-            var path = Path.Combine(_captureDir, $"{DateTime.UtcNow:yyyyMMdd_HHmmss}_{i:D3}_{tag}_len{payload.Length}.bin");
-            File.WriteAllBytes(path, payload);
-            Console.WriteLine($"[lobby] captured {path}");
+            peer.Send(payload, delivery);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[lobby] capture failed: {ex.Message}");
+            Console.WriteLine($"[lobby] send failed to {peer.Address}: {ex.Message}");
+            return;
+        }
+
+        // Per-packet lobby TX logging is a hot path (every chat/roster fan-out). Keep it
+        // behind the verbose switch; captures likewise.
+        if (Diagnostics.LogVerbose)
+        {
+            Console.WriteLine(
+                $"[lobby] TX → {peer.Address}:{peer.Port} delivery={delivery} len={payload.Length} " +
+                $"op={(LobbyOpcode)payload[0]}");
+            DumpCapture($"lobby_tx_{(LobbyOpcode)payload[0]}", payload);
         }
     }
+
+    private void DumpCapture(string tag, byte[] payload) => CaptureSink.Capture(tag, payload);
 
     public void Dispose()
     {

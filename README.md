@@ -35,6 +35,45 @@ Mode FSMs are driven from ConnectAsClient captures and decompile — not invente
 - **ArmsRace / FreeForAll / DeathMatch** — catalog stubs or not listed as playable; refuse or incomplete wire drive
 - Maps: use each mode’s `SelectedLevels` list where the mode is playable
 
+## Load and stability
+
+The dedicated host is built to stay smooth well beyond a 4-phone lobby. Two things used to
+make it melt at ~10 players, and both are fixed:
+
+- **Per-packet disk I/O in the network thread.** Every packet used to be written synchronously
+  as a capture file *and* logged through a lock into two auto-flushed log files. At 10 players
+  that is thousands of file operations per second on the LiteNetLib poll thread: the socket
+  receive buffer overflows, reliable packets retransmit (the “ping 200” everyone sees), and
+  eventually the event queue backs up until the host stops sending. Captures are now **off by
+  default** and, when enabled, go through a single background writer with a bounded queue and
+  a file/byte budget. Log lines are queued and batched by one writer thread too.
+- **Unbounded fan-out to slow phones.** Broadcasts now check each peer’s reliable queue.
+  A peer that cannot keep up gets game ticks dropped (it will rubber-band, but it can never
+  stall the room); if the whole send fails the packet is skipped instead of throwing.
+
+Other changes that matter under load:
+
+| Area | Change |
+|------|--------|
+| Tick loop | 128 Hz busy-poll → 33 ms loop, socket drained first; phase/wipe/fuse checks stay per-tick, `WorldObjectState` ticks every 50 ms |
+| Reliable queue | `PacketPoolSize` 1000 → 4096, disconnect timeout 5 s → 10 s (a hiccup no longer kills the session) |
+| Logging | `Console.WriteLine` in hot paths is gated behind `--verbose`; silent by default |
+| Health line | `[health] peers=… reliableQueue=… worstPeer=… slowPeers=… droppedSends=… rttMax=… captures=…` every 10 s |
+
+**The wire is unchanged.** No packet format, opcode, field or client-facing timing was
+touched — only when/how the host logs and how it schedules its own work. Anything the clients
+used to receive in a round, they still receive.
+
+### Debugging a protocol issue
+
+```bash
+dotnet run -c Release -- --verbose          # or VLAL_VERBOSE=1
+```
+
+`--verbose` restores the old behaviour: per-packet RX/TX lines and capture `.bin` files under
+`captures/` (written asynchronously, capped at 4000 files / 64 MB per run). Expect heavy disk
+I/O and worse performance — use it only when capturing evidence.
+
 ## Screenshots
 
 Escalation on Prison over LAN — from lobby ready-up through round outcomes on the dedicated host.

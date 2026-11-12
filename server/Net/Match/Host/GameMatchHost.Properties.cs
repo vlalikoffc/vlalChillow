@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Net;
 using LiteNetLib;
+using StandChillow.LanServer.Diagnostics;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
@@ -12,7 +13,8 @@ public sealed partial class GameMatchHost
 {
     private void HandleSetProperty(NetPeer peer, MatchFrameFlags flags, byte[] raw)
     {
-        DumpCapture("match_rx_SetProperty", raw);
+        if (Diagnostics.LogVerbose)
+            DumpCapture("match_rx_SetProperty", raw);
         if ((flags & MatchFrameFlags.IsEncrypted) != 0)
         {
             Console.WriteLine($"[match-host] SetProperty flags={flags} encrypted — dump only");
@@ -57,10 +59,13 @@ public sealed partial class GameMatchHost
                 pingFromRtt = true;
             }
 
-            Console.WriteLine(
-                $"[match-host] SetProperty actor={actorNr} key='{key}' value={value}" +
-                (compressed ? " (LZ4→echo uncompressed HasServerTime)" : "") +
-                (pingFromRtt ? $" (server RTT={peer.RoundTripTime}ms, not client echo)" : ""));
+            // SetProperty is one of the hottest paths (every hit/death/team change). Log it
+            // only in verbose mode; the per-key combat/buy traces below stay (decisive).
+            if (Diagnostics.LogVerbose)
+                Console.WriteLine(
+                    $"[match-host] SetProperty actor={actorNr} key='{key}' value={value}" +
+                    (compressed ? " (LZ4→echo uncompressed HasServerTime)" : "") +
+                    (pingFromRtt ? $" (server RTT={peer.RoundTripTime}ms, not client echo)" : ""));
 
             LobbyVariant prevValue = default;
             bool hadPrev;
@@ -130,7 +135,8 @@ public sealed partial class GameMatchHost
 
     private void HandleSetProperties(NetPeer peer, MatchFrameFlags flags, byte[] raw)
     {
-        DumpCapture("match_rx_SetProperties", raw);
+        if (Diagnostics.LogVerbose)
+            DumpCapture("match_rx_SetProperties", raw);
         if ((flags & MatchFrameFlags.IsEncrypted) != 0)
         {
             Console.WriteLine($"[match-host] SetProperties flags={flags} encrypted — dump only");

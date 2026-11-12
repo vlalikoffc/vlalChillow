@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using StandChillow.LanServer.Diagnostics;
 
 namespace StandChillow.LanServer.Lan;
 
@@ -82,7 +83,10 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
     {
         var bytes = info.Serialize();
         lock (_gate) _payload = bytes;
-        Console.WriteLine($"[discovery] payload updated len={bytes.Length} hex={Convert.ToHexString(bytes)}");
+        if (Diagnostics.LogVerbose)
+            Console.WriteLine($"[discovery] payload updated len={bytes.Length} hex={Convert.ToHexString(bytes)}");
+        else
+            Console.WriteLine($"[discovery] payload updated len={bytes.Length}");
     }
 
     public void Start()
@@ -259,13 +263,13 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
     {
         Interlocked.Increment(ref _datagrams);
         var probeKind = MatchProbe(buf);
-        var hex = Convert.ToHexString(buf);
-        var ascii = PreviewAscii(buf);
 
         if (probeKind is null)
         {
-            Console.WriteLine(
-                $"[discovery] RX non-probe from {from} len={buf.Length} hex={hex} ASCII={ascii}");
+            if (Diagnostics.LogVerbose)
+                Console.WriteLine(
+                    $"[discovery] RX non-probe from {from} len={buf.Length} " +
+                    $"hex={Convert.ToHexString(buf)} ASCII={PreviewAscii(buf)}");
             return;
         }
 
@@ -274,8 +278,9 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
         if (!_recentProbeKeys.TryAdd(dedupeKey, 0))
         {
             Interlocked.Increment(ref _deduped);
-            Console.WriteLine(
-                $"[discovery] RX PROBE kind={probeKind} from {from} (deduped, still will reply)");
+            if (Diagnostics.LogVerbose)
+                Console.WriteLine(
+                    $"[discovery] RX PROBE kind={probeKind} from {from} (deduped, still will reply)");
             // Still reply — aggressive visibility. Only skip logging spam via counter.
         }
         else
@@ -292,8 +297,10 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
         }
 
         Interlocked.Increment(ref _probes);
-        Console.WriteLine(
-            $"[discovery] RX PROBE kind={probeKind} from {from} len={buf.Length} hex={hex}");
+        if (Diagnostics.LogVerbose)
+            Console.WriteLine(
+                $"[discovery] RX PROBE kind={probeKind} from {from} len={buf.Length} " +
+                $"hex={Convert.ToHexString(buf)}");
 
         byte[] payload;
         List<(LanEndpoint Lan, Socket Tx)> targets;
@@ -316,10 +323,13 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
             {
                 var sent = await sock.SendToAsync(payload, SocketFlags.None, from, ct);
                 Interlocked.Increment(ref _replies);
-                var local = (IPEndPoint)sock.LocalEndPoint!;
-                Console.WriteLine(
-                    $"[discovery] TX reply → {from}  {sent}B  src={local.Address}:{local.Port} " +
-                    $"via {lan.InterfaceName}  payloadHex={Convert.ToHexString(payload)}");
+                if (Diagnostics.LogVerbose)
+                {
+                    var local = (IPEndPoint)sock.LocalEndPoint!;
+                    Console.WriteLine(
+                        $"[discovery] TX reply → {from}  {sent}B  src={local.Address}:{local.Port} " +
+                        $"via {lan.InterfaceName}  payloadHex={Convert.ToHexString(payload)}");
+                }
             }
             catch (Exception ex)
             {

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Net;
 using LiteNetLib;
+using StandChillow.LanServer.Diagnostics;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
@@ -10,34 +11,56 @@ namespace StandChillow.LanServer.Net;
 
 public sealed partial class GameMatchHost
 {
-    private int BroadcastRoom(MatchRoom room, byte[] payload, string tag)
+    /// <summary>
+    /// Сколько надёжных пакетов терпим в очереди LiteNetLib на одного пира, прежде чем
+    /// считать его «отстающим». Дальше ему шлём только критичное (handshake/INIT/раунд),
+    /// а игровой поток (State/Rpc/пауны) — дропаем: лучше пропустить кадр, чем копить
+    /// очередь, которая растёт быстрее, чем клиент успевает вычитывать, и в итоге
+    /// выжирает память и превращает весь матч в лаг.
+    /// </summary>
+    private const int ReliableQueueSoftLimit = 256;
+
+    /// <summary>Пир помечается «медленным», если отправка не удалась или очередь переполнена.</summary>
+    private static bool IsBacklogged(NetPeer peer, int softLimit = ReliableQueueSoftLimit)
+    {
+        try
+        {
+            return peer.GetPacketsCountInReliableQueue(0, true) >= softLimit;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private int BroadcastRoom(MatchRoom room, byte[] payload, string? tag)
     {
         var n = 0;
         foreach (var (p, st) in _peers)
         {
-            if (st.Room == room)
-            {
-                Send(p, payload);
+            if (st.Room != room)
+                continue;
+            if (Send(p, payload))
                 n++;
-            }
         }
-        DumpCapture(tag, payload);
+        if (tag is not null && Diagnostics.LogVerbose)
+            CaptureSink.Capture(tag, payload);
         return n;
     }
 
     /// <summary>Reliable to room peers except one (ActorJoined excludes the joiner).</summary>
-    private int BroadcastRoomExcept(MatchRoom room, NetPeer except, byte[] payload, string tag)
+    private int BroadcastRoomExcept(MatchRoom room, NetPeer except, byte[] payload, string? tag)
     {
         var n = 0;
         foreach (var (p, st) in _peers)
         {
-            if (st.Room == room && !ReferenceEquals(p, except))
-            {
-                Send(p, payload);
+            if (st.Room != room || ReferenceEquals(p, except))
+                continue;
+            if (Send(p, payload))
                 n++;
-            }
         }
-        DumpCapture(tag, payload);
+        if (tag is not null && Diagnostics.LogVerbose)
+            CaptureSink.Capture(tag, payload);
         return n;
     }
 
@@ -45,8 +68,8 @@ public sealed partial class GameMatchHost
     /// Reliable to peers who finished INIT (BootstrapSent). Pawn CWO / rpc go here so
     /// late joiners do not get a live CWO and then a second copy from living-pawn snapshot.
     /// </summary>
-    private int BroadcastInitReady(MatchRoom room, byte[] payload, string tag) =>
-        BroadcastInitReadyExcept(room, except: null, payload, tag, dumpCapture: true);
+    private int BroadcastInitReady(MatchRoom room, byte[] payload, string? tag) =>
+        BroadcastInitReadyExcept(room, except: null, payload, tag, capture: true);
 
     /// <summary>
     /// INIT-ready relay excluding sender — client already applied locally (CWO/Rpc/Destroy).
@@ -56,7 +79,7 @@ public sealed partial class GameMatchHost
         NetPeer? except,
         byte[] payload,
         string? tag,
-        bool dumpCapture = true)
+        bool capture = true)
     {
         var n = 0;
         foreach (var (p, st) in _peers)
@@ -65,11 +88,11 @@ public sealed partial class GameMatchHost
                 continue;
             if (except is not null && ReferenceEquals(p, except))
                 continue;
-            Send(p, payload);
-            n++;
+            if (Send(p, payload))
+                n++;
         }
-        if (dumpCapture && tag is not null)
-            DumpCapture(tag, payload);
+        if (capture && tag is not null && Diagnostics.LogVerbose)
+            CaptureSink.Capture(tag, payload);
         return n;
     }
 
@@ -78,14 +101,13 @@ public sealed partial class GameMatchHost
         var n = 0;
         foreach (var (p, st) in _peers)
         {
-            if (st.Room == room && st.BootstrapSent)
-            {
-                SendUnreliable(p, payload);
+            if (st.Room != room || !st.BootstrapSent)
+                continue;
+            if (SendUnreliable(p, payload))
                 n++;
-            }
         }
-        if (tag is not null)
-            DumpCapture(tag, payload);
+        if (tag is not null && Diagnostics.LogVerbose)
+            CaptureSink.Capture(tag, payload);
         return n;
     }
 
@@ -95,11 +117,10 @@ public sealed partial class GameMatchHost
         var n = 0;
         foreach (var (p, st) in _peers)
         {
-            if (st.Room == room && st.BootstrapSent && !ReferenceEquals(p, except))
-            {
-                SendUnreliable(p, payload);
+            if (st.Room != room || !st.BootstrapSent || ReferenceEquals(p, except))
+                continue;
+            if (SendUnreliable(p, payload))
                 n++;
-            }
         }
         return n;
     }
@@ -107,12 +128,14 @@ public sealed partial class GameMatchHost
     private void SendAndDump(NetPeer peer, byte[] payload)
     {
         Send(peer, payload);
+        if (!Diagnostics.LogVerbose)
+            return;
         if (!MatchCodec.TryParseEnvelope(payload, out _, out var op, out _, out _))
         {
-            DumpCapture("match_tx_world", payload);
+            CaptureSink.Capture("match_tx_world", payload);
             return;
         }
-        DumpCapture($"match_tx_{MatchCodec.OpcodeName(op)}", payload);
+        CaptureSink.Capture($"match_tx_{MatchCodec.OpcodeName(op)}", payload);
     }
 
     private void EnsureRoom(string passwordKey, string roomId)
@@ -148,32 +171,41 @@ public sealed partial class GameMatchHost
     /// (<c>fyf.bodw</c>); do not put seconds into the HasServerTime i32.</summary>
     private double ServerTimeSeconds() => NextServerTime() / 1000.0;
 
-    private void Send(NetPeer peer, byte[] payload)
+    /// <summary>
+    /// Reliable send. Returns <c>false</c> when the peer's reliable queue is full
+    /// (packet dropped on purpose — see <see cref="ReliableQueueSoftLimit"/>) or the send
+    /// failed. Dropping a game tick for one slow phone is far cheaper than letting its
+    /// queue grow until the whole host stalls.
+    /// </summary>
+    private bool Send(NetPeer peer, byte[] payload)
     {
-        // gcv.Reliable → LiteNetLib ReliableOrdered (same as client match TX).
-        peer.Send(payload, DeliveryMethod.ReliableOrdered);
-    }
-
-    private static void SendUnreliable(NetPeer peer, byte[] payload)
-    {
-        // WorldObjectState phone path: Unreliable + flags=None.
-        peer.Send(payload, DeliveryMethod.Unreliable);
-    }
-
-    private void DumpCapture(string tag, byte[] payload)
-    {
+        if (IsBacklogged(peer))
+            return false;
         try
         {
-            var i = Interlocked.Increment(ref _captureIndex);
-            var path = Path.Combine(
-                _captureDir,
-                $"{DateTime.UtcNow:yyyyMMdd_HHmmss}_{i:D3}_{tag}_len{payload.Length}.bin");
-            File.WriteAllBytes(path, payload);
-            Console.WriteLine($"[match-host] captured {path}");
+            // gcv.Reliable → LiteNetLib ReliableOrdered (same as client match TX).
+            return peer.Send(payload, DeliveryMethod.ReliableOrdered);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[match-host] capture failed: {ex.Message}");
+            Console.WriteLine($"[match-host] send failed to {peer.Address}: {ex.Message}");
+            return false;
         }
     }
+
+    /// <summary>Unreliable send; never throws (UDP — a lost state tick is expected).</summary>
+    private bool SendUnreliable(NetPeer peer, byte[] payload)
+    {
+        try
+        {
+            // WorldObjectState phone path: Unreliable + flags=None.
+            return peer.Send(payload, DeliveryMethod.Unreliable);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void DumpCapture(string tag, byte[] payload) => CaptureSink.Capture(tag, payload);
 }

@@ -16,6 +16,7 @@
 
 using StandChillow.LanServer;
 using StandChillow.LanServer.Dashboard;
+using StandChillow.LanServer.Diagnostics;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Startup;
 
@@ -47,7 +48,16 @@ if (!useDashboard)
 }
 
 ConsumeDebugMatchChatFlag(ref args);
-await HostBootstrap.RunAsync(args, useDashboard);
+ConsumeVerboseFlag(ref args);
+try
+{
+    await HostBootstrap.RunAsync(args, useDashboard);
+}
+finally
+{
+    // Drain queued log lines before the process exits (writer is a background thread).
+    RunLog.Shutdown();
+}
 
 static bool? ConsumeDashboardFlag(ref string[] args)
 {
@@ -115,6 +125,34 @@ static void ConsumeDebugMatchChatFlag(ref string[] args)
 
     args = kept.ToArray();
     MatchHostSettings.DebugMatchChat = on;
+}
+
+/// <summary>
+/// <c>--verbose</c> / <c>VLAL_VERBOSE=1</c>: per-packet protocol traces + packet captures.
+/// Off by default because those are exactly the writes that melt a 10-player host.
+/// </summary>
+static void ConsumeVerboseFlag(ref string[] args)
+{
+    Diagnostics.ApplyEnvironment();
+    var kept = new List<string>(args.Length);
+    foreach (var a in args)
+    {
+        if (a is "--verbose" or "-v" or "--debug")
+        {
+            Diagnostics.Verbose = true;
+            continue;
+        }
+
+        kept.Add(a);
+    }
+
+    args = kept.ToArray();
+    CaptureSink.Configure(
+        Diagnostics.Verbose,
+        System.IO.Path.Combine(AppContext.BaseDirectory, "captures"));
+    Console.WriteLine(Diagnostics.Verbose
+        ? "[diag] verbose ON — per-packet logs + captures (expect heavy disk I/O)"
+        : "[diag] verbose off — packet captures disabled (run with --verbose to enable)");
 }
 
 static bool EnvTruthy(string? value) =>
