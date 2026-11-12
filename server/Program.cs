@@ -133,13 +133,13 @@ static void ConsumeDebugMatchChatFlag(ref string[] args)
 /// </summary>
 static void ConsumeVerboseFlag(ref string[] args)
 {
-    Diagnostics.ApplyEnvironment();
+    Diag.ApplyEnvironment();
     var kept = new List<string>(args.Length);
     foreach (var a in args)
     {
         if (a is "--verbose" or "-v" or "--debug")
         {
-            Diagnostics.Verbose = true;
+            Diag.Verbose = true;
             continue;
         }
 
@@ -148,9 +148,9 @@ static void ConsumeVerboseFlag(ref string[] args)
 
     args = kept.ToArray();
     CaptureSink.Configure(
-        Diagnostics.Verbose,
+        Diag.Verbose,
         System.IO.Path.Combine(AppContext.BaseDirectory, "captures"));
-    Console.WriteLine(Diagnostics.Verbose
+    Console.WriteLine(Diag.Verbose
         ? "[diag] verbose ON — per-packet logs + captures (expect heavy disk I/O)"
         : "[diag] verbose off — packet captures disabled (run with --verbose to enable)");
 }

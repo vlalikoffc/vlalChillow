@@ -43,8 +43,8 @@ public sealed partial class GameMatchHost
             if (Send(p, payload))
                 n++;
         }
-        if (tag is not null && Diagnostics.LogVerbose)
-            CaptureSink.Capture(tag, payload);
+        if (tag is not null && Diag.LogVerbose)
+            CaptureSink.Capture(tag!, payload);
         return n;
     }
 
@@ -59,8 +59,8 @@ public sealed partial class GameMatchHost
             if (Send(p, payload))
                 n++;
         }
-        if (tag is not null && Diagnostics.LogVerbose)
-            CaptureSink.Capture(tag, payload);
+        if (tag is not null && Diag.LogVerbose)
+            CaptureSink.Capture(tag!, payload);
         return n;
     }
 
@@ -91,8 +91,8 @@ public sealed partial class GameMatchHost
             if (Send(p, payload))
                 n++;
         }
-        if (capture && tag is not null && Diagnostics.LogVerbose)
-            CaptureSink.Capture(tag, payload);
+        if (capture && tag is not null && Diag.LogVerbose)
+            CaptureSink.Capture(tag!, payload);
         return n;
     }
 
@@ -106,8 +106,8 @@ public sealed partial class GameMatchHost
             if (SendUnreliable(p, payload))
                 n++;
         }
-        if (tag is not null && Diagnostics.LogVerbose)
-            CaptureSink.Capture(tag, payload);
+        if (tag is not null && Diag.LogVerbose)
+            CaptureSink.Capture(tag!, payload);
         return n;
     }
 
@@ -128,7 +128,7 @@ public sealed partial class GameMatchHost
     private void SendAndDump(NetPeer peer, byte[] payload)
     {
         Send(peer, payload);
-        if (!Diagnostics.LogVerbose)
+        if (!Diag.LogVerbose)
             return;
         if (!MatchCodec.TryParseEnvelope(payload, out _, out var op, out _, out _))
         {
@@ -180,7 +180,10 @@ public sealed partial class GameMatchHost
     private bool Send(NetPeer peer, byte[] payload)
     {
         if (IsBacklogged(peer))
+        {
+            Interlocked.Increment(ref _droppedSends);
             return false;
+        }
         try
         {
             // gcv.Reliable → LiteNetLib ReliableOrdered (same as client match TX).
@@ -188,6 +191,7 @@ public sealed partial class GameMatchHost
         }
         catch (Exception ex)
         {
+            Interlocked.Increment(ref _droppedSends);
             Console.WriteLine($"[match-host] send failed to {peer.Address}: {ex.Message}");
             return false;
         }

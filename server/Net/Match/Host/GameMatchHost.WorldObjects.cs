@@ -18,7 +18,7 @@ public sealed partial class GameMatchHost
     /// </summary>
     private void HandleCreateWorldObject(NetPeer peer, MatchFrameFlags flags, byte[] raw)
     {
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             DumpCapture("match_rx_CreateWorldObject", raw);
         try
         {
@@ -206,7 +206,7 @@ public sealed partial class GameMatchHost
 
     private void HandleWorldObjectRpc(NetPeer peer, MatchFrameFlags flags, byte[] raw, bool logRpc = true)
     {
-        if (logRpc && Diagnostics.LogVerbose)
+        if (logRpc && Diag.LogVerbose)
             DumpCapture("match_rx_WorldObjectRpc", raw);
         try
         {
@@ -217,12 +217,10 @@ public sealed partial class GameMatchHost
             }
 
             var parsed = MatchCodec.ParseWorldObjectRpcBody(new LobbyReader(bodyBytes));
-            if (logRpc && Diagnostics.LogVerbose)
-            {
+            if (logRpc && Diag.LogVerbose)
                 Console.WriteLine(
                     $"[match-host] WorldObjectRpc id={parsed.ObjectId} rpc={parsed.RpcId} " +
                     $"gaa={parsed.GaaTarget} field={parsed.Field} payloadLen={parsed.Payload.Length}");
-            }
 
             if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
                 return;
@@ -442,7 +440,7 @@ public sealed partial class GameMatchHost
     /// </summary>
     private void HandleDestroyWorldObject(NetPeer peer, MatchFrameFlags flags, byte[] raw)
     {
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             DumpCapture("match_rx_DestroyWorldObject", raw);
         try
         {
@@ -518,7 +516,7 @@ public sealed partial class GameMatchHost
         var pkt = MatchCodec.BuildSetProperty(
             NextServerTime(), actorNr, MatchRoomPropKeys.Ping, LobbyVariant.FromInt(rtt));
         BroadcastRoom(room, pkt, tag: "match_tx_SetProperty");
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             Console.WriteLine(
                 $"[match-host] ping from RTT actor={actorNr} rtt={rtt}ms (LNL latency={latency})");
     }
@@ -536,7 +534,7 @@ public sealed partial class GameMatchHost
         // dumped, which made captures look like clients "went silent" after their CWO.
         // Rate-capped: State floods ~10Hz/pawn; first N + every Kth keeps the join phase
         // (where stumbles happen) while not flooding the disk for minutes on end.
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
         {
             var rxCount = Interlocked.Increment(ref _stateRelayRxCaptures);
             if (rxCount <= StateRelayCaptureFirst || rxCount % StateRelayCaptureEveryK == 0)
@@ -561,7 +559,7 @@ public sealed partial class GameMatchHost
 
         // Capture relay TX — what the host forwards to the other peers. Without this the
         // other client's capture has no host-side view of the relayed State stream.
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
         {
             var txCount = Interlocked.Increment(ref _stateRelayTxCaptures);
             if (txCount <= StateRelayCaptureFirst || txCount % StateRelayCaptureEveryK == 0)

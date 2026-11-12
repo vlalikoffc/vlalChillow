@@ -18,7 +18,7 @@ namespace StandChillow.LanServer.Diagnostics;
 /// Включается через <c>--verbose</c> / <c>VLAL_VERBOSE=1</c>. Провод (формат пакетов)
 /// не меняется: выключается только текст в консоль/лог.
 /// </remarks>
-public static class Diagnostics
+public static class Diag
 {
     /// <summary>Подробный per-packet трейс. Включать только при отладке протокола.</summary>
     public static bool Verbose { get; set; }

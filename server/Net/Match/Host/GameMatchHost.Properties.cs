@@ -13,7 +13,7 @@ public sealed partial class GameMatchHost
 {
     private void HandleSetProperty(NetPeer peer, MatchFrameFlags flags, byte[] raw)
     {
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             DumpCapture("match_rx_SetProperty", raw);
         if ((flags & MatchFrameFlags.IsEncrypted) != 0)
         {
@@ -61,7 +61,7 @@ public sealed partial class GameMatchHost
 
             // SetProperty is one of the hottest paths (every hit/death/team change). Log it
             // only in verbose mode; the per-key combat/buy traces below stay (decisive).
-            if (Diagnostics.LogVerbose)
+            if (Diag.LogVerbose)
                 Console.WriteLine(
                     $"[match-host] SetProperty actor={actorNr} key='{key}' value={value}" +
                     (compressed ? " (LZ4→echo uncompressed HasServerTime)" : "") +
@@ -135,7 +135,7 @@ public sealed partial class GameMatchHost
 
     private void HandleSetProperties(NetPeer peer, MatchFrameFlags flags, byte[] raw)
     {
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             DumpCapture("match_rx_SetProperties", raw);
         if ((flags & MatchFrameFlags.IsEncrypted) != 0)
         {

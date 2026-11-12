@@ -83,7 +83,7 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
     {
         var bytes = info.Serialize();
         lock (_gate) _payload = bytes;
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             Console.WriteLine($"[discovery] payload updated len={bytes.Length} hex={Convert.ToHexString(bytes)}");
         else
             Console.WriteLine($"[discovery] payload updated len={bytes.Length}");
@@ -266,7 +266,7 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
 
         if (probeKind is null)
         {
-            if (Diagnostics.LogVerbose)
+            if (Diag.LogVerbose)
                 Console.WriteLine(
                     $"[discovery] RX non-probe from {from} len={buf.Length} " +
                     $"hex={Convert.ToHexString(buf)} ASCII={PreviewAscii(buf)}");
@@ -278,7 +278,7 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
         if (!_recentProbeKeys.TryAdd(dedupeKey, 0))
         {
             Interlocked.Increment(ref _deduped);
-            if (Diagnostics.LogVerbose)
+            if (Diag.LogVerbose)
                 Console.WriteLine(
                     $"[discovery] RX PROBE kind={probeKind} from {from} (deduped, still will reply)");
             // Still reply — aggressive visibility. Only skip logging spam via counter.
@@ -297,7 +297,7 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
         }
 
         Interlocked.Increment(ref _probes);
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             Console.WriteLine(
                 $"[discovery] RX PROBE kind={probeKind} from {from} len={buf.Length} " +
                 $"hex={Convert.ToHexString(buf)}");
@@ -323,7 +323,7 @@ public sealed class LanDiscoveryHost : IAsyncDisposable
             {
                 var sent = await sock.SendToAsync(payload, SocketFlags.None, from, ct);
                 Interlocked.Increment(ref _replies);
-                if (Diagnostics.LogVerbose)
+                if (Diag.LogVerbose)
                 {
                     var local = (IPEndPoint)sock.LocalEndPoint!;
                     Console.WriteLine(

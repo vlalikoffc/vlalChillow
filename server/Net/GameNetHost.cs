@@ -370,7 +370,7 @@ public sealed partial class GameNetHost : IDisposable
 
         var r = new LobbyReader(payload);
         var opcode = (LobbyOpcode)r.ReadByte();
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             Console.WriteLine($"[lobby] from {peer.Address}:{peer.Port} op={opcode} ({(byte)opcode}) len={payload.Length}");
 
         switch (opcode)
@@ -790,7 +790,7 @@ public sealed partial class GameNetHost : IDisposable
 
         // Per-packet lobby TX logging is a hot path (every chat/roster fan-out). Keep it
         // behind the verbose switch; captures likewise.
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
         {
             Console.WriteLine(
                 $"[lobby] TX → {peer.Address}:{peer.Port} delivery={delivery} len={payload.Length} " +

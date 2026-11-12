@@ -48,10 +48,11 @@ public sealed partial class GameMatchHost : IDisposable
     private int _serverTimeSeed;
 
     /// <summary>
-    /// Packets skipped on purpose because a peer's reliable queue was over
-    /// <see cref="ReliableQueueSoftLimit"/> (or the send threw). Surfaced in <c>[health]</c>.
+    /// Пакеты, которые не ушли: у пира переполнена надёжная очередь (дропаем тик, чтобы
+    /// не копить лаг на весь зал) или сам send бросил исключение. Видно в <c>[health]</c>.
     /// </summary>
     private long _droppedSends;
+
 
     /// <summary>
     /// Match gap <c>C0</c>/<c>C1</c> — must follow lobby <c>GameModeId</c>/<c>SelectedLevels[0]</c>.
@@ -524,7 +525,6 @@ public sealed partial class GameMatchHost : IDisposable
         return room;
     }
 
-    private int _stateTickCounter;
     private long _lastStatsTickUtc;
 
     /// <summary>
@@ -566,7 +566,7 @@ public sealed partial class GameMatchHost : IDisposable
                 // Match flow each tick: wipe / fuse expiry / phase deadlines.
                 TickMatchFlow();
 
-                if (Diagnostics.StatsEnabled && now - _lastStatsTickUtc >= 10_000)
+                if (Diag.StatsEnabled && now - _lastStatsTickUtc >= 10_000)
                 {
                     _lastStatsTickUtc = now;
                     LogHealthSnapshot();
@@ -669,7 +669,7 @@ public sealed partial class GameMatchHost : IDisposable
             logRx = AllowStateLog();
         if (dropRpcNoise)
             logRx = AllowDropRpcLog() && logRx;
-        if (Diagnostics.LogVerbose)
+        if (Diag.LogVerbose)
             logRx = true;
         if (logRx)
         {
