@@ -82,7 +82,7 @@ public static class CommandAccessPolicy
             if (config.IsAdmin(playerNick))
                 return true;
 
-            denyReason = $"команда /{parsed.Command} только для админов (твой ник: {playerNick})";
+            denyReason = AdminDenied(config, parsed.Command, playerNick);
             return false;
         }
 
@@ -92,8 +92,21 @@ public static class CommandAccessPolicy
         if (config.IsAdmin(playerNick))
             return true;
 
-        denyReason = $"команда /{parsed.Command} только для админов (твой ник: {playerNick})";
+        denyReason = AdminDenied(config, parsed.Command, playerNick);
         return false;
+    }
+
+    /// <summary>
+    /// Отказ с ответом на вопрос «почему я не админ»: сервер показывает ник, как он его
+    /// видит, и список админов из конфига (частый случай — список пуст).
+    /// </summary>
+    private static string AdminDenied(ServerConfig config, string command, string? playerNick)
+    {
+        var admins = config.Admin.Nicknames.Count == 0
+            ? "в config.json admin.nicknames пусто — админ-команд ни у кого нет"
+            : $"админы: {string.Join(", ", config.Admin.Nicknames)}";
+        return $"команда /{command} только для админов (сервер видит твой ник как " +
+               $"'{playerNick}'; {admins})";
     }
 
     /// <summary>

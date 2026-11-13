@@ -97,6 +97,20 @@ public sealed partial class GameNetHost
             return true;
         }
 
+        if (cmd.Equals("auth", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("код", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleAuthCommand(reply, args, player);
+            return true;
+        }
+
+        if (cmd.Equals("whoami", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("ктоя", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleWhoAmICommand(reply, player);
+            return true;
+        }
+
         if (cmd.Equals("ban", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("бан", StringComparison.OrdinalIgnoreCase))
         {
@@ -225,6 +239,8 @@ public sealed partial class GameNetHost
           /unbanid id               снять все баны под этим id (только админ)
           /bans                     активные баны и остаток (только админ)
           /ids                      кто в катке: id, ник, IP (только админ)
+          /whoami                   что сервер знает про тебя: ник, id, IP, права
+          /auth                     код админа (только из консоли сервера)
         """.Trim();
 
     private static string FormatUnknownCommandHelp(string message) =>

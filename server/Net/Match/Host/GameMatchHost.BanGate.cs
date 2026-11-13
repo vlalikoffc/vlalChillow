@@ -32,6 +32,12 @@ public sealed partial class GameMatchHost
     /// <summary>Предикат «ник админский»: на админов бан не распространяется.</summary>
     public Func<string?, bool>? IsAdminNick { get; set; }
 
+    /// <summary>
+    /// Админский ник без кода авторизации: в матч не пускаем. Ставит <c>GameNetHost</c>;
+    /// ник присылает клиент, поэтому одного ника для прав мало.
+    /// </summary>
+    public Func<string?, IPAddress?, bool>? IsUnauthorizedAdmin { get; set; }
+
     /// <summary>IP-гейт самого раннего входа: до handshake, до комнаты, до актора.</summary>
     internal bool IsBannedAddress(IPAddress? address)
     {

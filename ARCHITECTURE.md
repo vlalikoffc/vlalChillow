@@ -50,7 +50,13 @@ placeholder from the gold capture) so the in-game player list shows the same num
 it is outside the player numbering, never bannable, and no client can claim it: the host
 overwrites `uid` from session state on every SetProperty/SetProperties and drops the property
 when the author cannot be resolved. The server nickname is reserved (lobby and match reject
-it, derived from `LobbySession.ServerPlayerName` so a rename moves the reservation). `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/banid` still
+it, derived from `LobbySession.ServerPlayerName` so a rename moves the reservation).
+
+Admin rights are **not** granted by nickname alone (`AdminAuth`): the nickname a client sends
+is untrusted, so an admin nick gets a shadow lobby until the address enters the per-run code
+printed to the console. The code is 24 random alphanumerics, regenerated on every start,
+authorized IPs live in memory only; the match host and the command dispatcher both consult
+`IsUnauthorizedAdmin`, so a shadowed admin cannot drop or sneak into 7777 either. `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/banid` still
 resolves a player who already left. `banlist.json` lives beside `config.json` and is
 git-ignored.
 

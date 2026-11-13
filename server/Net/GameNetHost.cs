@@ -90,6 +90,12 @@ public sealed partial class GameNetHost : IDisposable
         // забаненный успел бы проскочить. Матч получает тот же реестр.
         InitBans();
 
+        // Админские ники требуют код на этот запуск: ник присылает клиент, поэтому одного
+        // ника мало. Матч обязан спрашивать то же самое — иначе админский ник без кода
+        // зашёл бы прямо на 7777 мимо лобби.
+        LogAdminAuthStartup();
+        _match.IsUnauthorizedAdmin = IsUnauthorizedAdmin;
+
         _listener = new EventBasedNetListener();
         _manager = new NetManager(_listener)
         {
@@ -123,6 +129,7 @@ public sealed partial class GameNetHost : IDisposable
             Console.WriteLine($"[net] peer DISCONNECTED {peer.Address}:{peer.Port}: {info.Reason}");
             lock (_shadowGate)
                 _shadowPeers.Remove(peer);
+            ForgetPendingAdmin(peer);
             var left = _session.OnPeerDisconnected(peer, out var name);
             if (name is not null && left is not null)
             {
@@ -441,6 +448,14 @@ public sealed partial class GameNetHost : IDisposable
         // выхода из катки. Пишется на диск только при новом нике/адресе, не на каждый вход.
         _directory.Remember(req.Profile.Name, peer.Address?.ToString(), DateTime.UtcNow);
 
+        // Админский ник без кода — как забаненный: теневой лобби, ни команд, ни матча.
+        // Проверяем до банов: админ от бана и так освобождён, а код нужен в любом случае.
+        if (IsUnauthorizedAdmin(req.Profile.Name, peer.Address))
+        {
+            HandleAdminAuthJoin(peer, req);
+            return;
+        }
+
         // Бан — до любых side-effects: ни слота в росписи, ни приветствия, ни op9 про
         // идущий матч забаненный не получает. Проверка только здесь, на входе.
         var banDecision = InspectBan(req.Profile.Name, peer.Address);
@@ -519,6 +534,14 @@ public sealed partial class GameNetHost : IDisposable
             return;
         }
 
+        message = message.Trim();
+        if (message.Length == 0) return;
+
+        // Неавторизованный админ: единственное, что он может написать, — код.
+        // Всё остальное (в том числе /ban) сюда не проходит.
+        if (IsPendingAdmin(peer) && HandlePendingAdminChat(peer, message))
+            return;
+
         var player = _session.TryGet(peer);
         if (player is not { Joined: true })
         {
@@ -528,9 +551,6 @@ public sealed partial class GameNetHost : IDisposable
             Console.WriteLine($"[lobby] chat from non-joined peer {peer.Address}");
             return;
         }
-
-        message = message.Trim();
-        if (message.Length == 0) return;
 
         // Slash commands: execute silently — do NOT relay to lobby peers or PostChat the command.
         if (message.StartsWith('/'))
@@ -562,6 +582,13 @@ public sealed partial class GameNetHost : IDisposable
             Console.WriteLine(
                 $"[chat] ChatManager slash НЕ выполнен: actor='{actorName}' ip={matchPeerIp} " +
                 $"причина={reason} команда='{message}'");
+
+            // Молчать нельзя: игрок в катке видит только матч-чат, и «ничего не произошло»
+            // выглядит как проглоченная команда. Отвечаем туда, откуда пришло.
+            _match.SendServerChat(
+                $"команда не выполнена: не понял, кто ты ({reason})",
+                nick: actorName,
+                alsoLastChanceIp: matchPeerIp);
             return;
         }
 
@@ -772,6 +799,10 @@ public sealed partial class GameNetHost : IDisposable
 
         feedback($"config: {ServerConfig.LastLoadedPath}");
         feedback($"  админы: {admins}");
+        if (_config.Admin.Nicknames.Count == 0)
+            feedback("    (пусто — админ-команд ни у кого нет; добавь \"nicknames\": [ \"ник\" ] " +
+                     $"в admin{{}} файла {ServerConfig.LastLoadedPath})");
+        feedback($"  код админа на этот запуск: {_adminAuth.Code} (auth reset — новый)");
         feedback($"  только для админов: " +
                  (_config.Admin.AdminOnlyCommands.Count == 0
                      ? "(нет)"
