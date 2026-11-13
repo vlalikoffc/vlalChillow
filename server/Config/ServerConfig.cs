@@ -29,6 +29,10 @@ public sealed class AdminConfig
     /// <summary>Ники администраторов (регистр не важен, пробелы по краям игнорируются).</summary>
     public List<string> Nicknames { get; set; } = new();
 
+    /// <summary>Ключи внутри <c>admin</c>, которых сервер не знает (опечатки).</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? UnknownKeys { get; set; }
+
     /// <summary>
     /// Команды только для админов. По умолчанию <c>set</c> и <c>end</c>: они меняют важные
     /// параметры хоста (раунды, победу, состав команды) и обрывают идущую катку.
@@ -301,6 +305,18 @@ public sealed class ServerConfig
 
     public AdminConfig Admin { get; set; } = new();
 
+    /// <summary>
+    /// Ключи, которых сервер не знает: опечатка в имени («admins» вместо admin.nicknames) —
+    /// самая частая причина «настроил, а сервер не видит».
+    /// </summary>
+    /// <remarks>
+    /// Заполняет <c>System.Text.Json</c> через <see cref="JsonExtensionDataAttribute"/>: всё,
+    /// что не совпало ни с одним свойством, попадает сюда, и <see cref="Normalize"/> пишет об
+    /// этом в <see cref="Issues"/>. Раньше такие ключи молча игнорировались.
+    /// </remarks>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? UnknownKeys { get; set; }
+
     public MatchStartConfig MatchStart { get; set; } = new();
 
     public TimingsConfig Timings { get; set; } = new();
@@ -459,6 +475,9 @@ public sealed class ServerConfig
         Tuning ??= new TuningConfig();
         Debug ??= new DebugConfig();
 
+        // Опечатки в именах ключей — до всего остального: из-за них «настроил, а не работает».
+        ReportUnknownKeys();
+
         // Прова в пробу конфигом запрещена — иначе весь блок debug «утечёт» в пробу.
         // Регистр не важен: --client / -c / ConnectAsClient / --connectasclient.
         Launch.Args.RemoveAll(IsProbeFlag);
@@ -594,6 +613,37 @@ public sealed class ServerConfig
         {
             var restart = issue.RequiresRestart ? " (нужен перезапуск)" : "";
             log($"[config]   {issue.Key}: {issue.Detail} → {issue.Applied}{restart}");
+        }
+    }
+
+    /// <summary>
+    /// Опечатки в именах ключей. «Настроил админов, а сервер их не видит» почти всегда значит
+    /// <c>\"admins\"</c> в корне или <c>\"adminNicknames\"</c> вместо <c>admin.nicknames</c>.
+    /// </summary>
+    private void ReportUnknownKeys()
+    {
+        if (UnknownKeys is { Count: > 0 })
+        {
+            foreach (var key in UnknownKeys.Keys)
+            {
+                var likelyAdmin = (Admin is null || Admin.Nicknames is null || Admin.Nicknames.Count == 0)
+                                  && key.Contains(\"admin\", StringComparison.OrdinalIgnoreCase);
+                _issues.Add(new ConfigIssue(
+                    key,
+                    likelyAdmin
+                        ? \"неизвестный ключ в корне; админские ники читаются из admin.nicknames\"
+                        : \"неизвестный ключ в корне — сервер его не читает\",
+                    \"проигнорирован\"));
+            }
+        }
+
+        if (Admin?.UnknownKeys is { Count: > 0 })
+        {
+            foreach (var key in Admin.UnknownKeys.Keys)
+                _issues.Add(new ConfigIssue(
+                    \"admin.\" + key,
+                    \"неизвестный ключ внутри admin — сервер его не читает\",
+                    \"проигнорирован\"));
         }
     }
 
