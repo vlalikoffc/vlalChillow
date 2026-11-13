@@ -1,3 +1,4 @@
+using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
 
@@ -73,14 +74,30 @@ public sealed partial class GameMatchHost
         }
 
         var previousUid = previousState?.UserId;
+        var cumulativeDeath = UsesCumulativeDeathCounters(room);
         ReconnectAdoption adoption;
         lock (_roomGate)
-            adoption = MatchReconnect.Adopt(room, newState, previousState, actorNr);
+            adoption = MatchReconnect.Adopt(room, newState, previousState, actorNr, cumulativeDeath);
 
         if (previousState is not null)
         {
             try { previousState.BootstrapTimeoutCts?.Cancel(); }
             catch { /* ignore */ }
+        }
+
+        // Issue #40: buy/waiting reconnect clears the round-local death flag. Publish the same
+        // death=0 the next C2=22 would have published, so peers and the returning client agree
+        // before combat freezes the roster. This is the existing respawn flag, not a new phase.
+        if (adoption.ClearedRoundDeath)
+        {
+            var deathReset = MatchCodec.BuildSetProperty(
+                NextServerTime(), actorNr, MatchRoomPropKeys.Death, LobbyVariant.FromInt(0));
+            // Remaining INIT-ready peers see the reset now. The returning socket gets death=0
+            // through its post-bootstrap actor-props snapshot, not before JoinRoom Found.
+            var peers = BroadcastInitReady(room, deathReset, tag: "match_tx_SetProperty");
+            Console.WriteLine(
+                $"[match-host] reconnect-round-reset: actor={actorNr} death=0 → peers={peers} " +
+                "(roster not frozen — respawn allowed before combat)");
         }
 
         // Issue #39: the old body belongs to a session that no longer exists. Leaving it in
@@ -95,6 +112,19 @@ public sealed partial class GameMatchHost
                 $"(reconnect actor={actorNr}: old body removed, not counted alive)");
         }
 
+        // Issue #40: a frozen-roster reconnect leaves the current round like a disconnect.
+        // Re-check wipe immediately; otherwise an emptied side can hang until the host timeout
+        // while the returning client already has no body.
+        bool bombPlanted;
+        MatchFlowPhase phase;
+        lock (_roomGate)
+        {
+            phase = room.Flow.Phase;
+            bombPlanted = room.Flow.BombPlanted;
+        }
+        if (MatchFlowRules.AllowsWipeCheck(phase))
+            TryResolveWipeImmediate(room, bombPlanted);
+
         var remembered = adoption.RememberedTeam;
         Console.WriteLine(
             $"[match-host] reconnect-takeover: identity='{newState.IdentityKey}' actor={actorNr} " +
@@ -105,5 +135,19 @@ public sealed partial class GameMatchHost
             (remembered is MatchTeam.Tr or MatchTeam.Ct
                 ? $"; restore team={remembered} после INIT"
                 : "; team не запомнена (Spectator/нет)"));
+    }
+
+    /// <summary>
+    /// Issue #40: DeathMatch and Duel FFA use <c>death</c> as a cumulative match counter,
+    /// not a per-round alive flag. A reconnect must preserve it; scored bomb/duel rounds
+    /// clear the round-local flag only before the roster freezes.
+    /// </summary>
+    private bool UsesCumulativeDeathCounters(MatchRoom room)
+    {
+        lock (_roomGate)
+        {
+            return IsDeathMatchRoom(room)
+                || (IsDuelRoom(room) && room.Flow.Phase == MatchFlowPhase.AlliesPreWarmup);
+        }
     }
 }

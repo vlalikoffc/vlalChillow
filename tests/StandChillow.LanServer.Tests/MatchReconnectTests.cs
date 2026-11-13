@@ -119,10 +119,14 @@ public sealed class MatchReconnectTests
         Assert.Equal((byte)2, newState.ActorNr);
         Assert.Equal(MatchTeam.Tr, newState.PendingReconnectTeam);
         Assert.DoesNotContain((byte)2, room.SpawnedPawns);
-        // Alive/dead of the old session is not trusted: the player is a cold mid-round
-        // entrant (outside the frozen roster) until a real CWO respawns him.
-        Assert.DoesNotContain((byte)2, room.Flow.DeadActors);
+        // Issue #40: the roster was already frozen (combat). The returning player leaves this
+        // round like a disconnect; his old death state is not silently turned back into "alive".
+        Assert.Contains((byte)2, room.Flow.DeadActors);
         Assert.False(room.Flow.RoundRoster.ContainsKey(2));
+        Assert.False(adoption.ClearedRoundDeath);
+        // The returning socket was not INIT-ready during the takeover Destroy fan-out, so the
+        // same old body id is queued for its post-gate cleanup.
+        Assert.Contains((short)777, newState.PendingWorldCleanupIds);
         // The reconnecting client does not resend identity — INIT must trust the takeover.
         Assert.True(newState.ReconnectIdentityTrusted);
         Assert.True(newState.IsJoinerIdentityReady);
@@ -230,14 +234,61 @@ public sealed class MatchReconnectTests
         Assert.Equal(MatchTeam.Tr, adoption.RememberedTeam);
         Assert.Equal<IEnumerable<short>>(new short[] { 777 }, adoption.RemovedPawnIds);
         Assert.Empty(room.LivingPawns);
-        Assert.Single(room.Actors.Where(a => a.Nr == 2));
+        Assert.Single(room.Actors, a => a.Nr == 2);
         Assert.Equal("LBHASH", room.ActorIdentities[2]);
         Assert.DoesNotContain((byte)2, room.OwnerlessSinceTick.Keys);
-        Assert.DoesNotContain((byte)2, room.Flow.DeadActors);
+        // Frozen roster: ghost adoption still leaves the running round; old death is preserved.
+        Assert.Contains((byte)2, room.Flow.DeadActors);
         Assert.False(room.Flow.RoundRoster.ContainsKey(2));
+        Assert.False(adoption.ClearedRoundDeath);
+        Assert.Contains((short)777, newState.PendingWorldCleanupIds);
         Assert.Equal((byte)2, newState.ActorNr);
         Assert.Equal(MatchTeam.Tr, newState.PendingReconnectTeam);
         Assert.True(newState.ReconnectIdentityTrusted);
+    }
+
+    [Fact]
+    public void Buy_reconnect_clears_round_death_and_stale_combat_bookkeeping()
+    {
+        // Issue #40: reconnect during buy (roster not frozen) must not leave death=1 behind
+        // while DeadActors is cleared — that split-brain kept the player "dead" until the next
+        // C2=22. The round-local flag is reset, and old-session grace/attribution is dropped.
+        var room = NewRoom();
+        room.Actors.Add((2, "влал", "LBHASH_old"));
+        room.ActorProps[(2, MatchRoomPropKeys.Team)] = LobbyVariant.FromByte((byte)MatchTeam.Tr);
+        room.ActorProps[(2, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(1);
+        room.Flow.DeadActors.Add(2);
+        room.Flow.PendingCombatDestroy[2] = DateTime.UtcNow;
+        room.LastCombatDamage[2] = (3, DateTime.UtcNow, 1);
+        room.LastCombatDamage[4] = (2, DateTime.UtcNow, 1);
+        room.LivingPawns[777] = new MatchLivingPawn { ObjectId = 777, OwnerActorNr = 2 };
+
+        var newState = new MatchPeerState { UserId = "LBHASH_new", IdentityKey = "LBHASH" };
+        var adoption = MatchReconnect.Adopt(room, newState, previousState: null, actorNr: 2);
+
+        Assert.True(adoption.ClearedRoundDeath);
+        Assert.DoesNotContain((byte)2, room.Flow.DeadActors);
+        Assert.Equal(0, room.ActorProps[(2, MatchRoomPropKeys.Death)].Int);
+        Assert.DoesNotContain((byte)2, room.Flow.PendingCombatDestroy.Keys);
+        Assert.Empty(room.LastCombatDamage);
+        Assert.Contains((short)777, newState.PendingWorldCleanupIds);
+    }
+
+    [Fact]
+    public void Cumulative_death_counter_survives_reconnect()
+    {
+        // DeathMatch / Duel FFA death is a match counter, not a round-local alive flag.
+        var room = NewRoom();
+        room.Actors.Add((2, "dm", "LBHASH_old"));
+        room.ActorProps[(2, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(5);
+        room.Flow.DeadActors.Add(2);
+
+        var newState = new MatchPeerState { UserId = "LBHASH_new", IdentityKey = "LBHASH" };
+        var adoption = MatchReconnect.Adopt(
+            room, newState, previousState: null, actorNr: 2, cumulativeDeathCounters: true);
+
+        Assert.False(adoption.ClearedRoundDeath);
+        Assert.Equal(5, room.ActorProps[(2, MatchRoomPropKeys.Death)].Int);
     }
 
     [Fact]

@@ -264,12 +264,28 @@ public sealed partial class GameMatchHost
             LobbyVariant.FromByte((byte)MatchTeam.Spectator));
 
         // 5) Joiner money — phone OBT later forces Ct; we await inbound team before pawn.
+        // Issue #40: a reconnect keeps the balance the room already published. Bootstrapping
+        // it back to 10000 mid-buy silently rewound the round economy for the returning peer.
+        var joinerMoney = MatchFlowTestParams.BootstrapMoney;
+        var reconnectTrusted = false;
+        lock (_roomGate)
+        {
+            reconnectTrusted = _peers.TryGetValue(peer, out var jst) && jst.ReconnectIdentityTrusted;
+            if (reconnectTrusted
+                && room.ActorProps.TryGetValue((joinerActorNr, MatchRoomPropKeys.Money), out var money)
+                && money.Kind == LobbyVariantKind.Int)
+            {
+                joinerMoney = money.Int;
+            }
+            else
+            {
+                room.ActorProps[(joinerActorNr, MatchRoomPropKeys.Money)] =
+                    LobbyVariant.FromInt(joinerMoney);
+            }
+        }
         SendAndDump(peer, MatchCodec.BuildSetProperty(
             NextServerTime(), joinerActorNr, MatchRoomPropKeys.Money,
-            LobbyVariant.FromInt(MatchFlowTestParams.BootstrapMoney)));
-        lock (_roomGate)
-            room.ActorProps[(joinerActorNr, MatchRoomPropKeys.Money)] =
-                LobbyVariant.FromInt(MatchFlowTestParams.BootstrapMoney);
+            LobbyVariant.FromInt(joinerMoney)));
 
         Console.WriteLine(
             $"[match-host] TX world bootstrap for joiner={joinerActorNr} " +
@@ -280,11 +296,15 @@ public sealed partial class GameMatchHost
             $"INIT unlocked — await team SetProperty then joiner CreateWorldObject echo)");
 
         // Mid-match / late join: C2=10 only clears InitWaiting. Push live room flow props +
-        // other actors' identity so joiner is not stuck on WaitingPlayers with empty world.
-        SendMatchStateSnapshotToPeer(peer, room, excludeActorNr: joinerActorNr);
-        SendLivingPawnSnapshotToPeer(peer, room, excludeOwnerActorNr: joinerActorNr);
-        // If bomb already planted (C2=40), room props alone do not show the mesh — re-TX plant Rpc.
-        SyncBombPlantStateToPeer(peer, room);
+        // actor identity so the joiner is not stuck on WaitingPlayers. Room/actor properties
+        // are safe before the scene exists; world objects are not.
+        // Issue #40: the aggregate CWO/Rpc snapshot is delivered exactly once when the world
+        // gate opens (TryDeliverWorldSnapshot). Sending it here too duplicated pawns/entities
+        // into a reconnecting client that had retained its scene, and pushed plant Rpc into a
+        // scene that was still loading. A reconnect includes its own actor props (team/death/
+        // money) because the client will not re-author the identity batch.
+        SendMatchStateSnapshotToPeer(
+            peer, room, excludeActorNr: reconnectTrusted ? (byte?)null : joinerActorNr);
 
         // Abrupt reconnect into same match: re-force previous Tr/Ct after INIT (spawn path).
         MaybeScheduleReconnectRestore(peer, room, joinerActorNr);
@@ -386,11 +406,10 @@ public sealed partial class GameMatchHost
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: OK actor={actorNr} team={liveTeam} " +
                         "respawned (CWO seen)");
-                    // Issue #28: the peer is a fighter again — refresh the world it may have
-                    // missed while it was away (other pawns + tracked round entities + plant).
-                    SendMatchStateSnapshotToPeer(peer, room, excludeActorNr: actorNr);
-                    SendLivingPawnSnapshotToPeer(peer, room, excludeOwnerActorNr: actorNr);
-                    SyncBombPlantStateToPeer(peer, room);
+                    // Issue #40: do not re-send the aggregate world snapshot here. The world
+                    // gate already delivered it once when the scene was proven; live CWO/Rpc
+                    // relays cover everything that changed after that. A second full snapshot
+                    // duplicated pawns/entities into the retained client scene (ghosts).
                     ForgetReconnectMemory(identityKey);
                     return;
                 }
@@ -437,15 +456,17 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// After INIT, TX current room match-flow props (C2/Time/Round/Score/bomberId/…) plus
-    /// other humans' actor props (team/avatar/money/…) so a GIP late joiner syncs to the
-    /// live match instead of staying on WaitingPlayers with nameless ghosts.
+    /// humans' actor props (team/avatar/money/…) so a late joiner syncs to the live match
+    /// instead of staying on WaitingPlayers with nameless ghosts.
     /// </summary>
     /// <remarks>
-    /// Issue #28: the bag is only as good as what the host has actually published. A peer that
-    /// rejoins mid-round needs every room key the host still tracks, plus the tracked round
-    /// entities below, otherwise it stays behind until the next round.
+    /// Issue #40: properties only. World objects (tracked entities, living pawns, plant Rpc)
+    /// are delivered separately by <c>TryDeliverWorldSnapshot</c> once the peer's scene is
+    /// proven, so a reconnect does not receive the same CWO twice. <paramref name="excludeActorNr"/>
+    /// is null for a trusted reconnect: that client will not re-author its own identity batch,
+    /// so its remembered team/death/money must be included.
     /// </remarks>
-    private void SendMatchStateSnapshotToPeer(NetPeer peer, MatchRoom room, byte excludeActorNr)
+    private void SendMatchStateSnapshotToPeer(NetPeer peer, MatchRoom room, byte? excludeActorNr)
     {
         List<(string Key, LobbyVariant Value)> roomProps;
         List<(byte Actor, string Key, LobbyVariant Value)> actorProps;
@@ -457,7 +478,7 @@ public sealed partial class GameMatchHost
                 .ToList();
             actorProps = room.ActorProps
                 .Where(kv => kv.Key.Actor != 0
-                             && kv.Key.Actor != excludeActorNr
+                             && (!excludeActorNr.HasValue || kv.Key.Actor != excludeActorNr.Value)
                              && kv.Key.Actor != MatchHostActor.ActorNr)
                 .Select(kv => (kv.Key.Actor, kv.Key.Key, kv.Value))
                 .ToList();
@@ -477,14 +498,9 @@ public sealed partial class GameMatchHost
         }
 
         Console.WriteLine(
-            $"[match-host] TX match-state snapshot to joiner peer " +
-            $"(excludeActor={excludeActorNr} roomProps={roomProps.Count} " +
+            $"[match-host] TX match-state props to joiner peer " +
+            $"(excludeActor={excludeActorNr?.ToString() ?? "-"} roomProps={roomProps.Count} " +
             $"actorProps={actorProps.Count} liveC2={room.RoomC2})");
-
-        // Issue #28: the room/actor props above do not recreate non-pawn world objects. A peer that
-        // rejoins mid-round must still see drops and (with the BombManager plant Rpc below) the
-        // planted bomb, otherwise it walks into an empty world until the next round.
-        SendTrackedRoundEntitySnapshotToPeer(peer, room);
     }
 
     /// <summary>
