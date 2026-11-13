@@ -565,7 +565,7 @@ public sealed partial class GameMatchHost
             // #33: wipe is judged against who entered this round, not every stale team prop.
             // Spawn evidence wins: a mid-round joiner has a team prop but no pawn — he is dead
             // by design and must not keep his side "alive" past the kill that ended the round.
-            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps, room.SpawnedPawns);
+            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps);
             room.Flow.PendingCombatDestroy.Clear();
         }
 

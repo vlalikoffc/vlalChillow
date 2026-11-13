@@ -358,7 +358,7 @@ public sealed partial class GameMatchHost
             room.Flow.PendingCombatDestroy.Clear();
             // #33: the wipe must be judged against who actually entered this round —
             // a pawn on the field is the proof of entry (see MatchFlowRules.FreezeRoundRoster).
-            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps, room.SpawnedPawns);
+            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps);
             (trCount, ctCount) = CountFightingTeamRoster(room);
         }
 

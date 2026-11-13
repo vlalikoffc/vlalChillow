@@ -147,40 +147,87 @@ public sealed class MatchRoundIntegrityTests
     }
 
     /// <summary>
-    /// Fix #3: the roster is frozen from spawn evidence. A joiner who took a `team` prop while
-    /// still loading (never got a pawn) used to sit in the roster as «alive» — the enemy team
-    /// could then never be wiped and the round fell through to the 109s timeout instead of
-    /// ending on the kill that decided it.
+    /// Fix #3, exact shape of latest.log round 3: T had two fighters when the round froze, one of
+    /// them left mid-round, and the last T was then killed. Freezing <b>before</b> the leaver
+    /// walked out keeps the side non-empty, so the death of the last T is a real wipe — not an
+    /// «empty roster» case, and not «wait for the bomb» either.
     /// </summary>
     [Fact]
-    public void Freeze_UsesSpawnEvidence_WhenGiven()
+    public void LeaverThenLastFighterDies_ResolvesWipeTr()
     {
         var props = Props(
-            (2, MatchTeam.Tr, null),
-            (3, MatchTeam.Ct, null),
-            (6, MatchTeam.Tr, null)); // mid-round joiner: team prop, no pawn
+            (2, MatchTeam.Ct, null),
+            (3, MatchTeam.Tr, null),
+            (5, MatchTeam.Tr, null));
 
         var flow = new MatchFlowState { Phase = MatchFlowPhase.PurchasePhase };
-        MatchFlowRules.FreezeRoundRoster(flow, props, pawnOwners: new byte[] { 2, 3 });
+        MatchFlowRules.FreezeRoundRoster(flow, props);
+        Assert.Equal(3, flow.RoundRoster.Count);
 
-        Assert.Equal(2, flow.RoundRoster.Count);
-        Assert.False(flow.RoundRoster.ContainsKey(6));
-    }
+        // Actor 5 leaves mid-round (disconnect removes him from the roster, not from history).
+        MatchFlowRules.RemoveFromRoundRoster(flow, actorNr: 5);
+        props.Remove((5, MatchRoomPropKeys.Team));
 
-    /// <summary>
-    /// The same rule from the other side: the two players who spawned decide the round. Killing
-    /// Tr #2 must wipe Tr even though idle joiner #6 still carries a Tr team prop.
-    /// </summary>
-    [Fact]
-    public void SpawnedFightersOnly_ResolveTheWipe()
-    {
-        var props = Props((2, MatchTeam.Tr, 1), (3, MatchTeam.Ct, null), (6, MatchTeam.Tr, null));
-        var flow = new MatchFlowState { Phase = MatchFlowPhase.PurchasePhase };
-        MatchFlowRules.FreezeRoundRoster(flow, props, pawnOwners: new byte[] { 2, 3 });
+        // The remaining T is eliminated.
+        props[(3, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(1);
+        flow.DeadActors.Add(3);
 
         var resolved = MatchFlowRules.TryResolveWipe(
             flow, props, bombPlanted: false, out var winner, out var reason);
 
+        Assert.True(resolved);
+        Assert.Equal(MatchTeam.Ct, winner);
+        Assert.Equal("wipe-tr", reason);
+    }
+
+    /// <summary>
+    /// A mid-round joiner takes a team prop while the round is already running. He is not part of
+    /// it (cold start = dead for this round) and must not keep his side alive after a wipe.
+    /// </summary>
+    [Fact]
+    public void MidRoundJoiner_IsNotInTheFrozenRoster()
+    {
+        var props = Props((2, MatchTeam.Tr, null), (3, MatchTeam.Ct, null));
+        var flow = new MatchFlowState { Phase = MatchFlowPhase.PurchasePhase };
+        MatchFlowRules.FreezeRoundRoster(flow, props);
+
+        // Joiner arrives after the freeze.
+        props[(6, MatchRoomPropKeys.Team)] = LobbyVariant.FromByte((byte)MatchTeam.Tr);
+
+        Assert.False(flow.RoundRoster.ContainsKey(6));
+        var (_, _, totalTr, totalCt) = MatchFlowRules.CountAliveFighters(flow, props);
+        Assert.Equal(1, totalTr);
+        Assert.Equal(1, totalCt);
+    }
+
+    /// <summary>
+    /// A fighter who dies and switches to Spectator stays in the roster as dead. Spectator means
+    /// «not playing right now», not «left the round» — dropping him would empty the side and turn
+    /// «everyone is dead» into a different, invented wipe.
+    /// </summary>
+    [Fact]
+    public void DeadFighterAsSpectator_StillCountsAsTheDeadSide()
+    {
+        var props = Props(
+            (2, MatchTeam.Ct, null),
+            (3, MatchTeam.Tr, null),
+            (5, MatchTeam.Tr, null));
+        var flow = new MatchFlowState { Phase = MatchFlowPhase.PurchasePhase };
+        MatchFlowRules.FreezeRoundRoster(flow, props);
+
+        // T dies, then the client flips its team prop to Spectator.
+        props[(3, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(1);
+        flow.DeadActors.Add(3);
+        props[(3, MatchRoomPropKeys.Team)] = LobbyVariant.FromByte((byte)MatchTeam.Spectator);
+        props[(5, MatchRoomPropKeys.Team)] = LobbyVariant.FromByte((byte)MatchTeam.Spectator);
+        flow.DeadActors.Add(5);
+
+        var (aliveTr, _, totalTr, _) = MatchFlowRules.CountAliveFighters(flow, props);
+        Assert.Equal(2, totalTr); // both T are still part of this round
+        Assert.Equal(0, aliveTr); // and both are dead → wipe-tr
+
+        var resolved = MatchFlowRules.TryResolveWipe(
+            flow, props, bombPlanted: false, out var winner, out var reason);
         Assert.True(resolved);
         Assert.Equal(MatchTeam.Ct, winner);
         Assert.Equal("wipe-tr", reason);

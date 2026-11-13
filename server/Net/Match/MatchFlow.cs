@@ -272,15 +272,14 @@ public static class MatchFlowRules
     /// </summary>
     public static void FreezeRoundRoster(
         MatchFlowState flow,
-        IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps,
-        IEnumerable<byte>? pawnOwners = null)
+        IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps)
     {
         flow.RoundRoster.Clear();
-        // A pawn is the ground truth for "entered the match". A mid-round joiner takes a `team`
-        // prop while still loading and never spawns during that round (he is dead by design, see
-        // the joiner bootstrap); counting him as alive meant the enemy team could never be
-        // wiped — the round the host decided on a kill fell through to the 109s timeout.
-        HashSet<byte>? entrants = pawnOwners?.ToHashSet();
+        // Snapshot, deliberately. A late joiner's `team` prop arrives after this point and is not
+        // added (cold start = dead for the running round). Spawn timing is NOT used as the entry
+        // proof instead: clients create their pawn shortly after C2=31 (latest.log), so a fighter
+        // who legitimately plays the round can still have no pawn here and would be dropped —
+        // that would fake a wipe on the other side.
         foreach (var ((actor, key), value) in actorProps)
         {
             if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
@@ -290,8 +289,6 @@ public static class MatchFlowRules
             var team = (MatchTeam)value.Byte;
             if (team is not (MatchTeam.Tr or MatchTeam.Ct))
                 continue;
-            if (entrants is { Count: > 0 } && !entrants.Contains(actor))
-                continue;
             flow.RoundRoster[actor] = team;
         }
     }
@@ -300,11 +297,16 @@ public static class MatchFlowRules
     public static void ClearRoundRoster(MatchFlowState flow) => flow.RoundRoster.Clear();
 
     /// <summary>
-    /// Drop one actor from the frozen roster because it left the room. Without this a player who
-    /// disconnects mid-round stays in <see cref="MatchFlowState.RoundRoster"/> as «alive», so the
-    /// opposing side can never be wiped and the round runs to the 109s timeout instead of ending
-    /// on the kill that actually decided it.
+    /// Drop one actor from the frozen roster because it <b>left the room</b>. Without this a player
+    /// who disconnects mid-round stays in <see cref="MatchFlowState.RoundRoster"/> as «alive», so
+    /// the opposing side can never be wiped and the round runs to the 109s timeout instead of
+    /// ending on the kill that decided it (latest.log round 3).
     /// </summary>
+    /// <remarks>
+    /// Disconnect only. Switching to Spectator is <b>not</b> a leave: a fighter who died and then
+    /// flipped his team prop must stay in the roster as dead, otherwise the side empties and
+    /// «everyone is dead» turns into a different, invented wipe.
+    /// </remarks>
     public static void RemoveFromRoundRoster(MatchFlowState flow, byte actorNr) =>
         flow.RoundRoster.Remove(actorNr);
 

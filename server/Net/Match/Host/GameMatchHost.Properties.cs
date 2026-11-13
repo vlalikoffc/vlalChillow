@@ -111,9 +111,27 @@ public sealed partial class GameMatchHost
                     Console.WriteLine(
                         $"[match-host] team={team} actor={actorNr} — await joiner CreateWorldObject " +
                         $"(echo+rpc1+state; wire name Tr_Tr/Ct_Ct + fusTag=101 looks like *e in ASCII)");
+                    // A team prop that arrives while a round is already running = mid-round
+                    // joiner. He is not in the frozen roster (cold start: dead for this round,
+                    // no pawn until the next C2=22). Logged so the absent round-end cannot be
+                    // mistaken for a stuck flow.
+                    bool inFrozenRoster;
+                    lock (_roomGate)
+                        inFrozenRoster = room.Flow.RoundRoster.ContainsKey(actorNr);
+                    if (!inFrozenRoster && MatchFlowRules.AllowsWipeCheck(room.Flow.Phase))
+                    {
+                        Console.WriteLine(
+                            $"[match-host] mid-round joiner actor={actorNr} team={team} — " +
+                            "outside this round's roster (dead for the round; not counted alive)");
+                    }
                     TryBeginMatchFlowIfBothTeams(room);
                     TryAssignBomberOnTrJoin(room, actorNr);
                 }
+                // Spectator has two meanings and the roster must not guess between them:
+                //  • joined as a spectator — simply not a fighter this round;
+                //  • joined Tr/Ct and is dead — the client flips the prop, he did not leave.
+                // So a Spectator team prop never touches the frozen roster: the entry stays as
+                // it was frozen (and stays dead), which is what keeps a wipe a real wipe.
             }
 
             if (key == MatchRoomPropKeys.Death)
