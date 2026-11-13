@@ -127,11 +127,7 @@ public sealed partial class GameMatchHost
                     TryBeginMatchFlowIfBothTeams(room);
                     TryAssignBomberOnTrJoin(room, actorNr);
                 }
-                // Spectator has two meanings and the roster must not guess between them:
-                //  • joined as a spectator — simply not a fighter this round;
-                //  • joined Tr/Ct and is dead — the client flips the prop, he did not leave.
-                // So a Spectator team prop never touches the frozen roster: the entry stays as
-                // it was frozen (and stays dead), which is what keeps a wipe a real wipe.
+                NoteMidRoundTeamChange(room, actorNr, team);
             }
 
             if (key == MatchRoomPropKeys.Death)
@@ -258,6 +254,13 @@ public sealed partial class GameMatchHost
                     TryAssignBomberOnTrJoin(room, actorNr);
                 }
 
+                if (k == MatchRoomPropKeys.Team
+                    && v.Kind == LobbyVariantKind.Byte
+                    && actorNr != MatchHostActor.ActorNr)
+                {
+                    NoteMidRoundTeamChange(room, actorNr, (MatchTeam)v.Byte);
+                }
+
                 if (k == MatchRoomPropKeys.Death)
                 {
                     Console.WriteLine(
@@ -313,6 +316,42 @@ public sealed partial class GameMatchHost
             or MatchRoomPropKeys.CurrentLoadout
             or MatchRoomPropKeys.CurrentRoundModifierId
             or MatchRoomPropKeys.UsedRoundModifierIds;
+
+    /// <summary>
+    /// A fighter changed his <c>team</c> prop. Inside a running round that is a death, never a
+    /// transfer: switching to the other side is punished with a death, switching to Spectator
+    /// means the player stops playing and can only watch. Before the round (buy time / warmup)
+    /// it is free — he respawns on the new side, and that is not a death.
+    /// </summary>
+    /// <remarks>
+    /// The frozen roster entry is kept and the actor marked dead, rather than deleted. Deleting
+    /// it would empty the side; with both totals at zero the empty-team rule no longer applies
+    /// and «the whole side is gone» would quietly become «no result, wait for the timeout».
+    /// </remarks>
+    private void NoteMidRoundTeamChange(MatchRoom room, byte actorNr, MatchTeam newTeam)
+    {
+        MatchTeam switchedFrom;
+        bool midRound;
+        lock (_roomGate)
+        {
+            midRound = MatchFlowRules.IsMidRoundTeamSwitch(
+                room.Flow, actorNr, newTeam, out switchedFrom);
+        }
+        if (!midRound)
+            return;
+
+        bool newlyDead;
+        lock (_roomGate)
+            newlyDead = room.Flow.DeadActors.Add(actorNr);
+
+        Console.WriteLine(
+            $"[match-host] team switch actor={actorNr} {switchedFrom}→{newTeam} mid-round — " +
+            $"counted as dead for this round{(newlyDead ? "" : " (already dead)")}; " +
+            "frozen roster entry kept so the side cannot vanish");
+
+        if (newlyDead)
+            TryResolveWipeImmediate(room, room.Flow.BombPlanted);
+    }
 
     /// <summary>
     /// Verbose [tdm-death] trace for the combat counters that drive the master-death path

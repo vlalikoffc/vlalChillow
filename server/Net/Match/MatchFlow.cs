@@ -393,11 +393,12 @@ public static class MatchFlowRules
 
         var (aliveTr, aliveCt, totalTr, totalCt) = CountAliveFighters(flow, actorProps);
         var planted = bombPlanted || flow.BombPlanted;
-        // Empty-roster wipe only during Live/BombPlanted (real mid-round disconnect).
-        // Prep: require observed deaths (alive==0 with total>0) — do not invent RoundEnd
-        // from a missing opposing team during buy time.
-        var allowEmptyRosterWipe = flow.Phase is MatchFlowPhase.RoundLive
-            or MatchFlowPhase.BombPlanted;
+        // Whole-team leave. This must work wherever the wipe check is allowed at all, including
+        // the bomb family, whose combat phase is PurchasePhase (C2=31) — limiting it to
+        // RoundLive/BombPlanted meant «every CT disconnected» produced no result and the round
+        // rolled on to the timeout. Buy time (no combat yet) still cannot invent a result:
+        // AllowsWipeCheck above is false there, so we never reach this.
+        var allowEmptyRosterWipe = AllowsWipeCheck(flow.Phase);
 
         if (allowEmptyRosterWipe && totalTr > 0 && totalCt == 0)
         {
@@ -440,6 +441,36 @@ public static class MatchFlowRules
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// A fighter changed his <c>team</c> prop after the round was frozen. Inside a running round
+    /// that is a death, never a transfer: switching to the other side is punished with a death,
+    /// and switching to Spectator means he stops playing («пропадает», can only watch).
+    /// </summary>
+    /// <remarks>
+    /// The frozen entry is kept (and the actor is marked dead) instead of being removed. Removing
+    /// him would drop the side out of the count entirely — with both totals at zero the
+    /// empty-team rule no longer applies and «everyone on this side is gone» would quietly become
+    /// «no result, wait for the timeout». Kept as dead, the wipe still resolves.
+    /// </remarks>
+    /// <returns>
+    /// <c>true</c> when this was a mid-round switch (the caller must count the actor as dead);
+    /// <c>false</c> for a no-op: not in this round, same team, or a phase where no result is being
+    /// played out (buy time / warmup — the client respawns, and that is not a death).
+    /// </returns>
+    public static bool IsMidRoundTeamSwitch(
+        MatchFlowState flow,
+        byte actorNr,
+        MatchTeam newTeam,
+        out MatchTeam frozenTeam)
+    {
+        frozenTeam = MatchTeam.None;
+        if (!flow.RoundRoster.TryGetValue(actorNr, out frozenTeam))
+            return false;
+        if (frozenTeam == newTeam)
+            return false;
+        return AllowsWipeCheck(flow.Phase);
     }
 
     public static MatchTeam GetActorTeam(
