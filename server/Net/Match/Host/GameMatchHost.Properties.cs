@@ -203,8 +203,12 @@ public sealed partial class GameMatchHost
             var accepted = new List<(string Key, LobbyVariant Value)>(props.Count);
             lock (_roomGate)
             {
-                foreach (var (k, v) in props)
+                foreach (var (k, originalValue) in props)
                 {
+                    // Локальная копия: у переменной цикла нельзя менять значение, а uid
+                    // переписывается до записи в комнату и до рассылки.
+                    var v = originalValue;
+
                     if (MatchPropAuthority.RejectsForeignCombatProp(
                             st.ActorNr, actorNr, k, MatchHostActor.ActorNr))
                     {
