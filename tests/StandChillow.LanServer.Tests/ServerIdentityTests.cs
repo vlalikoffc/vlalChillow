@@ -63,6 +63,21 @@ public sealed class ServerIdentityTests
     }
 
     [Fact]
+    public void NumericHashOfTheWordServerIsAnOrdinaryBannablePlayerId()
+    {
+        // Число, которое даёт хеш слова «Server», — обычный id игрока: его можно банить,
+        // и по нему видно, что это не сервер, а тот, кто так назвался. Сервер отличим
+        // только по строке «Server», и банятся они по-разному.
+        var numeric = MatchPublicId.ForNick("Server");
+        Assert.InRange(numeric, MatchPublicId.Min, MatchPublicId.Max);
+        Assert.False(ServerIdentity.IsServerUid(numeric.ToString()));
+
+        Assert.True(MatchPublicId.TryWireUid("Server", out var wireUid));
+        Assert.False(ServerIdentity.IsServerUid(wireUid));
+        Assert.True(ServerIdentity.IsServerUid(ServerIdentity.Uid));
+    }
+
+    [Fact]
     public void PlayersNumberingStaysSeparateFromTheServerId()
     {
         // Игроки нумеруются 1…100 000 000; сервер — строка «Server», в диапазон не входит.
