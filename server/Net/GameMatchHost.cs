@@ -735,6 +735,8 @@ public sealed partial class GameMatchHost : IDisposable
                 TickMatchFlow();
                 // Issue #39: peers whose world gate never got a proof packet must not starve.
                 TickWorldReadyGates();
+                // Issue #39: actors whose session disappeared must not linger as alive ghosts.
+                TickGhostActors();
                 flowMs = Stopwatch.GetElapsedTime(flowSw).TotalMilliseconds;
 
                 if (Diag.StatsEnabled
@@ -898,6 +900,16 @@ public sealed partial class GameMatchHost : IDisposable
                 // Owner→host Unreliable ticks (after CWO ack). Relay to INIT-ready peers
                 // except sender — same flags=None as phone host TX.
                 HandleWorldObjectStateRelay(peer, payload);
+                break;
+            case MatchOpcode.LeaveRoomRequest:
+                // Issue #39: a phone that «self-destructs» out of the room sends this and the host
+                // used to drop it on the floor (unknown payload shape → no invented handler). It is
+                // the moment the actor has to go, so log the exact bytes: with them the leave can
+                // be handled without guessing.
+                Console.WriteLine(
+                    $"[match-host] RX LeaveRoomRequest (13) from {peer.Address}:{peer.Port} " +
+                    $"len={payload.Length} hex={Convert.ToHexString(payload)} — " +
+                    "actor оставлен до таймаута (wire ещё не разобран)");
                 break;
             case MatchOpcode.FetchServerTimeRequest:
                 // Empty body = 2.07 FetchServerTime; anything else = 2.07 handshake.
