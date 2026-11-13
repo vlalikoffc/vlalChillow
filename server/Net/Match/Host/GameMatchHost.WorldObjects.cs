@@ -142,6 +142,10 @@ public sealed partial class GameMatchHost
                     PosY = py,
                     PosZ = pz,
                 };
+                // Issue #40: the returning client already created this replacement locally.
+                // If it reuses an old body's id, that id is no longer pending cleanup.
+                if (owner == st.ActorNr)
+                    st.PendingWorldCleanupIds.Remove(parsed.ObjectId);
             }
 
             if (clearedDead)
@@ -317,6 +321,9 @@ public sealed partial class GameMatchHost
                     // locally and every other INIT-ready peer got the rebuilt Rpc exactly once.
                     // Relaying the planter's original packet on top of that is a second plant on
                     // the wire — the phone answers «Invalid bomber» (latest-2.log, round 2).
+                    // Issue #40: if this accepted plant is also the packet that proves the
+                    // planter's world, the post-gate snapshot must not sync the plant back to him.
+                    st.SuppressPlantSyncOnce = true;
                     var nReady = CountInitReadyPeers(st.Room);
                     Console.WriteLine(
                         $"[observe] {AlliesFamilyLogTag(st.Room)} plant fan-out peers={decision.FanOutPeers} " +
@@ -454,6 +461,11 @@ public sealed partial class GameMatchHost
             if (!_peers.TryGetValue(peer, out var st) || st.Room is null)
                 return;
             var room = st.Room;
+
+            // Issue #40: the client already destroyed this object locally; do not send it a
+            // second cleanup Destroy for the same id when the world gate opens.
+            lock (_roomGate)
+                st.PendingWorldCleanupIds.Remove(objectId);
 
             // OBSERVE first: drop LivingPawns / track combat-death grace, then relay promptly.
             var removed = false;

@@ -80,18 +80,26 @@ internal static class MatchReconnect
 
     /// <summary>
     /// Передать actor вернувшемуся игроку. Номер, имя и room-свойства сохраняются, но
-    /// боевое состояние старой сессии — нет: старый pawn, флаг смерти в раунде и место в
-    /// frozen roster удаляются. Иначе сервер «помнит» игрока живым (или мёртвым) с чужим
-    /// телом и потом выкидывает его в Spectator (issue #39).
+    /// боевое состояние старой сессии — нет: старый pawn и отложенная смерть от Destroy
+    /// убираются. Дальше политика зависит от того, заморожен ли уже состав раунда:
+    /// <list type="bullet">
+    /// <item>состав не заморожен (закуп/ожидание) — раундовая смерть сбрасывается, клиент
+    /// может появиться снова до старта боя;</item>
+    /// <item>состав заморожен (бой идёт) — игрок выбывает из текущего раунда, как при
+    /// обычном disconnect; сервер не считает его живым до следующего закупа.</item>
+    /// </list>
+    /// <paramref name="cumulativeDeathCounters"/> (DeathMatch / Duel FFA) сохраняет
+    /// накопительный <c>death</c>: это счётчик смертей за матч, а не флаг «жив в раунде».
     /// </summary>
     public static ReconnectAdoption Adopt(
         MatchRoom room,
         MatchPeerState newState,
         MatchPeerState? previousState,
-        byte actorNr)
+        byte actorNr,
+        bool cumulativeDeathCounters = false)
     {
         if (previousState is not null && ReferenceEquals(previousState, newState))
-            return new ReconnectAdoption(MatchTeam.None, Array.Empty<short>());
+            return new ReconnectAdoption(MatchTeam.None, Array.Empty<short>(), ClearedRoundDeath: false);
 
         var remembered = MatchTeam.None;
         if (room.ActorProps.TryGetValue((actorNr, MatchRoomPropKeys.Team), out var teamValue)
@@ -122,13 +130,41 @@ internal static class MatchReconnect
             .Select(kv => kv.Key)
             .ToList();
         foreach (var id in pawnIds)
+        {
             room.LivingPawns.Remove(id);
+            // Issue #40: the takeover Destroy fan-out skips the returning socket (it is not
+            // INIT-ready yet). Queue the same ids for its post-gate cleanup so a retained
+            // client scene cannot keep the old local body as a ghost.
+            newState.PendingWorldCleanupIds.Add(id);
+        }
         room.SpawnedPawns.Remove(actorNr);
 
+        // Stale session bookkeeping must not outlive the socket: a Destroy grace armed for
+        // the old body, or damage attribution to/from it, can otherwise author a death or
+        // award a kill after the player already returned.
+        room.Flow.PendingCombatDestroy.Remove(actorNr);
+        room.LastCombatDamage.Remove(actorNr);
+        foreach (var attacker in room.LastCombatDamage
+                     .Where(kv => kv.Value.Victim == actorNr)
+                     .Select(kv => kv.Key)
+                     .ToList())
+        {
+            room.LastCombatDamage.Remove(attacker);
+        }
+
         // «Мёртв/жив» в текущем раунде — состояние старой сессии, ему верить нельзя.
-        // Возвращается как cold start: вне frozen roster, до следующего C2=22 (та же
-        // политика, что у обычного mid-round joiner).
-        room.Flow.DeadActors.Remove(actorNr);
+        // Until combat freezes the roster (buy / waiting), clear the round-local death so
+        // the returning fighter can respawn before the round starts. Once the roster is
+        // frozen, he leaves this round exactly like a disconnect; the caller re-checks wipe
+        // so an empty side cannot hang the round. Cumulative death counters are preserved.
+        var roundFrozen = room.Flow.RoundRoster.Count > 0;
+        var clearedRoundDeath = false;
+        if (!cumulativeDeathCounters && !roundFrozen)
+        {
+            room.Flow.DeadActors.Remove(actorNr);
+            room.ActorProps[(actorNr, MatchRoomPropKeys.Death)] = LobbyVariant.FromInt(0);
+            clearedRoundDeath = true;
+        }
         MatchFlowRules.RemoveFromRoundRoster(room.Flow, actorNr);
 
         // Старый сокет больше не владеет actor: его пакеты игнорируются, а будущий
@@ -146,11 +182,12 @@ internal static class MatchReconnect
             remembered is MatchTeam.Tr or MatchTeam.Ct ? remembered : null;
         // Identity batch от вернувшегося клиента не приходит — INIT не ждём.
         newState.ReconnectIdentityTrusted = true;
-        return new ReconnectAdoption(remembered, pawnIds);
+        return new ReconnectAdoption(remembered, pawnIds, clearedRoundDeath);
     }
 }
 
 /// <summary>Что забрал <see cref="MatchReconnect.Adopt"/>: память о команде и старые тела.</summary>
 internal readonly record struct ReconnectAdoption(
     MatchTeam RememberedTeam,
-    IReadOnlyList<short> RemovedPawnIds);
+    IReadOnlyList<short> RemovedPawnIds,
+    bool ClearedRoundDeath);

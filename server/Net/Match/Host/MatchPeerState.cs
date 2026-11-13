@@ -75,11 +75,34 @@ internal sealed class MatchPeerState
     /// <summary>When <see cref="WorldReady"/> flips on even without proof (Environment.TickCount64).</summary>
     public long WorldGateUntilTick { get; set; }
 
-    /// <summary>Close the gate for a joining peer: its world does not exist yet.</summary>
+    /// <summary>
+    /// Issue #40: old pawn ids this reconnecting peer must still drop locally. The takeover
+    /// Destroy fan-out only reaches peers that were already INIT-ready; the returning socket is
+    /// not one of them yet, so its cleanup is queued until the world gate opens.
+    /// </summary>
+    public HashSet<short> PendingWorldCleanupIds { get; } = new();
+
+    /// <summary>One aggregate world snapshot is owed to this peer after its scene is proven.</summary>
+    public bool WorldSnapshotPending { get; set; }
+
+    /// <summary>Latch: the owed aggregate snapshot was already claimed/delivered for this join.</summary>
+    public bool WorldSnapshotDelivered { get; set; }
+
+    /// <summary>
+    /// Issue #40: this peer just authored the accepted plant Rpc that proved its world. The
+    /// post-gate snapshot must not echo the same plant back to the planter (he applied it
+    /// locally; the fan-out already excluded him).
+    /// </summary>
+    public bool SuppressPlantSyncOnce { get; set; }
+
+    /// <summary>Close the gate for a joining peer and arm exactly one world snapshot.</summary>
     public void HoldWorldTraffic(int holdMs)
     {
         WorldReady = false;
         WorldGateUntilTick = Environment.TickCount64 + holdMs;
+        WorldSnapshotPending = true;
+        WorldSnapshotDelivered = false;
+        SuppressPlantSyncOnce = false;
     }
 
     /// <summary>

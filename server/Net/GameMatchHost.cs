@@ -841,10 +841,6 @@ public sealed partial class GameMatchHost : IDisposable
 
         MatchPerf.RecordRx((byte)opcode, payload.Length);
 
-        // Issue #39: the first world-level packet proves the client's scene is up — release the
-        // held traffic and hand it the aggregate state (MatchWorldGate).
-        NoteClientProvedWorld(peer, opcode);
-
         // Hot path (#35): WorldObjectState floods ~20 Hz/peer and never needs the body —
         // build a body reader only for the three opcodes that actually parse one. The old
         // eager `new LobbyReader(payload.AsSpan(bodyOffset))` copied the whole body on every
@@ -957,6 +953,11 @@ public sealed partial class GameMatchHost : IDisposable
                 DumpCapture($"match_op{(byte)opcode}", payload);
                 break;
         }
+
+        // Issue #40: prove the scene only after the packet itself has been observed. A CWO
+        // must register the new pawn before the gate delivers cleanup/snapshot, otherwise an
+        // old-body Destroy on the same id could remove the replacement the client just created.
+        NoteClientProvedWorld(peer, opcode);
     }
 
     /// <summary>
@@ -1153,6 +1154,10 @@ public sealed partial class GameMatchHost : IDisposable
         // Fresh session: the next bootstrap closes the world gate again.
         st.WorldReady = true;
         st.WorldGateUntilTick = 0;
+        st.PendingWorldCleanupIds.Clear();
+        st.WorldSnapshotPending = false;
+        st.WorldSnapshotDelivered = false;
+        st.SuppressPlantSyncOnce = false;
     }
 
     public void Dispose()

@@ -41,4 +41,31 @@ internal static class MatchWorldGate
 
     /// <summary>Has the hold window expired (no proof arrived)?</summary>
     public static bool DeadlineExpired(long deadlineTick, long nowTick) => nowTick >= deadlineTick;
+
+    /// <summary>
+    /// Issue #40: claim the one aggregate world snapshot owed to this peer. Returns false on
+    /// every later call so gate-open, hold-expiry and restore paths cannot double-create objects.
+    /// </summary>
+    public static bool TryClaimSnapshot(MatchPeerState st)
+    {
+        if (!st.WorldSnapshotPending || st.WorldSnapshotDelivered)
+            return false;
+        st.WorldSnapshotPending = false;
+        st.WorldSnapshotDelivered = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Old reconnect pawn ids this peer must still drop. An id the peer already re-created as
+    /// its own living pawn is no longer an old body and must not be destroyed.
+    /// </summary>
+    public static List<short> ClaimCleanupIds(MatchPeerState st, MatchRoom room, byte actorNr)
+    {
+        var ids = st.PendingWorldCleanupIds
+            .Where(id => !(room.LivingPawns.TryGetValue(id, out var pawn)
+                           && pawn.OwnerActorNr == actorNr))
+            .ToList();
+        st.PendingWorldCleanupIds.Clear();
+        return ids;
+    }
 }

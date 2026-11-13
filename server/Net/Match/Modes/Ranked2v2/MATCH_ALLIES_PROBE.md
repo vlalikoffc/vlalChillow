@@ -397,6 +397,11 @@ When first-to-`WinsNeeded` fires: TX `C2=205` MatchResults, wait **5s**, then:
 
 ### Mid-match reconnect
 
-Disconnect remembers fighting team by `userId`. On rejoin after INIT: host forces same `team` SetProperty; if no respawn CWO within **5s** → Spectator **once** (`ReconnectSpectatorFallbackDone`).
+Disconnect remembers fighting team by the install-stable identity key (#39). On rejoin after
+INIT: host forces the same `team` SetProperty and **never** auto-Spectates. The old body is
+destroyed for the remaining peers and queued for the returning client until its world gate opens;
+the aggregate world snapshot is delivered once (#40). Buy/waiting reconnect clears the round-local
+`death` flag; a reconnect into a frozen round leaves that round like a disconnect and re-checks
+wipe. The old 5s Spectator fallback (`ReconnectSpectatorFallbackDone`) is superseded.
 
 **Buy-pad / Live-101 inventions superseded** — gold 2026-07-24: C2=22 Time=RST=now, stay on C2=31, plant field=3, C2=101 WinTeam only.

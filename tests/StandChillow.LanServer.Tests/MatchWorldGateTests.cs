@@ -47,4 +47,40 @@ public sealed class MatchWorldGateTests
         Assert.True(MatchWorldGate.DeadlineExpired(deadlineTick: 1_000, nowTick: 1_000));
         Assert.Equal(4000, MatchWorldGate.HoldMs);
     }
+
+    [Fact]
+    public void World_snapshot_is_claimed_exactly_once_per_bootstrap()
+    {
+        // Issue #40: bootstrap used to send the aggregate CWO/Rpc snapshot immediately and the
+        // gate open sent it again — duplicate pawns/entities in a retained reconnect scene.
+        var st = new MatchPeerState();
+        st.HoldWorldTraffic(MatchWorldGate.HoldMs);
+
+        Assert.True(st.WorldSnapshotPending);
+        Assert.False(st.WorldSnapshotDelivered);
+        Assert.True(MatchWorldGate.TryClaimSnapshot(st));
+        Assert.False(MatchWorldGate.TryClaimSnapshot(st));
+        Assert.True(st.WorldSnapshotDelivered);
+
+        // A later bootstrap/reconnect arms a fresh single delivery.
+        st.HoldWorldTraffic(MatchWorldGate.HoldMs);
+        Assert.True(MatchWorldGate.TryClaimSnapshot(st));
+        Assert.False(MatchWorldGate.TryClaimSnapshot(st));
+    }
+
+    [Fact]
+    public void Cleanup_skips_an_old_id_the_peer_already_recreated_as_its_own_pawn()
+    {
+        var room = new MatchRoom { PasswordKey = "Dedik", RoomId = "Sandstone" };
+        var st = new MatchPeerState { ActorNr = 2 };
+        st.PendingWorldCleanupIds.Add(777);
+        st.PendingWorldCleanupIds.Add(888);
+        // The returning client re-created 888 as its new body before the gate opened.
+        room.LivingPawns[888] = new MatchLivingPawn { ObjectId = 888, OwnerActorNr = 2 };
+
+        var cleanup = MatchWorldGate.ClaimCleanupIds(st, room, actorNr: 2);
+
+        Assert.Equal(new short[] { 777 }, cleanup);
+        Assert.Empty(st.PendingWorldCleanupIds);
+    }
 }
