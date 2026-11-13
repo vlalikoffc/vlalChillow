@@ -16,10 +16,18 @@ namespace StandChillow.LanServer.Net.Match.Host;
 internal static class MatchReconnect
 {
     /// <summary>
-    /// Actor того же игрока в этой комнате (<c>0</c> — не найден). Ищется только среди
-    /// живых peer-состояний: если старый сокет уже отвалился по таймауту, его actor удалён,
-    /// и вернувшемуся законно выдаётся новый номер.
+    /// Actor того же игрока в этой комнате (<c>0</c> — не найден).
     /// </summary>
+    /// <remarks>
+    /// Сначала смотрим <see cref="MatchRoom.ActorIdentities"/> — владелец живёт в комнате, а не в
+    /// сокете. Иначе actor, чей сокет уже отвалился, становится недостижимым призраком: игроку
+    /// выдают <b>второй</b> номер рядом с ним (в комнате две копии, призрак считается живым),
+    /// и каждый следующий заход добавляет ещё одну.
+    /// <para>
+    /// <paramref name="state"/> остаётся <c>null</c> для призрака — отцеплять нечего, но actor
+    /// всё равно возвращается владельцу.
+    /// </para>
+    /// </remarks>
     public static byte FindActorNr(
         MatchRoom room,
         IEnumerable<MatchPeerState> peers,
@@ -30,6 +38,22 @@ internal static class MatchReconnect
         if (string.IsNullOrEmpty(identityKey))
             return 0;
 
+        foreach (var (actorNr, key) in room.ActorIdentities)
+        {
+            if (!MatchIdentity.SamePlayer(key, identityKey))
+                continue;
+            foreach (var st in peers)
+            {
+                if (ReferenceEquals(st.Room, room) && st.ActorNr == actorNr)
+                {
+                    state = st;
+                    break;
+                }
+            }
+            return actorNr;
+        }
+
+        // Комнаты без карты идентичностей (состояние до #39) — старый поиск по сокетам.
         foreach (var st in peers)
         {
             if (!ReferenceEquals(st.Room, room) || st.ActorNr == 0)
@@ -43,6 +67,17 @@ internal static class MatchReconnect
         return 0;
     }
 
+    /// <summary>У актёра нет владеющего сокета в этой комнате — сессия пропала.</summary>
+    public static bool IsGhostActor(MatchRoom room, byte actorNr, IEnumerable<MatchPeerState> peers)
+    {
+        foreach (var st in peers)
+        {
+            if (ReferenceEquals(st.Room, room) && st.ActorNr == actorNr)
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>
     /// Передать actor вернувшемуся игроку. Номер, имя и room-свойства сохраняются, но
     /// боевое состояние старой сессии — нет: старый pawn, флаг смерти в раунде и место в
@@ -52,10 +87,10 @@ internal static class MatchReconnect
     public static ReconnectAdoption Adopt(
         MatchRoom room,
         MatchPeerState newState,
-        MatchPeerState previousState,
+        MatchPeerState? previousState,
         byte actorNr)
     {
-        if (ReferenceEquals(previousState, newState))
+        if (previousState is not null && ReferenceEquals(previousState, newState))
             return new ReconnectAdoption(MatchTeam.None, Array.Empty<short>());
 
         var remembered = MatchTeam.None;
@@ -71,10 +106,14 @@ internal static class MatchReconnect
             room.Actors[index] = (actorNr, rosterName, newState.UserId ?? "");
 
         // В комнате лежит wire-uid сессии; при возврате он меняется на новый токен.
-        if (previousState.UserId is { Length: > 0 } previousUid)
+        if (previousState?.UserId is { Length: > 0 } previousUid)
             room.UserIds.Remove(previousUid);
         if (newState.UserId is { Length: > 0 } newUid)
             room.UserIds.Add(newUid);
+        // Владелец actor — этот игрок; призрак больше не призрак.
+        if (newState.IdentityKey is { Length: > 0 } identityKey)
+            room.ActorIdentities[actorNr] = identityKey;
+        room.OwnerlessSinceTick.Remove(actorNr);
 
         // Старое тело больше не принадлежит этому игроку: убираем его из трекинга и просим
         // пиров удалить (host-authored Destroy). Новый pawn придёт своим CWO.
@@ -94,8 +133,11 @@ internal static class MatchReconnect
 
         // Старый сокет больше не владеет actor: его пакеты игнорируются, а будущий
         // Disconnect не удалит живого игрока (ActorNr=0).
-        previousState.Room = null;
-        previousState.ActorNr = 0;
+        if (previousState is not null)
+        {
+            previousState.Room = null;
+            previousState.ActorNr = 0;
+        }
 
         newState.Room = room;
         newState.ActorNr = actorNr;

@@ -151,8 +151,7 @@ public sealed partial class GameMatchHost
             result = JoinRoomResult.RoomNotFound;
         }
         else if (st.IdentityKey is { Length: > 0 } identityKey
-                 && TryFindRejoinActor(room, identityKey, out var rejoinActor, out var rejoinState)
-                 && rejoinState is not null)
+                 && TryFindRejoinActor(room, identityKey, out var rejoinActor, out var rejoinState))
         {
             // Issue #39: same player, new session token, old socket not timed out yet.
             // Restore the SAME actor instead of allocating a second one (which made the
@@ -163,7 +162,10 @@ public sealed partial class GameMatchHost
             adoptedReconnect = true;
             Console.WriteLine(
                 $"[match-host] JoinRoom Found (reconnect) identity='{identityKey}' actorNr={rejoinActor} " +
-                $"roster='{st.RosterName}' — no second actor, no duplicate uid");
+                $"roster='{st.RosterName}' — no second actor, no duplicate uid" +
+                (rejoinState is null
+                    ? " (ghost actor: его сокет уже пропал, номер возвращён владельцу)"
+                    : ""));
         }
         else if (st.UserId is { } uid && room.UserIds.Contains(uid))
         {
@@ -196,6 +198,11 @@ public sealed partial class GameMatchHost
                         room.UserIds.Add(u);
                     var nick = string.IsNullOrWhiteSpace(req.Room) ? $"actor{nr}" : req.Room;
                     room.Actors.Add((nr, nick, st.UserId ?? ""));
+                    // Issue #39: владелец актёра запоминается в комнате, чтобы следующий заход
+                    // этого же игрока занял тот же номер, даже если сокет уже пропал.
+                    if (st.IdentityKey is { Length: > 0 } ownerKey)
+                        room.ActorIdentities[nr] = ownerKey;
+                    room.OwnerlessSinceTick.Remove(nr);
                     st.RosterName = nick;
                 }
                 st.Room = room;

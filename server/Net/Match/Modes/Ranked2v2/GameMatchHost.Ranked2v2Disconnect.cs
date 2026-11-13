@@ -35,6 +35,8 @@ public sealed partial class GameMatchHost
             if (userId is { } uid)
                 room.UserIds.Remove(uid);
             room.Actors.RemoveAll(a => a.Nr == actorNr);
+            room.ActorIdentities.Remove(actorNr);
+            room.OwnerlessSinceTick.Remove(actorNr);
             room.SpawnedPawns.Remove(actorNr);
             room.Flow.DeadActors.Remove(actorNr);
             // #33: a departed fighter must also leave the frozen round roster, otherwise the

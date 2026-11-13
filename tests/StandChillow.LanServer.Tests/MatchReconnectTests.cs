@@ -170,6 +170,95 @@ public sealed class MatchReconnectTests
         Assert.Null(MatchRoomRoster.FindFreeActorNr(room.Actors));
     }
 
+    /// <summary>
+    /// The case from live play: the phone «self-destructed» out of the room, its socket is gone,
+    /// but the actor stayed behind. The owner is recorded in the room, so the same player must get
+    /// his old number back instead of a second copy next to the ghost.
+    /// </summary>
+    [Fact]
+    public void Ghost_actor_is_found_by_room_identity_without_any_live_socket()
+    {
+        var room = NewRoom();
+        room.Actors.Add((2, "влал", "LBHASH_oldsession"));
+        room.ActorIdentities[2] = "LBHASH";
+
+        var actor = MatchReconnect.FindActorNr(room, Array.Empty<MatchPeerState>(), "LBHASH", out var state);
+
+        Assert.Equal((byte)2, actor);
+        Assert.Null(state); // отцеплять нечего — владельца-сокета уже нет
+        Assert.True(MatchReconnect.IsGhostActor(room, 2, Array.Empty<MatchPeerState>()));
+        Assert.Equal(
+            0, MatchReconnect.FindActorNr(room, Array.Empty<MatchPeerState>(), "LBOTHER", out _));
+    }
+
+    [Fact]
+    public void Ghost_actor_is_not_a_ghost_while_a_socket_owns_it()
+    {
+        var room = NewRoom();
+        room.ActorIdentities[2] = "LBHASH";
+        var live = new MatchPeerState { Room = room, ActorNr = 2, IdentityKey = "LBHASH" };
+        var otherRoom = new MatchPeerState { Room = NewRoom(), ActorNr = 2, IdentityKey = "LBHASH" };
+
+        Assert.False(MatchReconnect.IsGhostActor(room, 2, new[] { live }));
+        Assert.True(MatchReconnect.IsGhostActor(room, 3, new[] { live }));
+        // A peer that owns actor 2 in *another* room does not own this one.
+        Assert.True(MatchReconnect.IsGhostActor(room, 2, new[] { otherRoom }));
+    }
+
+    [Fact]
+    public void Adopting_a_ghost_keeps_one_actor_and_drops_the_old_body()
+    {
+        var room = NewRoom();
+        room.Actors.Add((2, "влал", "LBHASH_oldsession"));
+        room.ActorIdentities[2] = "LBHASH";
+        room.OwnerlessSinceTick[2] = 1234;
+        room.SpawnedPawns.Add(2);
+        room.ActorProps[(2, MatchRoomPropKeys.Team)] = LobbyVariant.FromByte((byte)MatchTeam.Tr);
+        room.LivingPawns[777] = new MatchLivingPawn { ObjectId = 777, OwnerActorNr = 2 };
+        room.Flow.DeadActors.Add(2);
+        room.Flow.RoundRoster[2] = MatchTeam.Tr;
+
+        var newState = new MatchPeerState
+        {
+            UserId = "LBHASH_newsession",
+            IdentityKey = "LBHASH",
+            Room = room, // ставится join-путём после Adopt; здесь уже как владелец
+        };
+
+        var adoption = MatchReconnect.Adopt(room, newState, previousState: null, actorNr: 2);
+
+        Assert.Equal(MatchTeam.Tr, adoption.RememberedTeam);
+        Assert.Equal<IEnumerable<short>>(new short[] { 777 }, adoption.RemovedPawnIds);
+        Assert.Empty(room.LivingPawns);
+        Assert.Single(room.Actors.Where(a => a.Nr == 2));
+        Assert.Equal("LBHASH", room.ActorIdentities[2]);
+        Assert.DoesNotContain((byte)2, room.OwnerlessSinceTick.Keys);
+        Assert.DoesNotContain((byte)2, room.Flow.DeadActors);
+        Assert.False(room.Flow.RoundRoster.ContainsKey(2));
+        Assert.Equal((byte)2, newState.ActorNr);
+        Assert.Equal(MatchTeam.Tr, newState.PendingReconnectTeam);
+        Assert.True(newState.ReconnectIdentityTrusted);
+    }
+
+    [Fact]
+    public void Round_roster_and_counts_ignore_ghost_actors()
+    {
+        // A ghost keeps its team prop but nobody plays it: counting it as alive is what made the
+        // side «never wiped» while the other side was faked out of the round.
+        var flow = new MatchFlowState();
+        var props = new Dictionary<(byte Actor, string Key), LobbyVariant>
+        {
+            [(2, MatchRoomPropKeys.Team)] = LobbyVariant.FromByte((byte)MatchTeam.Tr),
+            [(3, MatchRoomPropKeys.Team)] = LobbyVariant.FromByte((byte)MatchTeam.Ct),
+        };
+
+        MatchFlowRules.FreezeRoundRoster(flow, props, new byte[] { 3 });
+
+        Assert.True(flow.RoundRoster.ContainsKey(2));
+        Assert.False(flow.RoundRoster.ContainsKey(3));
+        Assert.Equal(MatchTeam.Tr, flow.RoundRoster[2]);
+    }
+
     private static MatchRoom NewRoom() => new()
     {
         PasswordKey = "Dedik",

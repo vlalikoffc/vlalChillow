@@ -20,7 +20,8 @@ public sealed partial class GameMatchHost
     {
         lock (_roomGate)
             actorNr = MatchReconnect.FindActorNr(room, _peers.Values, identityKey, out previousState);
-        return actorNr != 0 && previousState is not null;
+        // previousState == null — призрак: владелец записан в комнате, сокета уже нет.
+        return actorNr != 0;
     }
 
     /// <summary>
@@ -60,9 +61,9 @@ public sealed partial class GameMatchHost
         MatchRoom room,
         MatchPeerState newState,
         byte actorNr,
-        MatchPeerState previousState)
+        MatchPeerState? previousState)
     {
-        if (ReferenceEquals(previousState, newState))
+        if (previousState is not null && ReferenceEquals(previousState, newState))
         {
             // Тот же UDP-пир повторяет JoinRoom (retry) — возвращаем actor как есть.
             Console.WriteLine(
@@ -71,13 +72,16 @@ public sealed partial class GameMatchHost
             return;
         }
 
-        var previousUid = previousState.UserId;
+        var previousUid = previousState?.UserId;
         ReconnectAdoption adoption;
         lock (_roomGate)
             adoption = MatchReconnect.Adopt(room, newState, previousState, actorNr);
 
-        try { previousState.BootstrapTimeoutCts?.Cancel(); }
-        catch { /* ignore */ }
+        if (previousState is not null)
+        {
+            try { previousState.BootstrapTimeoutCts?.Cancel(); }
+            catch { /* ignore */ }
+        }
 
         // Issue #39: the old body belongs to a session that no longer exists. Leaving it in
         // the world made the host count a dead (or absent) player as alive and then force him
@@ -95,7 +99,9 @@ public sealed partial class GameMatchHost
         Console.WriteLine(
             $"[match-host] reconnect-takeover: identity='{newState.IdentityKey}' actor={actorNr} " +
             $"('{newState.RosterName}') перешёл к новой сессии uid='{newState.UserId}' — " +
-            $"старый uid='{previousUid}' отсоединён, второго actor нет" +
+            (previousState is null
+                ? "призрак без сокета занят (сессия давно пропала), второго actor нет"
+                : $"старый uid='{previousUid}' отсоединён, второго actor нет") +
             (remembered is MatchTeam.Tr or MatchTeam.Ct
                 ? $"; restore team={remembered} после INIT"
                 : "; team не запомнена (Spectator/нет)"));
