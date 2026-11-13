@@ -97,6 +97,47 @@ public sealed partial class GameNetHost
             return true;
         }
 
+        if (cmd.Equals("ban", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("бан", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleBanCommand(reply, args, player);
+            return true;
+        }
+
+        if (cmd.Equals("banid", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("банид", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleBanIdCommand(reply, args, player);
+            return true;
+        }
+
+        if (cmd.Equals("unban", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("разбан", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleUnbanCommand(reply, args);
+            return true;
+        }
+
+        if (cmd.Equals("unbanid", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleUnbanIdCommand(reply, args);
+            return true;
+        }
+
+        if (cmd.Equals("ids", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("айди", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleIdsCommand(reply);
+            return true;
+        }
+
+        if (cmd.Equals("bans", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("баны", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleBansCommand(reply);
+            return true;
+        }
+
         if (cmd.Equals("ready", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("r", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("готов", StringComparison.OrdinalIgnoreCase)
@@ -169,7 +210,7 @@ public sealed partial class GameNetHost
 
     public static string FormatCommandHelp() =>
         """
-        команды: /mode /map /set /play /start /end /ready /help
+        команды: /mode /map /set /play /start /end /ready /ban /help
           /mode [alias]  список или сменить режим
           /map [alias]   карты текущего режима (короткие alias)
           /set …         параметры (start, end, round, wins, …)
@@ -178,6 +219,12 @@ public sealed partial class GameNetHost
           /end           завершить матч сразу (без 5с)
           /ready         отметить готовность (режим старта ready)
           /unready       отменить готовность
+          /ban ник срок [причина]   бан на 10m…14d (только админ)
+          /banid id срок [причина]  бан по серверному id из /ids (только админ)
+          /unban ник|IP             снять бан (только админ)
+          /unbanid id               снять все баны под этим id (только админ)
+          /bans                     активные баны и остаток (только админ)
+          /ids                      кто в катке: id, ник, IP (только админ)
         """.Trim();
 
     private static string FormatUnknownCommandHelp(string message) =>

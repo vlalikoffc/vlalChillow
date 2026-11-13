@@ -296,6 +296,52 @@ public sealed class LobbySession
     }
 
     /// <summary>
+    /// Вход забаненного: ответ успешный, но игрок остаётся «тенью» — <c>Joined = false</c>,
+    /// поэтому его нет ни в росписи, ни в рассылках, ни в чате.
+    /// </summary>
+    /// <remarks>
+    /// Клиент рисует себя сам по <c>selfMemberId</c>, поэтому в списке остаётся только Server:
+    /// «Server первым, я вторым», без единого имени других игроков. <c>hasHosting</c> не
+    /// выставляется — для забаненного матч как будто не запущен.
+    /// </remarks>
+    public JoinResult HandleShadowJoinRequest(NetPeer peer, JoinLobbyRequest req)
+    {
+        lock (_gate)
+        {
+            if (!_byPeer.TryGetValue(peer, out var player))
+                return JoinResult.Fail(JoinFailReason.NotJoinable, "unknown peer");
+
+            if (!LobbyAuth.HashEquals(req.VersionHash, LobbyAuth.VersionHash))
+                return JoinResult.Fail(JoinFailReason.InvalidGameVersion, "version hash mismatch");
+
+            if (!LobbyAuth.HashEquals(req.AuthHash, LobbyAuth.AuthHash))
+                return JoinResult.Fail(JoinFailReason.InvalidAuthKey, "auth hash mismatch");
+
+            if (string.IsNullOrWhiteSpace(req.Profile.Name))
+                return JoinResult.Fail(JoinFailReason.ProfileValidationFailed, "empty name");
+
+            player.Name = req.Profile.Name.Trim();
+            player.Avatar = req.Profile.Avatar;
+            player.Status = PlayerLobbyStatus.Lobby;
+            player.Joined = false;
+
+            var response = LobbyCodec.BuildJoinSuccess(
+                selfMemberId: player.ServerMemberId,
+                lobbyName: _lobbyName,
+                maxMembers: MaxMembersOverride > 0 ? MaxMembersOverride : DedicatedMaxMembers,
+                members: new List<LobbyMember>
+                {
+                    new() { Id = ServerMemberId, Name = ServerPlayerName, Avatar = null },
+                },
+                lobbyProps: BuildLobbyProps(),
+                hostingIp: null,
+                hostingPort: 0);
+
+            return JoinResult.Ok(player, response);
+        }
+    }
+
+    /// <summary>
     /// Issue #39: другая запись того же игрока в лобби — тот же ник с того же адреса (телефон
     /// переподключился, старый сокет ещё живёт до таймаута).
     /// </summary>

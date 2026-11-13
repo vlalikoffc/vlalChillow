@@ -75,6 +75,17 @@ public static class CommandAccessPolicy
         if (parsed.StartsMatch && config.Admin.AnyoneCanStart)
             return true;
 
+        // Баны — отдельный гейт: по умолчанию только админ, независимо от
+        // admin.adminOnlyCommands. Разбан randomplayer'ом — это не «мелкая опция».
+        if (config.Admin.Ban.AdminOnly && IsBanCommand(parsed.Command))
+        {
+            if (config.IsAdmin(playerNick))
+                return true;
+
+            denyReason = $"команда /{parsed.Command} только для админов (твой ник: {playerNick})";
+            return false;
+        }
+
         if (!config.IsAdminOnly(parsed.Command) && !IsAdminOnlyAlias(config, parsed.Command))
             return true;
 
@@ -103,4 +114,19 @@ public static class CommandAccessPolicy
         command.Equals("start", StringComparison.OrdinalIgnoreCase)
         || command.Equals("startmatch", StringComparison.OrdinalIgnoreCase)
         || command.Equals("старт", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Команды банов: <c>/ban</c>, <c>/unban</c>, <c>/bans</c> и русские формы.</summary>
+    public static bool IsBanCommand(string? command) =>
+        command is not null
+        && (command.Equals("ban", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("бан", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("banid", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("банид", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("unban", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("разбан", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("unbanid", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("bans", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("баны", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("ids", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("айди", StringComparison.OrdinalIgnoreCase));
 }

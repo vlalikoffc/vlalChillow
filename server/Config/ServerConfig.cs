@@ -43,8 +43,53 @@ public sealed class AdminConfig
     /// <summary>Разрешить /start и /set start любому игроку (по умолчанию да).</summary>
     public bool AnyoneCanStart { get; set; } = true;
 
+    /// <summary>Баны: срок, файл, кто может банить.</summary>
+    public BanConfig Ban { get; set; } = new();
+
     /// <summary>Команды, закрытые админом «из коробки».</summary>
     public static List<string> DefaultAdminOnlyCommands() => new() { "set", "end" };
+}
+
+/// <summary>
+/// Баны. По умолчанию <c>/ban</c>, <c>/unban</c> и <c>/bans</c> — только для админов
+/// (независимо от <see cref="AdminConfig.AdminOnlyCommands"/>), админа забанить нельзя.
+/// </summary>
+/// <remarks>
+/// Срок ограничен с двух сторон: минимум — чтобы «бан на секунду» не был способом
+/// потроллить, максимум — потому что IP на LAN выдаёт DHCP и вечный бан адреса
+/// рано или поздно достанется ни в чём не виноватому телефону.
+/// </remarks>
+public sealed class BanConfig
+{
+    /// <summary>Выключатель на весь модуль (команды отвечают «баны выключены»).</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>true — /ban, /unban, /bans только админам (по умолчанию).</summary>
+    public bool AdminOnly { get; set; } = true;
+
+    /// <summary>Имя файла банов рядом с config.json (или полный путь).</summary>
+    public string File { get; set; } = "banlist.json";
+
+    /// <summary>Минимальный срок бана, минут.</summary>
+    public int MinMinutes { get; set; } = 10;
+
+    /// <summary>Максимальный срок бана, дней (14 — как в ТЗ).</summary>
+    public int MaxDays { get; set; } = 14;
+
+    /// <summary>
+    /// Учить новые ники/IP на попытке входа: сменил ник, но IP тот же —
+    /// ник тоже попадёт в бан; сменил IP под тем же ником — попадёт IP.
+    /// </summary>
+    public bool BindAliases { get; set; } = true;
+
+    /// <summary>Сообщать всем в лобби, что кого-то забанили.</summary>
+    public bool NotifyEveryone { get; set; } = true;
+
+    /// <summary>Как часто обновлять «Разбан через: …» в теневом лобби, секунд.</summary>
+    public int ShadowRefreshSec { get; set; } = 60;
+
+    /// <summary>Как часто проверять, у кого вышел срок, секунд.</summary>
+    public int SweepSec { get; set; } = 5;
 }
 
 /// <summary>Настройки автостарта (<c>matchStart.mode = "auto"</c>).</summary>
@@ -399,6 +444,7 @@ public sealed class ServerConfig
         Admin ??= new AdminConfig();
         Admin.Nicknames ??= new List<string>();
         Admin.AdminOnlyCommands ??= new List<string>();
+        Admin.Ban ??= new BanConfig();
         MatchStart ??= new MatchStartConfig();
         MatchStart.Auto ??= new AutoStartConfig();
         MatchStart.Ready ??= new ReadyStartConfig();
@@ -414,6 +460,26 @@ public sealed class ServerConfig
             MatchStart.Auto.MinPlayersPerTeam, 1, 16, 1, "matchStart.auto.minPlayersPerTeam");
 
         MigrateLegacyAdminGate();
+
+        // Баны: 10 минут — 14 дней по умолчанию; границы правятся в конфиге.
+        Admin.Ban.MinMinutes = Check(
+            Admin.Ban.MinMinutes, 1, 1440, 10, "admin.ban.minMinutes");
+        Admin.Ban.MaxDays = Check(
+            Admin.Ban.MaxDays, 1, 365, 14, "admin.ban.maxDays");
+        if (Admin.Ban.MaxDays * 1440 < Admin.Ban.MinMinutes)
+        {
+            Report("admin.ban.maxDays", Admin.Ban.MaxDays,
+                Admin.Ban.MinMinutes.ToString(),
+                $"меньше минимального срока ({Admin.Ban.MinMinutes} мин) — поднял до него");
+            Admin.Ban.MaxDays = (Admin.Ban.MinMinutes + 1439) / 1440;
+        }
+        Admin.Ban.ShadowRefreshSec = Check(
+            Admin.Ban.ShadowRefreshSec, 10, 600, 60, "admin.ban.shadowRefreshSec");
+        Admin.Ban.SweepSec = Check(
+            Admin.Ban.SweepSec, 1, 300, 5, "admin.ban.sweepSec");
+        Admin.Ban.File = string.IsNullOrWhiteSpace(Admin.Ban.File)
+            ? "banlist.json"
+            : Admin.Ban.File.Trim();
 
         // Пустая строка — «как в дефолте» (auto), а не тихий откат в manual:
         // иначе правка конфига руками молча выключала автостарт.
@@ -810,7 +876,24 @@ public sealed class ServerConfig
     "adminOnlyCommands": [ "set", "end" ],
 
     // /start и /set start может любой (даже если set закрыт админом)
-    "anyoneCanStart": true
+    "anyoneCanStart": true,
+
+    // ===== БАНЫ =====
+    // /ban <ник> <срок> [причина]   срок: 30m, 6h, 3d (от 10 минут до 14 дней)
+    // /unban <ник|IP>               снять бан
+    // /bans                         кто забанен и сколько осталось
+    // Админов банить нельзя. Проверка на входе в лобби, в матч и на реконнекте.
+    "ban": {
+      "enabled": true,
+      "adminOnly": true,          // false — /ban сможет любой (не советую)
+      "file": "banlist.json",    // рядом с config.json; переживает перезапуск
+      "minMinutes": 10,
+      "maxDays": 14,
+      "bindAliases": true,        // новый ник/новый IP дописываются в ту же запись
+      "notifyEveryone": true,     // всем в лобби: «X забанен на 30м (причина)»
+      "shadowRefreshSec": 60,     // как часто обновлять «Разбан через: …»
+      "sweepSec": 5               // как часто проверять, у кого вышел срок
+    }
   },
 
   // ===== СТАРТ МАТЧА =====

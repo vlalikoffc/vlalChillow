@@ -332,6 +332,18 @@ public sealed partial class GameMatchHost : IDisposable
         _listener.ConnectionRequestEvent += request =>
         {
             var peek = request.Data.AvailableBytes;
+
+            // Бан по IP — на самом раннем входе: дальше не идём, handshake и комнату
+            // не открываем. Один lookup, без диска и без разбора пакета.
+            if (IsBannedAddress(request.RemoteEndPoint.Address))
+            {
+                request.Reject();
+                Console.WriteLine(
+                    $"[ban] CONNECT reject {request.RemoteEndPoint} — IP в бане " +
+                    "(матч не открываем, актор не выдаётся)");
+                return;
+            }
+
             if (!_acceptMatchConnections || !_manager.IsRunning)
             {
                 request.Reject();

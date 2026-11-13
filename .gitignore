@@ -18,6 +18,10 @@
 **/config.json
 !**/config.example.json
 
+# Runtime ban list (nick/IP state; local, never shipped)
+**/banlist.json
+**/banlist.json.tmp
+
 # Reverse-engineering dumps (local only — not shipped)
 decompiled/
 original/

@@ -10,6 +10,7 @@ Goal: **no multi-thousand-line god-files**, clear homes for lobby / discovery / 
 | `server/Startup/` | Dedicated-host and ConnectAsClient startup paths | Entry-point orchestration only |
 | `server/Dashboard/` | CLI rendering and console command routing | Shared game commands stay in `GameNetHost` |
 | `server/Diagnostics/` | Verbose switch + async capture sink | **Never** do blocking disk I/O from a network hot path |
+| `server/Bans/` | Ban registry + `banlist.json` store + deterministic nickname→id + duration/message parsing | Shared by lobby **and** match; no sockets, no wire |
 | `tests/` | Socket-free protocol regression tests | xUnit; run in CI on all desktop OSes |
 | `server/Lan/` | Discovery (Bonjour V2 / UDP 5056) | Stay out of match host |
 | `server/Net/Lobby/` | Lobby LiteNetLib + codecs | Stay out of match host |
@@ -22,6 +23,29 @@ Goal: **no multi-thousand-line god-files**, clear homes for lobby / discovery / 
 | `decompiled/` | RE dumps, protocol docs, agent maps | Not compiled into server |
 | `decompiled/tools/` | RE tooling (Ghidra etc.) | **RE agent owns** — do not fight installs |
 | `server/**/captures/`, `logs/` | Runtime captures / run logs | Evidence only; never memcpy into replies |
+
+## Bans (shared layer)
+
+`server/Bans/` owns ban records (nick + IPs + deterministic public id), the seen-player
+directory (`nick ↔ id ↔ IP`) and their text. Lobby and match only **ask** it at three entry
+points — never on the packet path:
+
+| Gate | Where | Keys |
+|------|-------|------|
+| Lobby join / lobby reconnect | `GameNetHost.HandleJoin` | nick + IP |
+| Match connect | `GameMatchHost.ConnectionRequestEvent` | IP only (no nick yet) |
+| Match join / mid-match reconnect | `GameMatchHost.HandleJoinRoom` (before `TryFindRejoinActor`) | nick + IP |
+
+The last gate matters: a mid-match reconnect adopts the old actor and never runs a normal
+join, so a ban checked only at the first connect could be bypassed (e.g. leave VPN →
+reconnect from the banned address). Admins are exempt by nickname at every gate; banning
+an admin is rejected. The install token is deliberately **not** used — nick + IP only.
+
+`MatchPublicId` derives a stable `1…100 000 000` id from the nickname (SHA-256 of the
+normalized nick); it never goes on the wire and carries no state, so `/banid` survives
+restarts. `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/banid` still
+resolves a player who already left. `banlist.json` lives beside `config.json` and is
+git-ignored.
 
 ## Match host split (was 2568-line god-file)
 

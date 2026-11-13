@@ -86,6 +86,10 @@ public sealed partial class GameNetHost : IDisposable
         _match.OnMatchPlayerLeft = name =>
             _deferred.Enqueue(() => NotifyMatchPlayerLeft(name));
 
+        // Баны: реестр читается с диска до первого пакета, иначе первый вошедший
+        // забаненный успел бы проскочить. Матч получает тот же реестр.
+        InitBans();
+
         _listener = new EventBasedNetListener();
         _manager = new NetManager(_listener)
         {
@@ -117,6 +121,8 @@ public sealed partial class GameNetHost : IDisposable
         _listener.PeerDisconnectedEvent += (peer, info) =>
         {
             Console.WriteLine($"[net] peer DISCONNECTED {peer.Address}:{peer.Port}: {info.Reason}");
+            lock (_shadowGate)
+                _shadowPeers.Remove(peer);
             var left = _session.OnPeerDisconnected(peer, out var name);
             if (name is not null && left is not null)
             {
@@ -350,6 +356,13 @@ public sealed partial class GameNetHost : IDisposable
                 catch (Exception ex) { Console.WriteLine($"[start-gate] error: {ex.Message}"); }
             }
 
+            // Баны: раз в admin.ban.sweepSec снять истёкшие (и отпустить теневые сокеты),
+            // раз в admin.ban.shadowRefreshSec обновить «Разбан через: …».
+            try { SweepBans(); }
+            catch (Exception ex) { Console.WriteLine($"[ban] sweep: {ex.Message}"); }
+            try { RefreshShadowCountdowns(); }
+            catch (Exception ex) { Console.WriteLine($"[ban] countdown: {ex.Message}"); }
+
             try { await Task.Delay(15, _cts.Token); }
             catch (OperationCanceledException) { break; }
         }
@@ -424,6 +437,21 @@ public sealed partial class GameNetHost : IDisposable
             $"verOk={LobbyAuth.HashEquals(req.VersionHash, LobbyAuth.VersionHash)} " +
             $"authOk={LobbyAuth.HashEquals(req.AuthHash, LobbyAuth.AuthHash)}");
 
+        // Справочник «ник ↔ id ↔ IP»: нужен, чтобы /banid находил человека и после
+        // выхода из катки. Пишется на диск только при новом нике/адресе, не на каждый вход.
+        _directory.Remember(req.Profile.Name, peer.Address?.ToString(), DateTime.UtcNow);
+
+        // Бан — до любых side-effects: ни слота в росписи, ни приветствия, ни op9 про
+        // идущий матч забаненный не получает. Проверка только здесь, на входе.
+        var banDecision = InspectBan(req.Profile.Name, peer.Address);
+        if (banDecision.Banned)
+        {
+            HandleShadowJoin(peer, req, banDecision);
+            return;
+        }
+        if (banDecision.AdminExempt)
+            Console.WriteLine($"[ban] '{req.Profile.Name}' — админ, бан не применяется");
+
         var result = _session.HandleJoinRequest(
             peer,
             req,
@@ -494,6 +522,9 @@ public sealed partial class GameNetHost : IDisposable
         var player = _session.TryGet(peer);
         if (player is not { Joined: true })
         {
+            // Забаненный в теневом лобби: не отвечаем и не спамим консоль на каждое сообщение.
+            if (IsShadowPeer(peer))
+                return;
             Console.WriteLine($"[lobby] chat from non-joined peer {peer.Address}");
             return;
         }
@@ -784,6 +815,19 @@ public sealed partial class GameNetHost : IDisposable
     {
         _config = config;
         ApplyRuntimeConfig(_config);
+
+        if (_bans is not null)
+        {
+            _bans.LearnAliases = _config.Admin.Ban.BindAliases;
+            var wanted = ResolveBanPath(_config.Admin.Ban.File);
+            if (_banStore is not null
+                && !string.Equals(wanted, _banStore.Path, StringComparison.Ordinal))
+            {
+                Console.WriteLine(
+                    $"[ban] новый файл банов ({wanted}) применится после перезапуска " +
+                    $"(сейчас {_banStore.Path})");
+            }
+        }
 
         // Голоса /ready имеют смысл только в режиме ready — иначе это мусор.
         if (_config.StartMode != MatchStartMode.Ready)
