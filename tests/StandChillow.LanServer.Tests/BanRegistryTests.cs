@@ -40,7 +40,11 @@ public sealed class BanRegistryTests
         Assert.True(registry.Inspect(new BanProbe("Ktulxy", "10.8.0.2"), Now).Banned);
         Assert.True(registry.Inspect(new BanProbe("Ktulxy", "192.168.1.37"), Now).Banned);
         Assert.True(registry.Inspect(new BanProbe("Другой", "192.168.1.37"), Now).Banned);
-        Assert.False(registry.Inspect(new BanProbe("Другой", "192.168.1.99"), Now).Banned);
+
+        // Уже наученный ник («Другой» попал в запись по IP выше) банится и с нового адреса —
+        // это и есть «тот же IP, сменил ник». А вот совсем новый ник с новым IP — свободен.
+        Assert.True(registry.Inspect(new BanProbe("Другой", "192.168.1.99"), Now).Banned);
+        Assert.False(registry.Inspect(new BanProbe("Третий", "192.168.1.99"), Now).Banned);
     }
 
     [Fact]
