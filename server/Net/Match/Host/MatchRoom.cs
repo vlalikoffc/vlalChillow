@@ -8,10 +8,25 @@ internal sealed class MatchRoom
 {
     public required string PasswordKey { get; init; }
     public required string RoomId { get; init; }
-    /// <summary>Next joiner nr; starts at 2 because actor 1 is always synthetic Server.</summary>
-    public int NextActorNr { get; set; } = MatchHostActor.ActorNr + 1;
     public readonly HashSet<string> UserIds = new(StringComparer.Ordinal);
     public readonly List<(byte Nr, string Name, string UserId)> Actors = new();
+    /// <summary>
+    /// Issue #39: who owns each actor, by the install-stable identity key
+    /// (<see cref="MatchIdentity.StableKeyFrom207Token"/>) instead of the per-session wire uid.
+    /// </summary>
+    /// <remarks>
+    /// Ownership lives in the room, not in the socket: when a phone drops its connection the actor
+    /// used to stay behind as an unreachable ghost — the returning player could not be matched to
+    /// it (<c>MatchReconnect.FindActorNr</c> only looked at live peer states), so he was given a
+    /// <b>second</b> actor while the ghost kept counting as alive in
+    /// <see cref="ActorProps"/> team props. Two, then three copies of the same player in one room.
+    /// </remarks>
+    public readonly Dictionary<byte, string> ActorIdentities = new();
+    /// <summary>
+    /// When an actor lost its owning peer (Environment.TickCount64), so the reaper can decide that
+    /// the session is really gone instead of a reconnect in flight.
+    /// </summary>
+    public readonly Dictionary<byte, long> OwnerlessSinceTick = new();
     public readonly Dictionary<(byte Actor, string Key), LobbyVariant> ActorProps = new();
     public readonly HashSet<byte> SpawnedPawns = new();
     /// <summary>Living fighting pawns keyed by net object id (joiner often allocates ≠129).</summary>

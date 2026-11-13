@@ -10,7 +10,11 @@ public enum PlayerLobbyStatus
 
 public sealed class ConnectedPlayer
 {
-    public required NetPeer Peer { get; init; }
+    /// <summary>
+    /// Current lobby socket. Not <c>init</c>: a phone that lost the network comes back on a new
+    /// socket and takes over its existing membership instead of adding a second one.
+    /// </summary>
+    public required NetPeer Peer { get; set; }
     /// <summary>Stable lobby member id (Server=0; humans start at 1). Same on the wire for all peers.</summary>
     public required int ServerMemberId { get; init; }
     public required string Name { get; set; }
@@ -225,10 +229,38 @@ public sealed class LobbySession
             if (req.Profile.Avatar is { Length: > 2_000_000 })
                 return JoinResult.Fail(JoinFailReason.ProfileValidationFailed, "avatar too large");
 
-            player.Name = req.Profile.Name.Trim();
-            player.Avatar = req.Profile.Avatar;
-            player.Status = PlayerLobbyStatus.Lobby;
-            player.Joined = true;
+            var nick = req.Profile.Name.Trim();
+            var takenOver = FindRejoinMembership(peer, player, nick);
+            if (takenOver is not null)
+            {
+                // Issue #39: same player, new lobby socket (the phone re-joins the lobby after a
+                // network drop while the old socket is still inside its timeout). Before this the
+                // roster kept both entries — the client showed «брат-близнец» next to itself, and
+                // each reconnect added another one until the server restarted.
+                var previousPeer = takenOver.Peer;
+                takenOver.Peer = peer;
+                takenOver.Name = nick;
+                takenOver.Avatar = req.Profile.Avatar;
+                takenOver.Status = PlayerLobbyStatus.Lobby;
+                takenOver.Joined = true;
+                _byPeer.Remove(previousPeer);
+                _order.Remove(player);
+                _byPeer[peer] = takenOver;
+                player = takenOver;
+                Console.WriteLine(
+                    $"[lobby] member id={takenOver.ServerMemberId} '{nick}' перешёл к новому сокету " +
+                    $"{peer.Address}:{peer.Port} (старый {previousPeer.Address}:{previousPeer.Port} " +
+                    "отсоединён) — второй записи в лобби нет");
+                try { previousPeer.Disconnect(); }
+                catch { /* уже мёртв */ }
+            }
+            else
+            {
+                player.Name = nick;
+                player.Avatar = req.Profile.Avatar;
+                player.Status = PlayerLobbyStatus.Lobby;
+                player.Joined = true;
+            }
 
             // Full roster snapshot: Server(0) + every already-joined peer (not self — client
             // maps self via selfMemberId, same as live phone host). Live maxMembers=4; dedicated
@@ -260,6 +292,35 @@ public sealed class LobbySession
                 hostingPort: hostPort);
 
             return JoinResult.Ok(player, response);
+        }
+    }
+
+    /// <summary>
+    /// Issue #39: другая запись того же игрока в лобби — тот же ник с того же адреса (телефон
+    /// переподключился, старый сокет ещё живёт до таймаута).
+    /// </summary>
+    /// <remarks>
+    /// Сравнение по нику+IP, потому что wire-uid у лобби нет (в <c>JoinLobbyRequest</c> только
+    /// профиль с ником). Другой адрес при том же нике — это, возможно, другой человек, его не
+    /// трогаем.
+    /// </remarks>
+    private ConnectedPlayer? FindRejoinMembership(NetPeer peer, ConnectedPlayer self, string nick)
+    {
+        lock (_gate)
+        {
+            foreach (var p in _order)
+            {
+                if (ReferenceEquals(p, self) || !p.Joined)
+                    continue;
+                if (!string.Equals(p.Name, nick, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (p.Peer.Address is not { } oldAddress
+                    || peer.Address is not { } newAddress
+                    || !oldAddress.Equals(newAddress))
+                    continue;
+                return p;
+            }
+            return null;
         }
     }
 

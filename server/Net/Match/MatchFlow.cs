@@ -272,7 +272,8 @@ public static class MatchFlowRules
     /// </summary>
     public static void FreezeRoundRoster(
         MatchFlowState flow,
-        IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps)
+        IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps,
+        IReadOnlyCollection<byte>? excludeActors = null)
     {
         flow.RoundRoster.Clear();
         // Snapshot, deliberately. A late joiner's `team` prop arrives after this point and is not
@@ -283,6 +284,8 @@ public static class MatchFlowRules
         foreach (var ((actor, key), value) in actorProps)
         {
             if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
+                continue;
+            if (excludeActors is not null && excludeActors.Contains(actor))
                 continue;
             if (value.Kind != LobbyVariantKind.Byte)
                 continue;

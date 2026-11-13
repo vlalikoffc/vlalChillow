@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using LiteNetLib;
 using StandChillow.LanServer.Config;
@@ -92,8 +93,8 @@ public sealed partial class GameMatchHost : IDisposable
     /// </summary>
     private readonly Dictionary<string, MatchTeam> _reconnectTeams = new(StringComparer.Ordinal);
 
-    private static readonly TimeSpan ReconnectRestoreSettle = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan ReconnectRestoreTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ReconnectRestoreSettle = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan ReconnectRestoreTimeout = TimeSpan.FromSeconds(15);
     /// <summary>After MatchResults C2=205 — delay before tearing down 7777 and lobby idle.</summary>
     private static readonly TimeSpan MatchOverReturnToLobbyDelay = TimeSpan.FromSeconds(5);
 
@@ -357,7 +358,22 @@ public sealed partial class GameMatchHost : IDisposable
             try { st?.BootstrapTimeoutCts?.Cancel(); }
             catch { /* ignore */ }
             if (st is { Room: { } room, ActorNr: > 0 })
-                RemoveActorFromMatch(room, st.ActorNr, st.UserId, reason: info.Reason.ToString());
+            {
+                // Issue #39: this socket may be the superseded one — the player already came
+                // back on a new connection and owns the same actor. Removing it here killed the
+                // live player (log: takeover actor=3 → «влал Отключился» → actor gone).
+                if (IsActorOwnedByAnotherPeer(room, st.ActorNr))
+                {
+                    Console.WriteLine(
+                        $"[match-host] disconnect actor={st.ActorNr} ({info.Reason}) — уже перешёл " +
+                        "к новой сессии, actor не снимаем");
+                }
+                else
+                {
+                    RemoveActorFromMatch(
+                        room, st.ActorNr, st.UserId, st.IdentityKey, reason: info.Reason.ToString());
+                }
+            }
             Console.WriteLine($"[match-host] peer DISCONNECTED {peer.Address}:{peer.Port}: {info.Reason}");
         };
         _listener.NetworkReceiveEvent += OnNetworkReceive;
@@ -652,7 +668,6 @@ public sealed partial class GameMatchHost : IDisposable
         {
             PasswordKey = passwordKey,
             RoomId = roomId,
-            NextActorNr = MatchHostActor.ActorNr + 1,
         };
         // Actor 1 = lobby fake "Server" — master client / dedicated host, Spectators only.
         room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name, MatchHostActor.BootstrapUid));
@@ -689,14 +704,21 @@ public sealed partial class GameMatchHost : IDisposable
             "(socket drain every tick; phase/wipe/fuse checks every tick; " +
             $"WorldObjectState thin ticks every {StartupStateTick.TotalMilliseconds:0}ms)");
 
+        // Issue #35: a tick longer than two budgets is already user-visible lag.
+        MatchPerf.SlowTickMs = Math.Max(10, (int)Math.Round(HostTickPeriod.TotalMilliseconds * 2));
+
         while (!_cts.IsCancellationRequested)
         {
             var tickStart = Environment.TickCount64;
+            var tickSw = Stopwatch.GetTimestamp();
+            var pollMs = 0.0;
+            var flowMs = 0.0;
             try
             {
                 // Drain the socket. This is the only thing that must never be delayed:
                 // every millisecond spent here before PollEvents is receive-buffer risk.
                 _manager.PollEvents();
+                pollMs = Stopwatch.GetElapsedTime(tickSw).TotalMilliseconds;
 
                 var now = Environment.TickCount64;
                 // Issue #24: host no longer authors synthetic WorldObjectState (that zeroed
@@ -709,7 +731,13 @@ public sealed partial class GameMatchHost : IDisposable
                 }
 
                 // Match flow each tick: wipe / fuse expiry / phase deadlines.
+                var flowSw = Stopwatch.GetTimestamp();
                 TickMatchFlow();
+                // Issue #39: peers whose world gate never got a proof packet must not starve.
+                TickWorldReadyGates();
+                // Issue #39: actors whose session disappeared must not linger as alive ghosts.
+                TickGhostActors();
+                flowMs = Stopwatch.GetElapsedTime(flowSw).TotalMilliseconds;
 
                 if (Diag.StatsEnabled
                     && now - _lastStatsTickUtc >= Diag.HealthIntervalSec * 1000L)
@@ -721,6 +749,16 @@ public sealed partial class GameMatchHost : IDisposable
             catch (Exception ex)
             {
                 Console.WriteLine($"[match-host] poll tick failed: {FormatException(ex)}");
+            }
+
+            var totalMs = Stopwatch.GetElapsedTime(tickSw).TotalMilliseconds;
+            MatchPerf.RecordTick(totalMs, pollMs, flowMs);
+            if (MatchPerf.IsSlowTick(totalMs) && MatchPerf.ShouldLogSlowTick())
+            {
+                Console.WriteLine(
+                    $"[perf] slow tick {totalMs:0.0}ms (poll={pollMs:0.0} flow={flowMs:0.0} " +
+                    $"budget={HostTickPeriod.TotalMilliseconds:0}ms peers={_peers.Count}) — " +
+                    "see [health] for the 10s window; if this is frequent, the host is the bottleneck");
             }
 
             var elapsed = Environment.TickCount64 - tickStart;
@@ -764,6 +802,7 @@ public sealed partial class GameMatchHost : IDisposable
             $"reliableQueue={totalQueue} worstPeer={worst} slowPeers={backlogged} " +
             $"droppedSends={dropped} rttMax={rttMax}ms " +
             $"stateRx={Volatile.Read(ref _stateRxSeen)} rpcRx={Volatile.Read(ref _dropRpcRxSeen)} " +
+            $"{MatchPerf.DescribeWindow(op => MatchCodec.OpcodeName((MatchOpcode)op))} " +
             $"{CaptureSink.Describe()} {RunLog.DescribeStats()}");
     }
 
@@ -800,7 +839,17 @@ public sealed partial class GameMatchHost : IDisposable
             return;
         }
 
-        var body = new LobbyReader(payload.AsSpan(bodyOffset));
+        MatchPerf.RecordRx((byte)opcode, payload.Length);
+
+        // Issue #39: the first world-level packet proves the client's scene is up — release the
+        // held traffic and hand it the aggregate state (MatchWorldGate).
+        NoteClientProvedWorld(peer, opcode);
+
+        // Hot path (#35): WorldObjectState floods ~20 Hz/peer and never needs the body —
+        // build a body reader only for the three opcodes that actually parse one. The old
+        // eager `new LobbyReader(payload.AsSpan(bodyOffset))` copied the whole body on every
+        // relayed pose packet. `payload` is already a fresh array from LiteNetLib, so the
+        // offset constructor reads it in place (no copy, no extra allocation).
         // WorldObjectState floods at ~20Hz/peer — rate-limit RX lines (keep CWO/team/Rpc loud).
         // WeaponDropManager Rpc (id=4) is similarly chatty mid-match.
         var dropRpcNoise = opcode == MatchOpcode.WorldObjectRpc
@@ -827,10 +876,10 @@ public sealed partial class GameMatchHost : IDisposable
         switch (opcode)
         {
             case MatchOpcode.HandshakeRequest:
-                HandleHandshake(peer, body, payload);
+                HandleHandshake(peer, Body(payload, bodyOffset), payload);
                 break;
             case MatchOpcode.JoinRoomRequest:
-                HandleJoinRoom(peer, body, payload);
+                HandleJoinRoom(peer, Body(payload, bodyOffset), payload);
                 break;
             case MatchOpcode.SetProperty:
                 HandleSetProperty(peer, flags, payload);
@@ -852,11 +901,22 @@ public sealed partial class GameMatchHost : IDisposable
                 // except sender — same flags=None as phone host TX.
                 HandleWorldObjectStateRelay(peer, payload);
                 break;
+            case MatchOpcode.LeaveRoomRequest:
+                // Issue #39: a phone that «self-destructs» out of the room sends this and the host
+                // used to drop it on the floor (unknown payload shape → no invented handler). It is
+                // the moment the actor has to go, so log the exact bytes: with them the leave can
+                // be handled without guessing.
+                Console.WriteLine(
+                    $"[match-host] RX LeaveRoomRequest (13) from {peer.Address}:{peer.Port} " +
+                    $"len={payload.Length} hex={Convert.ToHexString(payload)} — " +
+                    "actor оставлен до таймаута (wire ещё не разобран)");
+                break;
             case MatchOpcode.FetchServerTimeRequest:
-                if (body.Remaining == 0)
+                // Empty body = 2.07 FetchServerTime; anything else = 2.07 handshake.
+                if (payload.Length <= bodyOffset)
                     HandleFetchServerTime(peer, payload);
                 else
-                    HandleHandshake207(peer, body, payload);
+                    HandleHandshake207(peer, Body(payload, bodyOffset), payload);
                 break;
             case MatchOpcode.RoomInitReady:
                 // Clients may echo the same empty 00 0F nudge back at INIT. Nothing to relay
@@ -898,6 +958,13 @@ public sealed partial class GameMatchHost : IDisposable
                 break;
         }
     }
+
+    /// <summary>
+    /// Zero-copy body view over the packet array. Only for opcodes that parse a body;
+    /// State/Rpc floods must not pay for a copy they never read (issue #35).
+    /// </summary>
+    private static LobbyReader Body(byte[] payload, int offset) =>
+        new(payload, offset, payload.Length - offset);
 
     /// <summary>
     /// Client <c>fuo=2</c> empty body (<c>00 02</c>). Host replies <c>fyf.bodw</c>:
@@ -1069,6 +1136,7 @@ public sealed partial class GameMatchHost : IDisposable
         st.RosterName = null;
         st.Handshaken = false;
         st.UserId = null;
+        st.IdentityKey = null;
         st.AppId = null;
         st.BootstrapPending = false;
         st.BootstrapSent = false;
@@ -1080,7 +1148,11 @@ public sealed partial class GameMatchHost : IDisposable
         st.JoinerAvatarSeen = false;
         st.JoinerPingSeen = false;
         st.PendingReconnectTeam = null;
-        st.ReconnectSpectatorFallbackDone = false;
+        st.ReconnectIdentityTrusted = false;
+        st.TeamAuthoredThisSession = false;
+        // Fresh session: the next bootstrap closes the world gate again.
+        st.WorldReady = true;
+        st.WorldGateUntilTick = 0;
     }
 
     public void Dispose()

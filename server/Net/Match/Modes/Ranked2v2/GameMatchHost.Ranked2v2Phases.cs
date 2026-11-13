@@ -69,7 +69,7 @@ public sealed partial class GameMatchHost
 
             if (!both)
             {
-                var (tr, ct) = CountFightingTeamRoster(room);
+                var (tr, ct) = CountFightingTeamRoster(room, GhostActorNumbers(room));
                 Console.WriteLine(
                     $"[match-host] match-flow: /set start armed but teams incomplete " +
                     $"Tr={tr} Ct={ct} — WarmUp waits for both ≥1");
@@ -463,7 +463,7 @@ public sealed partial class GameMatchHost
             room.Flow.DeadActors.Clear();
             room.Flow.PendingCombatDestroy.Clear();
             room.LastCombatDamage.Clear();
-            (trCount, ctCount) = CountFightingTeamRoster(room);
+            (trCount, ctCount) = CountFightingTeamRoster(room, GhostActorNumbers(room));
             bomberId = room.Flow.BomberActorNr;
         }
 
@@ -486,13 +486,20 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>Tr/Ct roster sizes for gold Prep <c>*_RoundStartPlayersCount</c> keys.</summary>
-    private static (int TrCount, int CtCount) CountFightingTeamRoster(MatchRoom room)
+    /// <remarks>
+    /// Issue #39: <paramref name="excludeActors"/> carries ghost actors (no owning socket) — their
+    /// team prop is stale and must not be published as a living player.
+    /// </remarks>
+    private static (int TrCount, int CtCount) CountFightingTeamRoster(
+        MatchRoom room, IReadOnlyCollection<byte>? excludeActors = null)
     {
         var tr = 0;
         var ct = 0;
         foreach (var ((actor, key), value) in room.ActorProps)
         {
             if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
+                continue;
+            if (excludeActors is not null && excludeActors.Contains(actor))
                 continue;
             if (value.Kind != LobbyVariantKind.Byte)
                 continue;
@@ -565,7 +572,8 @@ public sealed partial class GameMatchHost
             // #33: wipe is judged against who entered this round, not every stale team prop.
             // Spawn evidence wins: a mid-round joiner has a team prop but no pawn — he is dead
             // by design and must not keep his side "alive" past the kill that ended the round.
-            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps);
+            // Issue #39: a ghost actor (no owning socket) is not a fighter this round.
+            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps, GhostActorNumbers(room));
             room.Flow.PendingCombatDestroy.Clear();
         }
 

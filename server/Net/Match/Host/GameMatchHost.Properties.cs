@@ -106,6 +106,8 @@ public sealed partial class GameMatchHost
                 && actorNr != MatchHostActor.ActorNr)
             {
                 var team = (MatchTeam)value.Byte;
+                if (actorNr == st.ActorNr)
+                    st.TeamAuthoredThisSession = true;
                 if (team is MatchTeam.Tr or MatchTeam.Ct)
                 {
                     Console.WriteLine(

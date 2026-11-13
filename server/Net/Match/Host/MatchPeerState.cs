@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using LiteNetLib;
 using StandChillow.LanServer.Net.Match;
@@ -8,7 +9,14 @@ namespace StandChillow.LanServer.Net.Match.Host;
 internal sealed class MatchPeerState
 {
     public bool Handshaken { get; set; }
+    /// <summary>Wire uid: 2.07 auth-токен без ведущей <c>C</c> (для legacy — userId).</summary>
     public string? UserId { get; set; }
+    /// <summary>
+    /// Issue #39: устойчивая часть токена (<see cref="MatchIdentity.StableKeyFrom207Token"/>).
+    /// Полный <see cref="UserId"/> содержит гуид сессии и меняется при каждом переподключении,
+    /// поэтому «тот же игрок» и память о команде ищутся по этому ключу.
+    /// </summary>
+    public string? IdentityKey { get; set; }
     public string? AppId { get; set; }
     public MatchRoom? Room { get; set; }
     public byte ActorNr { get; set; }
@@ -45,9 +53,34 @@ internal sealed class MatchPeerState
     public MatchTeam? PendingReconnectTeam { get; set; }
 
     /// <summary>
-    /// Reconnect spectator fallback already ran for this peer session — never force Spectator again.
+    /// Issue #39: this peer took over an actor that already existed in the room — the host
+    /// proved who it is by the stable token key. The reconnecting client does not re-author
+    /// the identity batch, so waiting for it left the player «pre-init» for 15 s (no world,
+    /// no pawn, no team) until the soft timeout.
     /// </summary>
-    public bool ReconnectSpectatorFallbackDone { get; set; }
+    public bool ReconnectIdentityTrusted { get; set; }
+
+    /// <summary>
+    /// The client authored its own <c>team</c> prop after this join. A remembered reconnect
+    /// team must not overwrite that fresh choice.
+    /// </summary>
+    public bool TeamAuthoredThisSession { get; set; }
+
+    /// <summary>
+    /// The peer's scene is up: it has sent at least one world-level packet since its bootstrap,
+    /// or the hold window expired. See <see cref="MatchWorldGate"/>.
+    /// </summary>
+    public bool WorldReady { get; set; } = true;
+
+    /// <summary>When <see cref="WorldReady"/> flips on even without proof (Environment.TickCount64).</summary>
+    public long WorldGateUntilTick { get; set; }
+
+    /// <summary>Close the gate for a joining peer: its world does not exist yet.</summary>
+    public void HoldWorldTraffic(int holdMs)
+    {
+        WorldReady = false;
+        WorldGateUntilTick = Environment.TickCount64 + holdMs;
+    }
 
     /// <summary>
     /// Ready for host bootstrap: this join's own <c>uid</c> is known, and the rest of the identity
@@ -55,7 +88,8 @@ internal sealed class MatchPeerState
     /// (<see cref="IdentityAlreadyBootstrapped"/> — see issue #28).
     /// </summary>
     public bool IsJoinerIdentityReady =>
-        JoinerUidSeen
-        && (IdentityAlreadyBootstrapped
-            || (JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen)));
+        ReconnectIdentityTrusted
+        || (JoinerUidSeen
+            && (IdentityAlreadyBootstrapped
+                || (JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen))));
 }

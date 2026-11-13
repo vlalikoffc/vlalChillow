@@ -53,6 +53,20 @@ public sealed partial class GameMatchHost
         st.JoinerFromLobbySeen = false;
         st.JoinerAvatarSeen = false;
         st.JoinerPingSeen = false;
+
+        // Issue #39: a reconnect takeover already proved who this is (stable token key) and
+        // the client will NOT resend the identity batch for a match it thinks it is still in.
+        // Waiting for it here left the player pre-init for 15 s — no world, no team, no pawn —
+        // which is exactly «зашёл за команду и не появляется» from the report.
+        if (st.ReconnectIdentityTrusted)
+        {
+            Console.WriteLine(
+                $"[match-host] joiner={joinerActorNr} identity already trusted (reconnect takeover) " +
+                "— bootstrap immediately, no identity wait");
+            TrySendWorldBootstrap(peer, room, joinerActorNr, reason: "reconnect-trusted");
+            return;
+        }
+
         st.BootstrapTimeoutCts?.Cancel();
         st.BootstrapTimeoutCts = new CancellationTokenSource();
         var timeoutToken = st.BootstrapTimeoutCts.Token;
@@ -136,6 +150,9 @@ public sealed partial class GameMatchHost
                 return;
             st.BootstrapSent = true;
             st.BootstrapPending = false;
+            // Issue #39: bootstrap only unlocks INIT — the scene is still being built, so world
+            // relays to this peer wait until it proves the scene is up (MatchWorldGate).
+            HoldWorldTrafficForNewScene(st);
             // Issue #28: identity props above are one-shot; latch them so a same-peer rejoin is
             // not stuck behind the INIT gate waiting for a batch the client will never resend.
             st.IdentityAlreadyBootstrapped = true;
@@ -274,33 +291,31 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// After INIT: host-force remembered fighting team (same SetProperty team path as join),
-    /// wait ~5s for a joiner CreateWorldObject (SpawnedPawns); on failure force Spectator once.
-    /// Evidence: team prop + joiner CWO. Does not re-force Spectator if already done for this peer.
+    /// After INIT: restore the remembered fighting team (same SetProperty path as join) unless
+    /// the client already picked one, then watch for a real <c>CreateWorldObject</c>.
     /// </summary>
+    /// <remarks>
+    /// Issue #39: this used to force <b>Spectator</b> after 5 s without a pawn. A phone that had
+    /// just reconnected was still loading the world, so it lost its team and the player had to
+    /// pick again in the buy/round-end phase. Now the host keeps the team and simply waits for
+    /// the next C2=22/C2=31 spawn — the same rule as any mid-round joiner.
+    /// </remarks>
     private void MaybeScheduleReconnectRestore(NetPeer peer, MatchRoom room, byte joinerActorNr)
     {
         if (!_peers.TryGetValue(peer, out var st))
             return;
         var team = st.PendingReconnectTeam;
+        st.PendingReconnectTeam = null;
         if (team is not (MatchTeam.Tr or MatchTeam.Ct))
             return;
-        if (st.ReconnectSpectatorFallbackDone)
-        {
-            st.PendingReconnectTeam = null;
-            Console.WriteLine(
-                $"[match-host] reconnect-restore: skip actor={joinerActorNr} — " +
-                "spectator fallback already done once this peer session");
-            return;
-        }
 
-        st.PendingReconnectTeam = null;
-        var userId = st.UserId;
+        // Issue #39: memory about «same player» must survive a new session token.
+        var identityKey = st.IdentityKey ?? st.UserId;
         var actorNr = joinerActorNr;
         Console.WriteLine(
             $"[match-host] reconnect-restore: scheduled team={team} actor={actorNr} " +
-            $"userId='{userId}' settle={ReconnectRestoreSettle.TotalMilliseconds:0}ms " +
-            $"timeout={ReconnectRestoreTimeout.TotalSeconds:0}s");
+            $"identity='{identityKey}' settle={ReconnectRestoreSettle.TotalMilliseconds:0}ms " +
+            $"timeout={ReconnectRestoreTimeout.TotalSeconds:0}s (never auto-Spectator)");
 
         _ = Task.Run(async () =>
         {
@@ -318,7 +333,16 @@ public sealed partial class GameMatchHost
                     return;
                 }
 
-                if (!TryForceTeam(peer, team.Value, out var msg))
+                // The client may have picked a team itself right after INIT (that is the normal
+                // UI path). Never overwrite a fresh choice with the remembered one — that is
+                // what made players «re-pick their team» after every reconnect.
+                if (cur.TeamAuthoredThisSession)
+                {
+                    Console.WriteLine(
+                        $"[match-host] reconnect-restore: actor={actorNr} уже выбрал команду сам " +
+                        "— remembered team не навязываем");
+                }
+                else if (!TryForceTeam(peer, team.Value, out var msg))
                 {
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: force team FAILED actor={actorNr}: {msg}");
@@ -339,24 +363,7 @@ public sealed partial class GameMatchHost
                 {
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: peer left before timeout actor={actorNr}");
-                    if (userId is { } uidLeft)
-                    {
-                        lock (_roomGate)
-                            _reconnectTeams.Remove(uidLeft);
-                    }
-                    return;
-                }
-
-                // Already forced Spectator once this session — never again.
-                if (cur.ReconnectSpectatorFallbackDone)
-                {
-                    Console.WriteLine(
-                        $"[match-host] reconnect-restore: skip Spectator actor={actorNr} — once only");
-                    if (userId is { } uidOnce)
-                    {
-                        lock (_roomGate)
-                            _reconnectTeams.Remove(uidOnce);
-                    }
+                    ForgetReconnectMemory(identityKey);
                     return;
                 }
 
@@ -364,8 +371,9 @@ public sealed partial class GameMatchHost
                 MatchTeam liveTeam = MatchTeam.None;
                 lock (_roomGate)
                 {
-                    // SpawnedPawns = ever CWO'd after reconnect (survives combat death).
-                    // LivingPawns alone would mis-spectate a player who spawned then died.
+                    // SpawnedPawns = a real CWO since this join. LivingPawns is the fallback for
+                    // a mode that does not track SpawnedPawns. Both were cleared on takeover, so
+                    // this cannot be satisfied by the dead player's old body (issue #39).
                     hasRespawned = room.SpawnedPawns.Contains(actorNr)
                         || room.LivingPawns.Values.Any(p => p.OwnerActorNr == actorNr);
                     if (room.ActorProps.TryGetValue((actorNr, MatchRoomPropKeys.Team), out var tv)
@@ -373,7 +381,7 @@ public sealed partial class GameMatchHost
                         liveTeam = (MatchTeam)tv.Byte;
                 }
 
-                if (hasRespawned && liveTeam == team)
+                if (hasRespawned && liveTeam is MatchTeam.Tr or MatchTeam.Ct)
                 {
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: OK actor={actorNr} team={liveTeam} " +
@@ -383,43 +391,28 @@ public sealed partial class GameMatchHost
                     SendMatchStateSnapshotToPeer(peer, room, excludeActorNr: actorNr);
                     SendLivingPawnSnapshotToPeer(peer, room, excludeOwnerActorNr: actorNr);
                     SyncBombPlantStateToPeer(peer, room);
-                    if (userId is { } uidOk)
-                    {
-                        lock (_roomGate)
-                            _reconnectTeams.Remove(uidOk);
-                    }
+                    ForgetReconnectMemory(identityKey);
                     return;
                 }
 
-                // If they already moved themselves to Spectator, count as done — do not re-force.
                 if (liveTeam == MatchTeam.Spectator)
                 {
-                    cur.ReconnectSpectatorFallbackDone = true;
                     Console.WriteLine(
-                        $"[match-host] reconnect-restore: actor={actorNr} already Spectator — once done");
-                    if (userId is { } uidSpec)
-                    {
-                        lock (_roomGate)
-                            _reconnectTeams.Remove(uidSpec);
-                    }
+                        $"[match-host] reconnect-restore: actor={actorNr} сам ушёл в Spectator — ok");
+                    ForgetReconnectMemory(identityKey);
                     return;
                 }
 
+                // Issue #39: no auto-Spectator. A reconnecting player is «dead for the round»
+                // until the next C2=22 spawns him (same rule as a fresh mid-round joiner) —
+                // forcing Spectator here threw people out of their team and made them re-pick.
+                // The old body was already destroyed on takeover, so he is not counted alive.
                 Console.WriteLine(
-                    $"[match-host] reconnect-restore: FAILED actor={actorNr} " +
-                    $"team={liveTeam} hasRespawned={hasRespawned} → Spectator fallback (once)");
-                cur.ReconnectSpectatorFallbackDone = true;
-                if (TryForceTeam(peer, MatchTeam.Spectator, out var specMsg))
-                    Console.WriteLine(
-                        $"[match-host] reconnect-restore: Spectator forced actor={actorNr} ({specMsg})");
-                else
-                    Console.WriteLine(
-                        $"[match-host] reconnect-restore: Spectator force failed actor={actorNr}: {specMsg}");
-                if (userId is { } uidFail)
-                {
-                    lock (_roomGate)
-                        _reconnectTeams.Remove(uidFail);
-                }
+                    $"[match-host] reconnect-restore: no pawn yet actor={actorNr} " +
+                    $"team={liveTeam} hasRespawned={hasRespawned} — team kept, no Spectator " +
+                    "(spawn will come with the next C2=22/ C2=31)");
+                // Memory stays: the player is still in the match and the next disconnect
+                // re-adds it anyway.
             }
             catch (OperationCanceledException)
             {
@@ -431,6 +424,15 @@ public sealed partial class GameMatchHost
                     $"[match-host] reconnect-restore: error actor={actorNr}: {FormatException(ex)}");
             }
         });
+    }
+
+    /// <summary>Drop the «remembered team» for <paramref name="identityKey"/>.</summary>
+    private void ForgetReconnectMemory(string? identityKey)
+    {
+        if (identityKey is not { Length: > 0 } key)
+            return;
+        lock (_roomGate)
+            _reconnectTeams.Remove(key);
     }
 
     /// <summary>
