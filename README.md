@@ -14,7 +14,9 @@ Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engi
 - **CLI dashboard** — TTY console + phone chat slash commands (`/mode`, `/map`, `/start`, `/play`, `/end`, …)
 - **Reconnect** — a phone that loses the network and comes back **inside the match** keeps its
   actor (same number, same name/team): the host recognises the install by the stable part of the
-  2.07 auth token instead of the per-session tail, so no second actor/ghost body appears (#39)
+  2.07 auth token instead of the per-session tail, so no second actor/ghost body appears; INIT is
+  granted immediately (the client does not resend its identity) and the host never force-spectates
+  a returning player — his old body is dropped and he respawns with the next buy (#39)
 - **Graceful shutdown** — CTRL+C tears down cleanly; rematch via `play` again
 - **ConnectAsClient probe** — optional learning client (`--client`) can observe a real phone host or spawn a visible CT/Tr fighter from the map spawn catalog (see `server/Net/PROBE_README.md`)
 

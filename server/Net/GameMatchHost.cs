@@ -93,8 +93,8 @@ public sealed partial class GameMatchHost : IDisposable
     /// </summary>
     private readonly Dictionary<string, MatchTeam> _reconnectTeams = new(StringComparer.Ordinal);
 
-    private static readonly TimeSpan ReconnectRestoreSettle = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan ReconnectRestoreTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ReconnectRestoreSettle = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan ReconnectRestoreTimeout = TimeSpan.FromSeconds(15);
     /// <summary>After MatchResults C2=205 — delay before tearing down 7777 and lobby idle.</summary>
     private static readonly TimeSpan MatchOverReturnToLobbyDelay = TimeSpan.FromSeconds(5);
 
@@ -1116,7 +1116,8 @@ public sealed partial class GameMatchHost : IDisposable
         st.JoinerAvatarSeen = false;
         st.JoinerPingSeen = false;
         st.PendingReconnectTeam = null;
-        st.ReconnectSpectatorFallbackDone = false;
+        st.ReconnectIdentityTrusted = false;
+        st.TeamAuthoredThisSession = false;
     }
 
     public void Dispose()

@@ -52,9 +52,18 @@ internal sealed class MatchPeerState
     public MatchTeam? PendingReconnectTeam { get; set; }
 
     /// <summary>
-    /// Reconnect spectator fallback already ran for this peer session — never force Spectator again.
+    /// Issue #39: this peer took over an actor that already existed in the room — the host
+    /// proved who it is by the stable token key. The reconnecting client does not re-author
+    /// the identity batch, so waiting for it left the player «pre-init» for 15 s (no world,
+    /// no pawn, no team) until the soft timeout.
     /// </summary>
-    public bool ReconnectSpectatorFallbackDone { get; set; }
+    public bool ReconnectIdentityTrusted { get; set; }
+
+    /// <summary>
+    /// The client authored its own <c>team</c> prop after this join. A remembered reconnect
+    /// team must not overwrite that fresh choice.
+    /// </summary>
+    public bool TeamAuthoredThisSession { get; set; }
 
     /// <summary>
     /// Ready for host bootstrap: this join's own <c>uid</c> is known, and the rest of the identity
@@ -62,7 +71,8 @@ internal sealed class MatchPeerState
     /// (<see cref="IdentityAlreadyBootstrapped"/> — see issue #28).
     /// </summary>
     public bool IsJoinerIdentityReady =>
-        JoinerUidSeen
-        && (IdentityAlreadyBootstrapped
-            || (JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen)));
+        ReconnectIdentityTrusted
+        || (JoinerUidSeen
+            && (IdentityAlreadyBootstrapped
+                || (JoinerFromLobbySeen && (JoinerAvatarSeen || JoinerPingSeen))));
 }

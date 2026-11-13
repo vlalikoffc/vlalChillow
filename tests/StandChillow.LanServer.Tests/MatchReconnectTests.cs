@@ -78,6 +78,9 @@ public sealed class MatchReconnectTests
         room.UserIds.Add("LBHASH_firstsession");
         room.SpawnedPawns.Add(2);
         room.ActorProps[(2, MatchRoomPropKeys.Team)] = LobbyVariant.FromByte((byte)MatchTeam.Tr);
+        room.LivingPawns[777] = new MatchLivingPawn { ObjectId = 777, OwnerActorNr = 2 };
+        room.Flow.DeadActors.Add(2);
+        room.Flow.RoundRoster[2] = MatchTeam.Tr;
 
         var oldState = new MatchPeerState
         {
@@ -92,9 +95,12 @@ public sealed class MatchReconnectTests
             IdentityKey = "LBHASH",
         };
 
-        var remembered = MatchReconnect.Adopt(room, newState, oldState, actorNr: 2);
+        var adoption = MatchReconnect.Adopt(room, newState, oldState, actorNr: 2);
 
-        Assert.Equal(MatchTeam.Tr, remembered);
+        Assert.Equal(MatchTeam.Tr, adoption.RememberedTeam);
+        // The old body is gone from host tracking and must be destroyed on the wire.
+        Assert.Equal<IEnumerable<short>>(new short[] { 777 }, adoption.RemovedPawnIds);
+        Assert.Empty(room.LivingPawns);
 
         // Exactly one actor with that number, wire uid follows the new session.
         var matching = room.Actors.Where(a => a.Nr == 2).ToList();
@@ -113,9 +119,27 @@ public sealed class MatchReconnectTests
         Assert.Equal((byte)2, newState.ActorNr);
         Assert.Equal(MatchTeam.Tr, newState.PendingReconnectTeam);
         Assert.DoesNotContain((byte)2, room.SpawnedPawns);
+        // Alive/dead of the old session is not trusted: the player is a cold mid-round
+        // entrant (outside the frozen roster) until a real CWO respawns him.
+        Assert.DoesNotContain((byte)2, room.Flow.DeadActors);
+        Assert.False(room.Flow.RoundRoster.ContainsKey(2));
+        // The reconnecting client does not resend identity — INIT must trust the takeover.
+        Assert.True(newState.ReconnectIdentityTrusted);
+        Assert.True(newState.IsJoinerIdentityReady);
 
         // Same socket re-join: nothing to transfer.
-        Assert.Equal(MatchTeam.None, MatchReconnect.Adopt(room, newState, newState, 2));
+        Assert.Equal(MatchTeam.None, MatchReconnect.Adopt(room, newState, newState, 2).RememberedTeam);
+    }
+
+    [Fact]
+    public void Fresh_joiner_still_waits_for_its_identity_batch()
+    {
+        // Guard rail for the trusted-reconnect shortcut: it must never apply to a new player.
+        var st = new MatchPeerState { JoinerUidSeen = true };
+        Assert.False(st.IsJoinerIdentityReady);
+
+        st.ReconnectIdentityTrusted = true;
+        Assert.True(st.IsJoinerIdentityReady);
     }
 
     [Fact]

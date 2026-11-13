@@ -44,18 +44,19 @@ internal static class MatchReconnect
     }
 
     /// <summary>
-    /// Передать actor вернувшемуся игроку. Ничего не пересоздаётся: тот же номер, имя,
-    /// room-свойства и место в round-roster; меняется владелец и wire-uid новой сессии.
+    /// Передать actor вернувшемуся игроку. Номер, имя и room-свойства сохраняются, но
+    /// боевое состояние старой сессии — нет: старый pawn, флаг смерти в раунде и место в
+    /// frozen roster удаляются. Иначе сервер «помнит» игрока живым (или мёртвым) с чужим
+    /// телом и потом выкидывает его в Spectator (issue #39).
     /// </summary>
-    /// <returns>Команда, которую надо восстановить после INIT (None — нечего).</returns>
-    public static MatchTeam Adopt(
+    public static ReconnectAdoption Adopt(
         MatchRoom room,
         MatchPeerState newState,
         MatchPeerState previousState,
         byte actorNr)
     {
         if (ReferenceEquals(previousState, newState))
-            return MatchTeam.None;
+            return new ReconnectAdoption(MatchTeam.None, Array.Empty<short>());
 
         var remembered = MatchTeam.None;
         if (room.ActorProps.TryGetValue((actorNr, MatchRoomPropKeys.Team), out var teamValue)
@@ -75,9 +76,21 @@ internal static class MatchReconnect
         if (newState.UserId is { Length: > 0 } newUid)
             room.UserIds.Add(newUid);
 
-        // Новый pawn должен прийти заново: SpawnedPawns — доказательство respawn для
-        // MaybeScheduleReconnectRestore. Старый pawn не уничтожаем — его заменит CWO.
+        // Старое тело больше не принадлежит этому игроку: убираем его из трекинга и просим
+        // пиров удалить (host-authored Destroy). Новый pawn придёт своим CWO.
+        var pawnIds = room.LivingPawns
+            .Where(kv => kv.Value.OwnerActorNr == actorNr)
+            .Select(kv => kv.Key)
+            .ToList();
+        foreach (var id in pawnIds)
+            room.LivingPawns.Remove(id);
         room.SpawnedPawns.Remove(actorNr);
+
+        // «Мёртв/жив» в текущем раунде — состояние старой сессии, ему верить нельзя.
+        // Возвращается как cold start: вне frozen roster, до следующего C2=22 (та же
+        // политика, что у обычного mid-round joiner).
+        room.Flow.DeadActors.Remove(actorNr);
+        MatchFlowRules.RemoveFromRoundRoster(room.Flow, actorNr);
 
         // Старый сокет больше не владеет actor: его пакеты игнорируются, а будущий
         // Disconnect не удалит живого игрока (ActorNr=0).
@@ -89,6 +102,13 @@ internal static class MatchReconnect
         newState.RosterName = rosterName;
         newState.PendingReconnectTeam =
             remembered is MatchTeam.Tr or MatchTeam.Ct ? remembered : null;
-        return remembered;
+        // Identity batch от вернувшегося клиента не приходит — INIT не ждём.
+        newState.ReconnectIdentityTrusted = true;
+        return new ReconnectAdoption(remembered, pawnIds);
     }
 }
+
+/// <summary>Что забрал <see cref="MatchReconnect.Adopt"/>: память о команде и старые тела.</summary>
+internal readonly record struct ReconnectAdoption(
+    MatchTeam RememberedTeam,
+    IReadOnlyList<short> RemovedPawnIds);

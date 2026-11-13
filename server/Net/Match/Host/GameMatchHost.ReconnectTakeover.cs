@@ -53,13 +53,26 @@ public sealed partial class GameMatchHost
         }
 
         var previousUid = previousState.UserId;
-        MatchTeam remembered;
+        ReconnectAdoption adoption;
         lock (_roomGate)
-            remembered = MatchReconnect.Adopt(room, newState, previousState, actorNr);
+            adoption = MatchReconnect.Adopt(room, newState, previousState, actorNr);
 
         try { previousState.BootstrapTimeoutCts?.Cancel(); }
         catch { /* ignore */ }
 
+        // Issue #39: the old body belongs to a session that no longer exists. Leaving it in
+        // the world made the host count a dead (or absent) player as alive and then force him
+        // to Spectator. Peers are told to drop it; the returning client creates a new pawn.
+        foreach (var pawnId in adoption.RemovedPawnIds)
+        {
+            var destroy = MatchCodec.BuildDestroyWorldObject(NextServerTime(), pawnId);
+            var peers = BroadcastInitReady(room, destroy, tag: "match_tx_DestroyWorldObject");
+            Console.WriteLine(
+                $"[match-host] TX DestroyWorldObject id={pawnId} → peers={peers} " +
+                $"(reconnect actor={actorNr}: old body removed, not counted alive)");
+        }
+
+        var remembered = adoption.RememberedTeam;
         Console.WriteLine(
             $"[match-host] reconnect-takeover: identity='{newState.IdentityKey}' actor={actorNr} " +
             $"('{newState.RosterName}') перешёл к новой сессии uid='{newState.UserId}' — " +
