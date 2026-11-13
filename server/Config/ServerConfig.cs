@@ -617,8 +617,8 @@ public sealed class ServerConfig
     }
 
     /// <summary>
-    /// Опечатки в именах ключей. «Настроил админов, а сервер их не видит» почти всегда значит
-    /// <c>\"admins\"</c> в корне или <c>\"adminNicknames\"</c> вместо <c>admin.nicknames</c>.
+    /// Опечатки в именах ключей. «Настроил админов, а сервер их не видит» почти всегда
+    /// значит, что ключ назван не так: <c>admins</c> в корне вместо <c>admin.nicknames</c>.
     /// </summary>
     private void ReportUnknownKeys()
     {
@@ -626,14 +626,15 @@ public sealed class ServerConfig
         {
             foreach (var key in UnknownKeys.Keys)
             {
-                var likelyAdmin = (Admin is null || Admin.Nicknames is null || Admin.Nicknames.Count == 0)
-                                  && key.Contains(\"admin\", StringComparison.OrdinalIgnoreCase);
+                var noAdmins = Admin is null || Admin.Nicknames is null || Admin.Nicknames.Count == 0;
+                var likelyAdmin = noAdmins &&
+                                  key.Contains("admin", StringComparison.OrdinalIgnoreCase);
                 _issues.Add(new ConfigIssue(
                     key,
                     likelyAdmin
-                        ? \"неизвестный ключ в корне; админские ники читаются из admin.nicknames\"
-                        : \"неизвестный ключ в корне — сервер его не читает\",
-                    \"проигнорирован\"));
+                        ? "неизвестный ключ в корне; админские ники читаются из admin.nicknames"
+                        : "неизвестный ключ в корне — сервер его не читает",
+                    "проигнорирован"));
             }
         }
 
@@ -641,9 +642,9 @@ public sealed class ServerConfig
         {
             foreach (var key in Admin.UnknownKeys.Keys)
                 _issues.Add(new ConfigIssue(
-                    \"admin.\" + key,
-                    \"неизвестный ключ внутри admin — сервер его не читает\",
-                    \"проигнорирован\"));
+                    "admin." + key,
+                    "неизвестный ключ внутри admin — сервер его не читает",
+                    "проигнорирован"));
         }
     }
 
