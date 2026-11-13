@@ -226,6 +226,11 @@ public sealed class LobbySession
             if (string.IsNullOrWhiteSpace(req.Profile.Name))
                 return JoinResult.Fail(JoinFailReason.ProfileValidationFailed, "empty name");
 
+            // Ник сервера зарезервирован: копий «Server» в лобби быть не должно.
+            if (ServerIdentity.IsServerNick(req.Profile.Name))
+                return JoinResult.Fail(
+                    JoinFailReason.ProfileValidationFailed, "name reserved for the server");
+
             if (req.Profile.Avatar is { Length: > 2_000_000 })
                 return JoinResult.Fail(JoinFailReason.ProfileValidationFailed, "avatar too large");
 
@@ -319,6 +324,10 @@ public sealed class LobbySession
 
             if (string.IsNullOrWhiteSpace(req.Profile.Name))
                 return JoinResult.Fail(JoinFailReason.ProfileValidationFailed, "empty name");
+
+            if (ServerIdentity.IsServerNick(req.Profile.Name))
+                return JoinResult.Fail(
+                    JoinFailReason.ProfileValidationFailed, "name reserved for the server");
 
             player.Name = req.Profile.Name.Trim();
             player.Avatar = req.Profile.Avatar;

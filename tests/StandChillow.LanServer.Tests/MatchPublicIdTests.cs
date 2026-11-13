@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using StandChillow.LanServer.Bans;
+using StandChillow.LanServer.Config;
 using Xunit;
 
 namespace StandChillow.LanServer.Tests;
@@ -12,11 +15,14 @@ public sealed class MatchPublicIdTests
     [Theory]
     // Зафиксированные значения: если алгоритм/нормализация случайно изменятся,
     // у всех игроков разом поменяются id — тест не даст этого не заметить.
-    [InlineData("Ktulxy", 8799747)]
-    [InlineData("Ktulxy2", 73197888)]
-    [InlineData("влал", 6390243)]
-    [InlineData("  влал  ", 6390243)]
-    [InlineData("Ktu lxy", 65393474)]
+    // Как проверить вручную: printf 'KTULXY' | sha256sum → a0e6302b6118a8d2…
+    // → первые 8 байт little-endian → 15179409349667776160 → % 100000000 + 1 = 67776161.
+    [InlineData("Ktulxy", 67776161)]
+    [InlineData("Ktulxy2", 67196325)]
+    [InlineData("влал", 25354325)]
+    [InlineData("  влал  ", 25354325)]
+    [InlineData("Ktu lxy", 87780421)]
+    [InlineData("Server", 39772292)]
     public void IdIsPinnedAcrossVersions(string nick, int expected)
     {
         Assert.Equal(expected, MatchPublicId.ForNick(nick));
@@ -27,10 +33,10 @@ public sealed class MatchPublicIdTests
     {
         // Клиент присылает uid строкой «Offline» — сервер отдаёт то же самое поле числом.
         Assert.True(MatchPublicId.TryWireUid("Ktulxy", out var latin));
-        Assert.Equal("8799747", latin);
+        Assert.Equal("67776161", latin);
 
         Assert.True(MatchPublicId.TryWireUid("влал", out var cyrillic));
-        Assert.Equal("6390243", cyrillic);
+        Assert.Equal("25354325", cyrillic);
     }
 
     [Fact]
@@ -39,6 +45,28 @@ public sealed class MatchPublicIdTests
         Assert.False(MatchPublicId.TryWireUid(null, out var none));
         Assert.Equal(string.Empty, none);
         Assert.False(MatchPublicId.TryWireUid("   ", out _));
+    }
+
+    [Fact]
+    public void IndependentComputationAgreesForFiveHundredNicks()
+    {
+        // Вторая реализация того же контракта: тот же SHA-256, но uint64 собирается из
+        // digest побайтово, без BinaryPrimitives. Ловит ошибку порядка байт и «плывущую»
+        // нормализацию — то есть ровно то, из-за чего id разошёлся бы между серверами.
+        for (var i = 0; i < 500; i++)
+        {
+            var nick = $"proof-{i}";
+            var normalized = ServerConfig.NormalizeNick(nick).ToUpperInvariant();
+            normalized = normalized.Normalize(NormalizationForm.FormC);
+
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+            ulong value = 0;
+            for (var b = 7; b >= 0; b--)
+                value = (value << 8) | hash[b];
+
+            var expected = (int)(value % 100_000_000UL) + 1;
+            Assert.Equal(expected, MatchPublicId.ForNick(nick));
+        }
     }
 
     [Fact]
@@ -86,8 +114,25 @@ public sealed class MatchPublicIdTests
     [Fact]
     public void DifferentNickDifferentId()
     {
-        Assert.NotEqual(MatchPublicId.ForNick("влал"), MatchPublicId.ForNick("Влал"));
         Assert.NotEqual(MatchPublicId.ForNick("Ktulxy"), MatchPublicId.ForNick("Ktulxy2"));
+        Assert.NotEqual(MatchPublicId.ForNick("влал"), MatchPublicId.ForNick("влал2"));
+    }
+
+    [Fact]
+    public void CaseDoesNotSplitThePerson()
+    {
+        // Бан по нику и так сравнивается без учёта регистра, поэтому id обязан означать
+        // того же человека: «Влал» и «влал» — один id.
+        Assert.Equal(MatchPublicId.ForNick("влал"), MatchPublicId.ForNick("Влал"));
+        Assert.Equal(MatchPublicId.ForNick("Ktulxy"), MatchPublicId.ForNick("KTULXY"));
+    }
+
+    [Fact]
+    public void CaseFoldSurvivesSurroundingNoise()
+    {
+        Assert.Equal(
+            MatchPublicId.ForNick("Ktulxy"),
+            MatchPublicId.ForNick("  kTuLxY\u200B "));
     }
 
     [Fact]

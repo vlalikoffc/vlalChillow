@@ -685,8 +685,11 @@ public sealed partial class GameMatchHost : IDisposable
         room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name, MatchHostActor.BootstrapUid));
         room.ActorProps[(MatchHostActor.ActorNr, MatchRoomPropKeys.Team)] =
             LobbyVariant.FromByte((byte)MatchHostActor.Team);
+        // На проводе у сервера свой id, а не клиентская заглушка «Offline»: «Server» в
+        // списке игроков тоже должен быть с номером. BootstrapUid остаётся только
+        // внутренним токеном в room.Actors (по нему работает дедуп/reconnect).
         room.ActorProps[(MatchHostActor.ActorNr, MatchRoomPropKeys.Uid)] =
-            LobbyVariant.FromString(MatchHostActor.BootstrapUid);
+            LobbyVariant.FromString(ServerIdentity.UidText);
         return room;
     }
 

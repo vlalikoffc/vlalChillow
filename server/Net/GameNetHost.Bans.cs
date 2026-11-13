@@ -46,7 +46,7 @@ public sealed partial class GameNetHost
 
         // Матч проверяет те же записи: IP на коннекте, ник до выдачи актора.
         _match.Bans = _bans;
-        _match.IsAdminNick = _config.IsAdmin;
+        _match.IsAdminNick = IsBanExemptNick;
         _match.ExposeServerUid = settings.ExposeIds;
 
         Console.WriteLine(
@@ -79,8 +79,15 @@ public sealed partial class GameNetHost
         return _bans.Inspect(
             new BanProbe(nick, address?.ToString()),
             DateTime.UtcNow,
-            _config.IsAdmin);
+            IsBanExemptNick);
     }
+
+    /// <summary>
+    /// Кого бан не берёт: админа из конфига и сам сервер. Предикат читает <c>_config</c> на
+    /// каждом входе, поэтому перечитывание конфига не оставляет старый список админов.
+    /// </summary>
+    private bool IsBanExemptNick(string? nick) =>
+        _config.IsAdmin(nick) || ServerIdentity.IsServerNick(nick);
 
     private bool IsShadowPeer(NetPeer peer)
     {
@@ -215,6 +222,13 @@ public sealed partial class GameNetHost
             return;
         }
 
+        // id сервера — не игрок и не ключ бана: никого по нему не баним.
+        if (ServerIdentity.IsServerUid(id))
+        {
+            reply($"id {id} — это сервер ({ServerIdentity.Nick}); он не банится и id его не банит");
+            return;
+        }
+
         // 1) кто сейчас в катке. Коллизия id (два ника → один id) — отказ, а не
         // «баню первого попавшегося»: забанить не того хуже, чем попросить уточнить.
         var inMatch = _match.SnapshotPublicIds().Where(e => e.Id == id).ToList();
@@ -314,9 +328,10 @@ public sealed partial class GameNetHost
             return;
         }
 
-        if (nick.Equals(LobbySession.ServerPlayerName, StringComparison.OrdinalIgnoreCase))
+        // Сам сервер не банится ни по нику, ни по id: это не игрок, а хост.
+        if (ServerIdentity.IsServerNick(nick))
         {
-            reply("Server забанить нельзя");
+            reply($"'{ServerIdentity.Nick}' — это сам сервер, его забанить нельзя");
             return;
         }
 
@@ -356,9 +371,13 @@ public sealed partial class GameNetHost
 
         // Id детерминирован от ника: даже /ban по нику тегирует запись, чтобы /unbanid
         // потом нашёл её без отдельной истории.
+        // Id сервера в банлист не попадает: иначе /unbanid по нему стал бы невозможен,
+        // а сам id — ключом бана. Игрок с таким же id банится по своему нику/IP.
         var idForRecord = matchId is { } requested && requested != 0
             ? requested
             : MatchPublicId.ForNick(nick);
+        if (ServerIdentity.IsServerUid(idForRecord))
+            idForRecord = 0;
 
         var record = _bans.Add(
             new BanProbe(nick, ip?.ToString()),
@@ -453,6 +472,12 @@ public sealed partial class GameNetHost
         if (!int.TryParse((args ?? string.Empty).Trim(), out var id))
         {
             reply("формат: /unbanid <id> — список id: /ids и в /bans");
+            return;
+        }
+
+        if (ServerIdentity.IsServerUid(id))
+        {
+            reply($"id {id} — сервер; записей с ним не бывает");
             return;
         }
 

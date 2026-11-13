@@ -123,6 +123,18 @@ public sealed partial class GameMatchHost
             $"hasCreateOptions={req.HasCreateOptions} " +
             $"(lookupKey=password; expect '{LanCreateRoomPasswordKey}')");
 
+        // Ник сервера зарезервирован: второго «Server» в катке быть не может. Отклоняем до
+        // комнаты и актора — у копии не должно быть ни номера, ни слота в росписи.
+        if (ServerIdentity.IsServerNick(req.Room))
+        {
+            Console.WriteLine(
+                $"[match-host] JoinRoom отклонён: ник '{req.Room}' зарезервирован за сервером " +
+                $"({peer.Address})");
+            try { peer.Disconnect(); }
+            catch { /* уже мёртв */ }
+            return;
+        }
+
         // Гейт входа и реконнекта — до EnsureRoom и до TryFindRejoinActor: иначе
         // забаненный «усыновлял» старый актор и возвращался в катку после смены сети.
         var banDecision = InspectBanJoin(req.Room, peer.Address);
@@ -136,7 +148,7 @@ public sealed partial class GameMatchHost
             return;
         }
         if (banDecision.AdminExempt)
-            Console.WriteLine($"[ban] JoinRoom '{req.Room}' — админ, бан не применяется");
+            Console.WriteLine($"[ban] JoinRoom '{req.Room}' — админ или сервер, бан не применяется");
 
         // CreateOnly / JoinOrCreate may register under the password they send.
         // JoinOnly: ensure Dedik LAN room (Play may race slightly before EnsureLanRoom).

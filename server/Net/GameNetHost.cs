@@ -450,7 +450,7 @@ public sealed partial class GameNetHost : IDisposable
             return;
         }
         if (banDecision.AdminExempt)
-            Console.WriteLine($"[ban] '{req.Profile.Name}' — админ, бан не применяется");
+            Console.WriteLine($"[ban] '{req.Profile.Name}' — админ или сервер, бан не применяется");
 
         var result = _session.HandleJoinRequest(
             peer,
