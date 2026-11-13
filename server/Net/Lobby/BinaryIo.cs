@@ -169,12 +169,34 @@ public sealed class LobbyWriter
 public sealed class LobbyReader
 {
     private readonly byte[] _data;
+    private readonly int _limit;
     private int _pos;
 
-    public LobbyReader(byte[] data) => _data = data;
-    public LobbyReader(ReadOnlySpan<byte> data) => _data = data.ToArray();
+    public LobbyReader(byte[] data) : this(data, 0, data.Length)
+    {
+    }
 
-    public int Remaining => _data.Length - _pos;
+    /// <summary>
+    /// Читатель поверх участка уже существующего буфера — <b>без копии</b>. Горячий
+    /// матч-путь (issue #35) получает тело пакета как срез исходного массива и раньше
+    /// копировал его на каждый пакет, включая 20 Гц потоки <c>WorldObjectState</c>.
+    /// </summary>
+    public LobbyReader(byte[] data, int offset, int count)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        if (offset < 0 || count < 0 || offset > data.Length - count)
+            throw new ArgumentOutOfRangeException(
+                nameof(offset), $"offset={offset} count={count} len={data.Length}");
+        _data = data;
+        _pos = offset;
+        _limit = offset + count;
+    }
+
+    public LobbyReader(ReadOnlySpan<byte> data) : this(data.ToArray(), 0, data.Length)
+    {
+    }
+
+    public int Remaining => _limit - _pos;
     public int Position => _pos;
 
     public byte ReadByte()

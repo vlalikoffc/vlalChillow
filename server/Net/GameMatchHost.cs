@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using LiteNetLib;
 using StandChillow.LanServer.Config;
@@ -689,14 +690,21 @@ public sealed partial class GameMatchHost : IDisposable
             "(socket drain every tick; phase/wipe/fuse checks every tick; " +
             $"WorldObjectState thin ticks every {StartupStateTick.TotalMilliseconds:0}ms)");
 
+        // Issue #35: a tick longer than two budgets is already user-visible lag.
+        MatchPerf.SlowTickMs = Math.Max(10, (int)Math.Round(HostTickPeriod.TotalMilliseconds * 2));
+
         while (!_cts.IsCancellationRequested)
         {
             var tickStart = Environment.TickCount64;
+            var tickSw = Stopwatch.GetTimestamp();
+            var pollMs = 0.0;
+            var flowMs = 0.0;
             try
             {
                 // Drain the socket. This is the only thing that must never be delayed:
                 // every millisecond spent here before PollEvents is receive-buffer risk.
                 _manager.PollEvents();
+                pollMs = Stopwatch.GetElapsedTime(tickSw).TotalMilliseconds;
 
                 var now = Environment.TickCount64;
                 // Issue #24: host no longer authors synthetic WorldObjectState (that zeroed
@@ -709,7 +717,9 @@ public sealed partial class GameMatchHost : IDisposable
                 }
 
                 // Match flow each tick: wipe / fuse expiry / phase deadlines.
+                var flowSw = Stopwatch.GetTimestamp();
                 TickMatchFlow();
+                flowMs = Stopwatch.GetElapsedTime(flowSw).TotalMilliseconds;
 
                 if (Diag.StatsEnabled
                     && now - _lastStatsTickUtc >= Diag.HealthIntervalSec * 1000L)
@@ -721,6 +731,16 @@ public sealed partial class GameMatchHost : IDisposable
             catch (Exception ex)
             {
                 Console.WriteLine($"[match-host] poll tick failed: {FormatException(ex)}");
+            }
+
+            var totalMs = Stopwatch.GetElapsedTime(tickSw).TotalMilliseconds;
+            MatchPerf.RecordTick(totalMs, pollMs, flowMs);
+            if (MatchPerf.IsSlowTick(totalMs) && MatchPerf.ShouldLogSlowTick())
+            {
+                Console.WriteLine(
+                    $"[perf] slow tick {totalMs:0.0}ms (poll={pollMs:0.0} flow={flowMs:0.0} " +
+                    $"budget={HostTickPeriod.TotalMilliseconds:0}ms peers={_peers.Count}) — " +
+                    "see [health] for the 10s window; if this is frequent, the host is the bottleneck");
             }
 
             var elapsed = Environment.TickCount64 - tickStart;
@@ -764,6 +784,7 @@ public sealed partial class GameMatchHost : IDisposable
             $"reliableQueue={totalQueue} worstPeer={worst} slowPeers={backlogged} " +
             $"droppedSends={dropped} rttMax={rttMax}ms " +
             $"stateRx={Volatile.Read(ref _stateRxSeen)} rpcRx={Volatile.Read(ref _dropRpcRxSeen)} " +
+            $"{MatchPerf.DescribeWindow(op => MatchCodec.OpcodeName((MatchOpcode)op))} " +
             $"{CaptureSink.Describe()} {RunLog.DescribeStats()}");
     }
 
@@ -800,7 +821,13 @@ public sealed partial class GameMatchHost : IDisposable
             return;
         }
 
-        var body = new LobbyReader(payload.AsSpan(bodyOffset));
+        MatchPerf.RecordRx((byte)opcode, payload.Length);
+
+        // Hot path (#35): WorldObjectState floods ~20 Hz/peer and never needs the body —
+        // build a body reader only for the three opcodes that actually parse one. The old
+        // eager `new LobbyReader(payload.AsSpan(bodyOffset))` copied the whole body on every
+        // relayed pose packet. `payload` is already a fresh array from LiteNetLib, so the
+        // offset constructor reads it in place (no copy, no extra allocation).
         // WorldObjectState floods at ~20Hz/peer — rate-limit RX lines (keep CWO/team/Rpc loud).
         // WeaponDropManager Rpc (id=4) is similarly chatty mid-match.
         var dropRpcNoise = opcode == MatchOpcode.WorldObjectRpc
@@ -827,10 +854,10 @@ public sealed partial class GameMatchHost : IDisposable
         switch (opcode)
         {
             case MatchOpcode.HandshakeRequest:
-                HandleHandshake(peer, body, payload);
+                HandleHandshake(peer, Body(payload, bodyOffset), payload);
                 break;
             case MatchOpcode.JoinRoomRequest:
-                HandleJoinRoom(peer, body, payload);
+                HandleJoinRoom(peer, Body(payload, bodyOffset), payload);
                 break;
             case MatchOpcode.SetProperty:
                 HandleSetProperty(peer, flags, payload);
@@ -853,10 +880,11 @@ public sealed partial class GameMatchHost : IDisposable
                 HandleWorldObjectStateRelay(peer, payload);
                 break;
             case MatchOpcode.FetchServerTimeRequest:
-                if (body.Remaining == 0)
+                // Empty body = 2.07 FetchServerTime; anything else = 2.07 handshake.
+                if (payload.Length <= bodyOffset)
                     HandleFetchServerTime(peer, payload);
                 else
-                    HandleHandshake207(peer, body, payload);
+                    HandleHandshake207(peer, Body(payload, bodyOffset), payload);
                 break;
             case MatchOpcode.RoomInitReady:
                 // Clients may echo the same empty 00 0F nudge back at INIT. Nothing to relay
@@ -898,6 +926,13 @@ public sealed partial class GameMatchHost : IDisposable
                 break;
         }
     }
+
+    /// <summary>
+    /// Zero-copy body view over the packet array. Only for opcodes that parse a body;
+    /// State/Rpc floods must not pay for a copy they never read (issue #35).
+    /// </summary>
+    private static LobbyReader Body(byte[] payload, int offset) =>
+        new(payload, offset, payload.Length - offset);
 
     /// <summary>
     /// Client <c>fuo=2</c> empty body (<c>00 02</c>). Host replies <c>fyf.bodw</c>:

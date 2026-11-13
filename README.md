@@ -58,7 +58,7 @@ Other changes that matter under load:
 | Tick loop | 128 Hz busy-poll → 33 ms loop, socket drained first; phase/wipe/fuse checks stay per-tick, `WorldObjectState` ticks every 50 ms |
 | Reliable queue | `PacketPoolSize` 1000 → 4096, disconnect timeout 5 s → 10 s (a hiccup no longer kills the session) |
 | Logging | `Console.WriteLine` in hot paths is gated behind `--verbose`; silent by default |
-| Health line | `[health] peers=… reliableQueue=… worstPeer=… slowPeers=… droppedSends=… rttMax=… captures=…` every 10 s |
+| Health line | `[health] peers=… reliableQueue=… slowPeers=… tick avg/max… rx=… op=… gc0=…` every 10 s — see below |
 
 **The wire is unchanged.** No packet format, opcode, field or client-facing timing was
 touched — only when/how the host logs and how it schedules its own work. Anything the clients
@@ -73,6 +73,36 @@ dotnet run -c Release -- --verbose          # or VLAL_VERBOSE=1
 `--verbose` restores the old behaviour: per-packet RX/TX lines and capture `.bin` files under
 `captures/` (written asynchronously, capped at 4000 files / 64 MB per run). Expect heavy disk
 I/O and worse performance — use it only when capturing evidence.
+
+### «Сервер тормозит» — сначала цифры, потом догадки
+
+Every 10 s the match host prints one `[health]` line. The window part answers whether the host
+itself is the bottleneck:
+
+```text
+[health] peers=6 reliableQueue=0 worstPeer=0 slowPeers=0 droppedSends=0 rttMax=41ms
+         stateRx=18342 rpcRx=912
+         tick avg=1.2ms max=7.4ms slow=0/300 poll=0.6ms flow=0.3ms
+         rx=1837 (94.2KB/s) op=WorldObjectState:1200,WorldObjectRpc:500,SetProperty:137
+         gc0=0 alloc=612.0KB/s ws=284.0MB threads=9 captures=off ...
+```
+
+| Field | What it means |
+|---|---|
+| `tick avg/max`, `slow=…` | real cost of one host tick vs `tuning.tickMs` (33 ms), and how many ticks in this window blew the 2× budget |
+| `poll=…` | time inside `LiteNetLib.PollEvents` (socket drain + sending) |
+| `flow=…` | phase/wipe/fuse machine; if this grows, a mode rule is doing too much per tick |
+| `rx=… (…KB/s) op=…` | ingress rate and the noisiest opcodes — a flood is visible even when logging is silent |
+| `gc0`, `alloc=…`, `ws=…` | GC pressure, allocation rate and working set (memory leak / capture budget) |
+| `reliableQueue`, `slowPeers`, `rttMax` | the phones' side: a growing reliable queue means a slow peer, not a slow host |
+
+A tick longer than 2 × budget also prints a rate-limited `[perf] slow tick …ms (poll=… flow=…)`
+line with the same breakdown. If ticks are within budget while `slowPeers`/`reliableQueue`/`rtt`
+grow, the host is fine and the problem is the network/phone; if `tick avg` sits near the budget
+or `slow` keeps rising, the host machine or a hot path is the bottleneck.
+
+For a report, attach the run's `latest.log` (the `[health]` lines are enough — no need for
+`--verbose`, and never commit captures/logs).
 
 ## Screenshots
 

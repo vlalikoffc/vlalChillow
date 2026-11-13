@@ -51,6 +51,7 @@ if (args.Contains("--dashboard-dump", StringComparer.Ordinal))
 if (IsClientMode(args, out var clientArgs))
 {
     var clientLog = RunLog.Start(dashboardMode: false);
+    InstallCrashLogging();
     Console.WriteLine($"[log] writing to {clientLog}");
     Console.WriteLine($"[log] read from start: less '{clientLog}'   or   tail -n 200 '{clientLog}'");
     Console.WriteLine();
@@ -76,6 +77,7 @@ if (IsClientMode(args, out clientArgs))
 var dashboardOverride = ConsumeDashboardFlag(ref args) ?? serverConfig.Launch.Dashboard;
 var useDashboard = dashboardOverride ?? TerminalCapabilities.CanUseDashboard();
 var logPath = RunLog.Start(dashboardMode: useDashboard);
+InstallCrashLogging();
 if (!useDashboard)
 {
     Console.WriteLine($"[log] writing to {logPath}");
@@ -93,6 +95,35 @@ finally
 {
     // Drain queued log lines before the process exits (writer is a background thread).
     RunLog.Shutdown();
+}
+
+/// <summary>
+/// Падение процесса должно остаться в логе, а не только мигнуть в stderr, который в
+/// dashboard-режиме перекрыт панелью. Issue #35: «сервер просто взял и упал» без следа
+/// в <c>latest.log</c> невозможно разобрать. Обработчики ничего не меняют в работе —
+/// они только пишут стек и дописывают очередь логов перед смертью процесса.
+/// </summary>
+static void InstallCrashLogging()
+{
+    AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+    {
+        try
+        {
+            Console.WriteLine($"[fatal] unhandled exception: {e.ExceptionObject}");
+            RunLog.Shutdown(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Сам обработчик не имеет права упасть: иначе стек потеряется.
+        }
+    };
+
+    TaskScheduler.UnobservedTaskException += (_, e) =>
+    {
+        try { Console.WriteLine($"[fatal] unobserved task exception: {e.Exception}"); }
+        catch { /* ignore */ }
+        e.SetObserved();
+    };
 }
 
 /// <summary>
