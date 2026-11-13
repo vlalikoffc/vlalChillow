@@ -139,6 +139,10 @@ public sealed partial class GameMatchHost
         {
             if (st.Room != room || !st.BootstrapSent)
                 continue;
+            // Just bootstrapped: its scene does not exist yet, a relayed Rpc/State throws inside
+            // the client's own managers. Held until it proves the world is up (MatchWorldGate).
+            if (MatchWorldGate.HoldsTraffic(st.BootstrapSent, st.WorldReady))
+                continue;
             if (except is not null && ReferenceEquals(p, except))
                 continue;
             if (Send(p, payload))
@@ -242,6 +246,8 @@ public sealed partial class GameMatchHost
         foreach (var (p, st) in _peers)
         {
             if (st.Room != room || !st.BootstrapSent)
+                continue;
+            if (MatchWorldGate.HoldsTraffic(st.BootstrapSent, st.WorldReady))
                 continue;
             if (except is not null && ReferenceEquals(p, except))
                 continue;

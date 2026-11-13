@@ -437,7 +437,8 @@ public sealed partial class GameMatchHost
         double plantTimeValue = 0,
         byte rpcId = 2,
         byte gaaTarget = 2,
-        byte planterActorNr = 0)
+        byte planterActorNr = 0,
+        NetPeer? planterPeer = null)
     {
         var alliesFamily = IsAlliesRoom(room);
         var tag = alliesFamily ? AlliesFamilyLogTag(room) : "match-flow";
@@ -525,7 +526,7 @@ public sealed partial class GameMatchHost
         if (alliesFamily && plantPayload is { Length: > 0 })
         {
             fanOutPeers = FanOutAlliesBombPlantRpc(
-                room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget);
+                room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget, planterPeer);
         }
         else if (alliesFamily)
         {
@@ -552,17 +553,23 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Host-authoritative BombManager plant Rpc to every INIT-ready peer — planter's
-    /// rpc/gaa/field/payload (do not hardcode); gold RX len41 near C2=40.
-    /// Returns INIT-ready peer count that received the packet.
+    /// Host-authoritative BombManager plant Rpc to every INIT-ready peer <b>except the planter</b>
+    /// — planter's rpc/gaa/field/payload (do not hardcode); gold RX len41 near C2=40.
+    /// Returns the number of peers that received the packet.
     /// </summary>
+    /// <remarks>
+    /// The planter already applied the plant locally (<c>gaa=AllCached</c> means «do not wait for
+    /// the host»); sending it a rebuilt copy made the phone apply the same plant twice and throw
+    /// «Invalid bomber» (2026-11-13 stack, see <see cref="MatchBombRpcDelivery"/>).
+    /// </remarks>
     private int FanOutAlliesBombPlantRpc(
         MatchRoom room,
         byte sourceField,
         byte[] plantPayload,
         double plantTimeValue,
         byte rpcId,
-        byte gaaTarget)
+        byte gaaTarget,
+        NetPeer? planterPeer = null)
     {
         var stime = NextServerTime();
         var timeVal = plantTimeValue > 0 ? plantTimeValue : stime / 1000.0;
@@ -577,15 +584,35 @@ public sealed partial class GameMatchHost
             timeValue: timeVal,
             payload: plantPayload);
         // Plant Rpc is decisive: C2=40 is already out, so a dropped Rpc leaves that peer with a
-        // planted bomb state but no bomb mesh (#33). Never droppable.
-        var n = BroadcastInitReadyCritical(room, pkt, tag: "match_tx_BombManager_alliesPlant");
-        var nReady = CountInitReadyPeers(room);
+        // planted bomb state but no bomb mesh (#33). Never droppable — and never doubled.
+        var n = 0;
+        var nReady = 0;
+        var heldBack = 0;
+        var gated = 0;
+        foreach (var (p, st) in _peers)
+        {
+            if (st.Room != room || !st.BootstrapSent)
+                continue;
+            nReady++;
+            if (MatchWorldGate.HoldsTraffic(st.BootstrapSent, st.WorldReady))
+            {
+                // No scene yet: the plant is handed over when its gate opens (SyncBombPlantStateToPeer).
+                gated++;
+                continue;
+            }
+            if (!MatchBombRpcDelivery.ShouldSendPlantRpc(st.BootstrapSent, ReferenceEquals(p, planterPeer)))
+            {
+                heldBack++;
+                continue;
+            }
+            if (SendCritical(p, pkt))
+                n++;
+        }
         Console.WriteLine(
             $"[match-host] allies: BombManager plant fan-out field={sourceField} " +
             $"rpc={rpcId} gaaIn={gaaTarget} payloadLen={plantPayload.Length} " +
-            $"→ peers={n} initReady={nReady}" +
-            (nReady >= 2 && n < nReady ? " WARN incomplete fan-out" : "") +
-            (nReady >= 2 && n < 2 ? " WARN peers<2" : ""));
+            $"→ peers={n} initReady={nReady} planterExcluded={heldBack} gated={gated}" +
+            (nReady >= 2 && n < nReady - heldBack ? " WARN incomplete fan-out" : ""));
         return n;
     }
 

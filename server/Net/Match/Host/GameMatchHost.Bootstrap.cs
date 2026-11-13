@@ -150,6 +150,9 @@ public sealed partial class GameMatchHost
                 return;
             st.BootstrapSent = true;
             st.BootstrapPending = false;
+            // Issue #39: bootstrap only unlocks INIT — the scene is still being built, so world
+            // relays to this peer wait until it proves the scene is up (MatchWorldGate).
+            HoldWorldTrafficForNewScene(st);
             // Issue #28: identity props above are one-shot; latch them so a same-peer rejoin is
             // not stuck behind the INIT gate waiting for a batch the client will never resend.
             st.IdentityAlreadyBootstrapped = true;

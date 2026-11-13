@@ -302,7 +302,8 @@ public sealed partial class GameMatchHost
                     plantTimeValue: parsed.TimeValue,
                     rpcId: parsed.RpcId,
                     gaaTarget: parsed.GaaTarget,
-                    planterActorNr: st.ActorNr);
+                    planterActorNr: st.ActorNr,
+                    planterPeer: peer);
                 if (!decision.Accepted)
                 {
                     dropRelay = !decision.RelayPoseOnly;
@@ -312,13 +313,17 @@ public sealed partial class GameMatchHost
                 }
                 else if (alliesRoom)
                 {
-                    // Always exceptSender-relay in addition to fan-out — peers often miss the
-                    // host-rebuilt Rpc; the planter already applied it locally.
+                    // The fan-out above is the whole delivery: the planter applied the plant
+                    // locally and every other INIT-ready peer got the rebuilt Rpc exactly once.
+                    // Relaying the planter's original packet on top of that is a second plant on
+                    // the wire — the phone answers «Invalid bomber» (latest-2.log, round 2).
                     var nReady = CountInitReadyPeers(st.Room);
                     Console.WriteLine(
                         $"[observe] {AlliesFamilyLogTag(st.Room)} plant fan-out peers={decision.FanOutPeers} " +
-                        $"initReady={nReady} plantUtc={st.Room.Flow.BombPlantedUtc:O} — keep exceptSender relay");
-                    dropRelay = false;
+                        $"initReady={nReady} plantUtc={st.Room.Flow.BombPlantedUtc:O} — original Rpc not " +
+                        "relayed (fan-out is the single delivery)");
+                    dropRelay = MatchBombRpcDelivery.SuppressOriginalRelay(
+                        alliesFamily: true, plantAccepted: true);
                 }
             }
             else if (alliesRoom

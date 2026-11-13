@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using LiteNetLib;
 using StandChillow.LanServer.Net.Match;
@@ -64,6 +65,22 @@ internal sealed class MatchPeerState
     /// team must not overwrite that fresh choice.
     /// </summary>
     public bool TeamAuthoredThisSession { get; set; }
+
+    /// <summary>
+    /// The peer's scene is up: it has sent at least one world-level packet since its bootstrap,
+    /// or the hold window expired. See <see cref="MatchWorldGate"/>.
+    /// </summary>
+    public bool WorldReady { get; set; } = true;
+
+    /// <summary>When <see cref="WorldReady"/> flips on even without proof (Environment.TickCount64).</summary>
+    public long WorldGateUntilTick { get; set; }
+
+    /// <summary>Close the gate for a joining peer: its world does not exist yet.</summary>
+    public void HoldWorldTraffic(int holdMs)
+    {
+        WorldReady = false;
+        WorldGateUntilTick = Environment.TickCount64 + holdMs;
+    }
 
     /// <summary>
     /// Ready for host bootstrap: this join's own <c>uid</c> is known, and the rest of the identity

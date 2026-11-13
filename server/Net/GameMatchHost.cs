@@ -733,6 +733,8 @@ public sealed partial class GameMatchHost : IDisposable
                 // Match flow each tick: wipe / fuse expiry / phase deadlines.
                 var flowSw = Stopwatch.GetTimestamp();
                 TickMatchFlow();
+                // Issue #39: peers whose world gate never got a proof packet must not starve.
+                TickWorldReadyGates();
                 flowMs = Stopwatch.GetElapsedTime(flowSw).TotalMilliseconds;
 
                 if (Diag.StatsEnabled
@@ -836,6 +838,10 @@ public sealed partial class GameMatchHost : IDisposable
         }
 
         MatchPerf.RecordRx((byte)opcode, payload.Length);
+
+        // Issue #39: the first world-level packet proves the client's scene is up — release the
+        // held traffic and hand it the aggregate state (MatchWorldGate).
+        NoteClientProvedWorld(peer, opcode);
 
         // Hot path (#35): WorldObjectState floods ~20 Hz/peer and never needs the body —
         // build a body reader only for the three opcodes that actually parse one. The old
@@ -1132,6 +1138,9 @@ public sealed partial class GameMatchHost : IDisposable
         st.PendingReconnectTeam = null;
         st.ReconnectIdentityTrusted = false;
         st.TeamAuthoredThisSession = false;
+        // Fresh session: the next bootstrap closes the world gate again.
+        st.WorldReady = true;
+        st.WorldGateUntilTick = 0;
     }
 
     public void Dispose()
