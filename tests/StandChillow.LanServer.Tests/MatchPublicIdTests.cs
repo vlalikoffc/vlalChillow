@@ -69,6 +69,56 @@ public sealed class MatchPublicIdTests
     }
 
     [Fact]
+    public void FiveIndependentServersGiveTheSameIdForVlal()
+    {
+        // Пять «серверов»: у каждого свой справочник, свой реестр и свой мусор —
+        // разные игроки, разные баны, разный порядок входов. Общего состояния нет,
+        // поэтому «влал» обязан получить один и тот же id на всех пяти.
+        var ids = new List<int>();
+        var now = new DateTime(2026, 11, 13, 12, 0, 0, DateTimeKind.Utc);
+
+        for (var server = 0; server < 5; server++)
+        {
+            var directory = new PlayerDirectory();
+            var registry = new BanRegistry { LearnAliases = true };
+
+            for (var i = 0; i < server * 40; i++)
+                directory.Remember($"server{server}-player{i}", $"10.0.{server}.{i}", now);
+
+            for (var b = 0; b < server; b++)
+            {
+                registry.Add(
+                    new BanProbe($"server{server}-banned{b}", $"10.9.{server}.{b}"),
+                    TimeSpan.FromMinutes(30), "шум", "влал", now);
+            }
+
+            directory.Remember("влал", $"192.168.1.{server}", now);
+            ids.Add(MatchPublicId.ForNick("влал"));
+        }
+
+        Assert.All(ids, id => Assert.Equal(25354325, id));
+        Assert.Single(ids.Distinct());
+    }
+
+    [Fact]
+    public void IdSurvivesServerReinstall()
+    {
+        var now = new DateTime(2026, 11, 13, 12, 0, 0, DateTimeKind.Utc);
+        var directory = new PlayerDirectory();
+        directory.Remember("влал", "192.168.1.5", now);
+        var before = directory.Resolve(MatchPublicId.ForNick("влал"))!.Id;
+
+        // «Переустановка»: новый справочник, данные только из файла (а файла нет —
+        // пустой список). Id всё равно тот же: он не хранится, а считается из ника.
+        var reinstalled = new PlayerDirectory();
+        reinstalled.Load(Array.Empty<SeenPlayer>());
+
+        Assert.Equal(before, MatchPublicId.ForNick("влал"));
+        Assert.Equal(before, reinstalled.Remember("влал", "10.8.0.2", now)!.Id);
+        Assert.Equal(25354325, before);
+    }
+
+    [Fact]
     public void SameNickAlwaysGivesSameId()
     {
         var first = MatchPublicId.ForNick("Ktulxy");
