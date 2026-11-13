@@ -131,6 +131,9 @@ public sealed partial class GameNetHost
                 return false;
         }
 
+        // Код можно прислать и как «/auth <код>» — так рука сама тянется после /help.
+        message = StripAuthPrefix(message);
+
         if (_adminAuth.Matches(message))
         {
             _adminAuth.Authorize(peer.Address);
@@ -176,6 +179,28 @@ public sealed partial class GameNetHost
         SendServerChatTo(peer, $"неверный код (попытка {pending.Attempts} из " +
                                $"{AdminAuthMaxAttempts}), попробуй ещё");
         return true;
+    }
+
+    /// <summary>
+    /// «/auth код» и «код» — одно и то же: снимаем слэш и слово-префикс, чтобы игрок не
+    /// тратил попытки на оформление.
+    /// </summary>
+    private static string StripAuthPrefix(string message)
+    {
+        var text = message.Trim();
+        if (!text.StartsWith('/'))
+            return text;
+
+        text = text[1..].TrimStart();
+        var space = text.IndexOf(' ');
+        if (space <= 0)
+            return text;
+
+        var head = text[..space];
+        return head.Equals("auth", StringComparison.OrdinalIgnoreCase)
+               || head.Equals("код", StringComparison.OrdinalIgnoreCase)
+            ? text[(space + 1)..].Trim()
+            : text;
     }
 
     private void ForgetPendingAdmin(NetPeer peer)
