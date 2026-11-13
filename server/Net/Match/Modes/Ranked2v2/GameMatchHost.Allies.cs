@@ -334,12 +334,14 @@ public sealed partial class GameMatchHost
         int ctCount;
         int trCount;
         int bomberId;
+        var bomberIdBefore = 0;
         var roundDur = AlliesFlowParams.RoundDuration;
         var ends = DefuseTimer.ArmDeadline(roundDur);
         lock (_roomGate)
         {
             round = room.Flow.RoundIndex;
             if (round < 1) round = 1;
+            bomberIdBefore = room.Flow.BomberActorNr;
             if (room.Flow.BomberActorNr <= 0)
             {
                 var pick = PickBomberActorNr(room);
@@ -375,6 +377,21 @@ public sealed partial class GameMatchHost
             (MatchRoomPropKeys.TrRoundStartPlayersCount, LobbyVariant.FromInt(trCount)),
             (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.PurchasePhase)),
         ], reason: $"Allies combat C2=31 round={round}");
+        // Issue #39: when the buy bag went out with bomberId=0 (no living Tr could be picked at
+        // C2=22 — latest-2.log rounds 8 and 12), the pick made here never reached the clients:
+        // they played the whole buy without a bomber and the plant was refused. A single-key room
+        // prop update keeps the gold C2=31 bag byte-shape intact.
+        if (bomberId > 0 && bomberId != bomberIdBefore)
+        {
+            BroadcastRoomProps(room,
+            [
+                (MatchRoomPropKeys.BomberId, LobbyVariant.FromInt(bomberId)),
+            ], reason: $"Allies combat C2=31 bomberId {bomberIdBefore}→{bomberId} (late pick)");
+            Console.WriteLine(
+                $"[match-host] allies: bomberId late pick {bomberIdBefore}→{bomberId} — " +
+                "single-key room prop re-sent (buy bag carried no bomber)");
+        }
+
         Console.WriteLine(
             $"[match-host] allies: combat C2={MatchC2States.PurchasePhase} " +
             $"round={round} TrCount={trCount} CtCount={ctCount} bomberId={bomberId} " +
