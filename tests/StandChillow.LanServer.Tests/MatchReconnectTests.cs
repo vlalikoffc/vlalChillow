@@ -234,7 +234,7 @@ public sealed class MatchReconnectTests
         Assert.Equal(MatchTeam.Tr, adoption.RememberedTeam);
         Assert.Equal<IEnumerable<short>>(new short[] { 777 }, adoption.RemovedPawnIds);
         Assert.Empty(room.LivingPawns);
-        Assert.Single(room.Actors.Where(a => a.Nr == 2));
+        Assert.Single(room.Actors, a => a.Nr == 2);
         Assert.Equal("LBHASH", room.ActorIdentities[2]);
         Assert.DoesNotContain((byte)2, room.OwnerlessSinceTick.Keys);
         // Frozen roster: ghost adoption still leaves the running round; old death is preserved.
