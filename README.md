@@ -292,7 +292,7 @@ debug), `config reload` re-reads the file and applies it without a restart.
 
   ```text
   Server: ник 'влал' админский — нужна авторизация
-  Server: код на этот запуск: 24 символов, он напечатан в консоли сервера
+  Server: код на этот запуск: 24 символов — он в консоли сервера и в auth.txt рядом с config.json
   Server: напиши код сюда, в чат (регистр не важен)
   ```
 

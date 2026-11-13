@@ -130,8 +130,10 @@ public sealed partial class GameNetHost
             fromServer: true);
 
         SendServerChatTo(peer, $"ник '{nick}' админский — нужна авторизация");
-        SendServerChatTo(peer, $"код на этот запуск: {_adminAuth.Code.Length} символов, " +
-                               "он напечатан в консоли сервера");
+        SendServerChatTo(
+            peer,
+            $"код на этот запуск: {_adminAuth.Code.Length} символов — он в консоли сервера " +
+            "и в файле auth.txt рядом с config.json");
         SendServerChatTo(peer, "напиши код сюда, в чат (регистр не важен)");
     }
 
