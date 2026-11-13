@@ -258,9 +258,17 @@ public sealed partial class GameNetHost
         var peers = _match.SendServerChat(
             text, nick: player.Name, alsoLastChanceIp: player.Peer.Address);
         if (peers > 0)
+        {
             Console.WriteLine($"[chat] Server → {player.Name} (match, peers={peers}): {text}");
-        else
-            Console.WriteLine($"[chat] Server → {player.Name}: ответ только в лобби (в катке не найден)");
+            return;
+        }
+
+        Console.WriteLine($"[chat] Server → {player.Name}: ответ только в лобби (в катке не найден)");
+
+        // Катка ещё не приняла ни одного пира (типичный /start из лобби): ответ в лобби-сокет
+        // клиент уже не покажет, поэтому придержим его и дошлём, когда игрок подключится.
+        if (_match.IsListening)
+            RememberMatchReply(player.Name, text, player.Peer.Address);
     }
 
     private void NotifyMatchPlayerJoined(string name)
@@ -271,6 +279,9 @@ public sealed partial class GameNetHost
             _session.TrySetPlayerStatus(player, PlayerLobbyStatus.InMatch);
         BroadcastServerChat($"{name} Подключился!");
         BroadcastServerChat(_session.BuildPlayerListMessage());
+
+        // Команда, набранная до подключения к катке, ждала именно этого момента.
+        FlushMatchReplies(name);
         try { _onRosterChanged?.Invoke(); } catch { /* ignore */ }
     }
 

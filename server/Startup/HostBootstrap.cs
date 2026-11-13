@@ -186,7 +186,8 @@ public static class HostBootstrap
                 ? $"Captures: {(string.IsNullOrWhiteSpace(serverConfig.Debug.CapturesDir) ? "captures/" : serverConfig.Debug.CapturesDir)}"
                 : "Captures: off (debug.captures)");
         Console.WriteLine($"Config: {ServerConfig.LastLoadedPath}");
-        Console.WriteLine("Commands: play|start|end|mode|map|set|help|status|binds|roster|plugins|quit");
+        Console.WriteLine(
+            "Commands: play|start|end|mode|map|set|help|status|binds|roster|plugins|auth|whoami|quit");
         Console.WriteLine($"  defaults: {MatchHostSettings.FormatStatusLine()}");
         if (MatchHostSettings.DebugMatchChat)
             Console.WriteLine("  debug-chat: ON — Server posts plant/kill/round-end into lobby chat");
