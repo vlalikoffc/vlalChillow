@@ -24,6 +24,25 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
+    /// Issue #39: actor уже принадлежит другой (живой) сессии этого же игрока.
+    /// </summary>
+    /// <remarks>
+    /// Нужно на disconnect-пути: после <see cref="AdoptReconnectingActor"/> старый сокет ещё
+    /// висит до <c>DisconnectTimeout</c> и его <c>RemoteConnectionClose</c> иначе сносил actor
+    /// вернувшегося игрока (<c>DestroyWorldObject</c> + <c>ActorLeftEvent</c> + wipe-check) —
+    /// в логе: takeover актёра 3, а через миг «влал Отключился» для того же actor 3.
+    /// </remarks>
+    private bool IsActorOwnedByAnotherPeer(MatchRoom room, byte actorNr)
+    {
+        foreach (var pair in _peers)
+        {
+            if (pair.Value is { } st && st.Room == room && st.ActorNr == actorNr)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Issue #39: вернуть тому же игроку его прежний actor вместо второго.
     /// </summary>
     /// <remarks>

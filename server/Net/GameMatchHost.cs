@@ -358,8 +358,22 @@ public sealed partial class GameMatchHost : IDisposable
             try { st?.BootstrapTimeoutCts?.Cancel(); }
             catch { /* ignore */ }
             if (st is { Room: { } room, ActorNr: > 0 })
-                RemoveActorFromMatch(
-                    room, st.ActorNr, st.UserId, st.IdentityKey, reason: info.Reason.ToString());
+            {
+                // Issue #39: this socket may be the superseded one — the player already came
+                // back on a new connection and owns the same actor. Removing it here killed the
+                // live player (log: takeover actor=3 → «влал Отключился» → actor gone).
+                if (IsActorOwnedByAnotherPeer(room, st.ActorNr))
+                {
+                    Console.WriteLine(
+                        $"[match-host] disconnect actor={st.ActorNr} ({info.Reason}) — уже перешёл " +
+                        "к новой сессии, actor не снимаем");
+                }
+                else
+                {
+                    RemoveActorFromMatch(
+                        room, st.ActorNr, st.UserId, st.IdentityKey, reason: info.Reason.ToString());
+                }
+            }
             Console.WriteLine($"[match-host] peer DISCONNECTED {peer.Address}:{peer.Port}: {info.Reason}");
         };
         _listener.NetworkReceiveEvent += OnNetworkReceive;
