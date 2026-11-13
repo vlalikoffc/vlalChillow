@@ -25,6 +25,17 @@ public sealed partial class GameMatchHost
             var purchaseCombat = IsAlliesRoom(room) || IsDuelRoom(room);
             // Duel-only: C2=11 FFA Destroy is a combat death (respawn), not a phase-transition wipe.
             var duelFfa = IsDuelRoom(room) && phase == MatchFlowPhase.AlliesPreWarmup;
+            // #33: only somebody who actually entered this round can die in it. A late joiner
+            // still loading, or a leftover pawn of a player who never joined the round, used to
+            // become a "death" on the peers that saw the Destroy and not on the others.
+            if (!MatchFlowRules.IsRoundParticipant(room.Flow, owner))
+            {
+                room.Flow.PendingCombatDestroy.Remove(owner);
+                Console.WriteLine(
+                    $"[match-host] match-flow: pawn Destroy owner={owner} in {phase} — not in this " +
+                    "round's roster (late joiner / leftover pawn), no combat-death grace (#33)");
+                return;
+            }
             if (!MatchFlowRules.DestroyMayBeCombatDeath(phase, bombPlanted, purchaseCombat)
                 && !duelFfa)
             {
@@ -67,6 +78,13 @@ public sealed partial class GameMatchHost
                 return;
             }
             var now = DateTime.UtcNow;
+            // #33: drop arms for actors that are not in this round (roster is authoritative).
+            foreach (var stale in room.Flow.PendingCombatDestroy.Keys
+                         .Where(o => !MatchFlowRules.IsRoundParticipant(room.Flow, o))
+                         .ToList())
+            {
+                room.Flow.PendingCombatDestroy.Remove(stale);
+            }
             foreach (var owner in room.Flow.PendingCombatDestroy.Keys.ToList())
             {
                 var respawned = room.LivingPawns.Values.Any(p => p.OwnerActorNr == owner);
@@ -237,6 +255,65 @@ public sealed partial class GameMatchHost
 
     private static MatchTeam GetActorTeam(MatchRoom room, byte actorNr) =>
         MatchFlowRules.GetActorTeam(room.ActorProps, actorNr);
+    /// <summary>
+    /// Host-authored <c>round_kills</c>++ for the killer. The bomb family never published this
+    /// prop (only Duel does), so round-end MVP silently ranked by career <c>kills</c> — the award
+    /// went to whoever had farmed more earlier rounds instead of who decided this one.
+    /// <see cref="MatchPropAuthority.CombatOutcomeKeys"/> already lets the host actor write a
+    /// combat outcome for somebody else, so this is the same wire shape Duel uses.
+    /// </summary>
+    private void NoteBombModeRoundKill(MatchRoom room, byte killerActorNr)
+    {
+        if (killerActorNr == 0 || killerActorNr == MatchHostActor.ActorNr)
+            return;
+
+        int next;
+        lock (_roomGate)
+        {
+            var current = ReadActorIntProp(room, killerActorNr, MatchRoomPropKeys.RoundKills);
+            next = (current < 0 ? 0 : current) + 1;
+            room.ActorProps[(killerActorNr, MatchRoomPropKeys.RoundKills)] =
+                LobbyVariant.FromInt(next);
+            room.Flow.RoundKills[killerActorNr] = next;
+        }
+
+        PublishActorIntProp(room, killerActorNr, MatchRoomPropKeys.RoundKills, next);
+        Console.WriteLine(
+            $"[combat-death] round_kills actor={killerActorNr} → {next} (round MVP counter)");
+    }
+
+    /// <summary>
+    /// Zero <c>round_kills</c> for every fighter at round start. Cumulative counters here would
+    /// keep the MVP award following career totals (issue #34 is the same class of bug on stats).
+    /// </summary>
+    private void ResetBombModeRoundKills(MatchRoom room)
+    {
+        List<byte> fighters;
+        lock (_roomGate)
+        {
+            fighters = room.Actors
+                .Select(a => a.Nr)
+                .Where(nr => nr != MatchHostActor.ActorNr)
+                .Where(nr =>
+                {
+                    var t = MatchFlowRules.GetActorTeam(room.ActorProps, nr);
+                    return t is MatchTeam.Tr or MatchTeam.Ct;
+                })
+                .ToList();
+            room.Flow.RoundKills.Clear();
+            room.Flow.RoundPlanterActorNr = 0;
+            room.Flow.RoundDefuseActorNr = 0;
+            foreach (var nr in fighters)
+            {
+                room.ActorProps[(nr, MatchRoomPropKeys.RoundKills)] = LobbyVariant.FromInt(0);
+                room.Flow.RoundKills[nr] = 0;
+            }
+        }
+
+        foreach (var nr in fighters)
+            PublishActorIntProp(room, nr, MatchRoomPropKeys.RoundKills, 0);
+    }
+
 
     /// <summary>
     /// Escalation / Ranked / Allies: killer <c>kills</c>++ is a confirmed-elimination <b>input</b>
@@ -331,6 +408,9 @@ public sealed partial class GameMatchHost
 
         // Instant kill money on confirmed elimination (alive or already-dead confirm path).
         ApplyKillEconomy(room, killerActorNr, weaponId);
+
+        // Round-scoped counter for the MVP award (never career `kills`).
+        NoteBombModeRoundKill(room, killerActorNr);
 
         // death/wipe already owned this elimination — confirm killer only, no second Destroy.
         if (alreadyDead)

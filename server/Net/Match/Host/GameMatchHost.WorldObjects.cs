@@ -6,6 +6,7 @@ using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Kernel;
 
 namespace StandChillow.LanServer.Net;
 
@@ -286,81 +287,38 @@ public sealed partial class GameMatchHost
             if (parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId
                 && (isAlliesPlantField || isRankedPlantField))
             {
-                MatchFlowPhase plantPhase;
-                bool alreadyPlanted;
-                lock (_roomGate)
+                // Issue #33: no plant decision is made here. The bomb is a carried entity — the
+                // bomber can drop it, death drops it, another attacker picks it up — so the rule
+                // lives in MatchPlantPolicy and is asked exactly once, inside TryEnterBombPlanted.
+                // This block only reacts to the verdict (relay pose for a reset/equip, drop for a
+                // plant that must not reach peers, keep the exceptSender relay on accept).
+                var payloadCopy = parsed.Payload.Length > 0
+                    ? (byte[])parsed.Payload.Clone()
+                    : null;
+                var decision = TryEnterBombPlanted(
+                    st.Room,
+                    sourceField: (byte)parsed.Field,
+                    plantPayload: payloadCopy,
+                    plantTimeValue: parsed.TimeValue,
+                    rpcId: parsed.RpcId,
+                    gaaTarget: parsed.GaaTarget,
+                    planterActorNr: st.ActorNr);
+                if (!decision.Accepted)
                 {
-                    plantPhase = st.Room.Flow.Phase;
-                    alreadyPlanted = st.Room.Flow.BombPlanted
-                        || st.Room.Flow.PendingBombPlant
-                        || st.Room.Flow.Phase == MatchFlowPhase.BombPlanted
-                        || st.Room.Flow.Phase is MatchFlowPhase.RoundEndPause
-                            or MatchFlowPhase.MatchOver;
-                }
-                if (alreadyPlanted)
-                {
+                    dropRelay = !decision.RelayPoseOnly;
                     Console.WriteLine(
-                        $"[observe] BombManager plant field={parsed.Field} " +
-                        "IGNORED — already planted this round (one bomb/round; no relay)");
-                    dropRelay = true;
+                        $"[observe] BombManager plant field={parsed.Field} from actor={st.ActorNr} " +
+                        $"{(decision.RelayPoseOnly ? "not a plant (reset/equip) — pose relay only" : "dropped — no relay")}");
                 }
-                else if (!IsAlliesPlantablePhase(st.Room, plantPhase))
+                else if (alliesRoom)
                 {
-                    // Allies: PurchasePhase (C2=31) only. Ranked: RoundLive.
-                    // Early equip/reset — relay pose, do not invent C2=40.
+                    // Always exceptSender-relay in addition to fan-out — peers often miss the
+                    // host-rebuilt Rpc; the planter already applied it locally.
+                    var nReady = CountInitReadyPeers(st.Room);
                     Console.WriteLine(
-                        $"[observe] BombManager plant field={parsed.Field} " +
-                        $"from actor={st.ActorNr} not-authority phase={plantPhase} " +
-                        "(not plantable — relay only)");
+                        $"[observe] {AlliesFamilyLogTag(st.Room)} plant fan-out peers={decision.FanOutPeers} " +
+                        $"initReady={nReady} plantUtc={st.Room.Flow.BombPlantedUtc:O} — keep exceptSender relay");
                     dropRelay = false;
-                }
-                else if (!IsAuthoritativePlanter(st.Room, st.ActorNr))
-                {
-                    // Issue #25: gold plant Rpc always carries the *assigned* bomber's pawn id
-                    // (round bomberId 4 → pawn 514, 1 → 131, …). A plant from any other T would
-                    // make the client compare the payload pawn id against its own bomber and log
-                    // "Invalid bomber, expected -1, actual <pawnId>". Drop it instead of relaying.
-                    Console.WriteLine(
-                        $"[observe] BombManager plant field={parsed.Field} " +
-                        $"from actor={st.ActorNr} IGNORED — not the assigned bomber " +
-                        $"(bomberId={st.Room.Flow.BomberActorNr}); no C2=40, no relay");
-                    dropRelay = true;
-                }
-                else
-                {
-                    Console.WriteLine(
-                        $"[observe] BombManager plant field={parsed.Field} " +
-                        $"from actor={st.ActorNr} phase={plantPhase} " +
-                        "(apply fuse + host fan-out + relay)");
-                    var payloadCopy = parsed.Payload.Length > 0
-                        ? (byte[])parsed.Payload.Clone()
-                        : null;
-                    var fanOutPeers = TryEnterBombPlanted(
-                        st.Room,
-                        sourceField: (byte)parsed.Field,
-                        plantPayload: payloadCopy,
-                        plantTimeValue: parsed.TimeValue,
-                        rpcId: parsed.RpcId,
-                        gaaTarget: parsed.GaaTarget,
-                        planterActorNr: st.ActorNr);
-                    lock (_roomGate)
-                    {
-                        if (!st.Room.Flow.BombPlanted
-                            || st.Room.Flow.BombPlantedUtc == DateTime.MinValue)
-                        {
-                            dropRelay = true;
-                        }
-                        else if (alliesRoom)
-                        {
-                            // Always exceptSender-relay in addition to fan-out — peers often
-                            // miss host-rebuilt Rpc; planter already applied locally.
-                            var nReady = CountInitReadyPeers(st.Room);
-                            Console.WriteLine(
-                                $"[observe] Allies plant fan-out peers={fanOutPeers} " +
-                                $"initReady={nReady} — keep exceptSender relay");
-                            dropRelay = false;
-                        }
-                    }
                 }
             }
             else if (alliesRoom
@@ -447,8 +405,16 @@ public sealed partial class GameMatchHost
             NetPeer? exceptSender = WorldObjectRpcRelayPolicy.ExcludesSender(parsed.GaaTarget)
                 ? peer
                 : null;
-            var n = BroadcastInitReadyExcept(
-                st.Room, exceptSender, echo, tag: "match_tx_WorldObjectRpc", capture: logRpc);
+
+            // BombManager Rpc carry plant / defuse / explode. Relaying them is structural: a
+            // dropped defuse or explode Rpc leaves that peer in a live round that is already
+            // over on everyone else (#33). Everything else stays droppable cosmetic traffic.
+            var isBombManagerRpc = parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId;
+            var n = isBombManagerRpc
+                ? BroadcastInitReadyCritical(
+                    st.Room, echo, tag: "match_tx_WorldObjectRpc", except: exceptSender)
+                : BroadcastInitReadyExcept(
+                    st.Room, exceptSender, echo, tag: "match_tx_WorldObjectRpc", capture: logRpc);
             if (logRpc)
             {
                 Console.WriteLine(
@@ -600,37 +566,6 @@ public sealed partial class GameMatchHost
             Console.WriteLine(
                 $"[match-host] TX relay WorldObjectState id={objectId?.ToString() ?? "?"} " +
                 $"len={raw.Length} → peers={n}");
-        }
-    }
-
-    /// <summary>
-    /// Issue #25 — plant authority belongs to the round's assigned bomber only.
-    /// Gold 2.07 (<c>captures/captures.zip</c>, 20261112_0351…0404): every BombManager field=3
-    /// plant carries the pawn net id of the round's <c>bomberId</c> (bomber 4 → pawn 514,
-    /// 1 → 131, 4 → 516, …). Any other attacker planting makes the client compare the payload
-    /// pawn id against its own bomber and log <c>Invalid bomber, expected -1, actual &lt;id&gt;</c>.
-    /// Actor 0 (host-authored path) and Escalation auto-plant (no carrier bomber, i32(-2)) pass.
-    /// </summary>
-    private bool IsAuthoritativePlanter(MatchRoom room, byte actorNr)
-    {
-        if (actorNr == 0 || IsEscalationRoom(room))
-            return true;
-        lock (_roomGate)
-        {
-            var bomber = room.Flow.BomberActorNr;
-            if (bomber <= 0)
-            {
-                // No bomber recorded for this round (T joined after C2=22, or the pick never
-                // landed). Adopt the planter instead of refusing: refusing here would leave the
-                // round with no plantable bomb at all. The plant Rpc already carries this actor's
-                // own pawn id, so the client's bomber match holds and no second C4 is created.
-                room.Flow.BomberActorNr = actorNr;
-                Console.WriteLine(
-                    $"[observe] BombManager plant from actor={actorNr} adopted as round bomber " +
-                    "(bomberId was 0 — no C2=22 bag re-TX, #25)");
-                return true;
-            }
-            return bomber == actorNr;
         }
     }
 

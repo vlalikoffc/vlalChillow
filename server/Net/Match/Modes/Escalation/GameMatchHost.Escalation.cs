@@ -243,7 +243,8 @@ public sealed partial class GameMatchHost
 
         var stime = NextServerTime();
         var plantPkt = MatchCodec.BuildBombManagerEscalationAutoPlantRpc(stime, px, py, pz);
-        var nPlant = BroadcastInitReady(room, plantPkt, tag: "match_tx_BombManager_autoPlant");
+        // Auto-plant Rpc is as decisive as a player plant — never droppable (#33).
+        var nPlant = BroadcastInitReadyCritical(room, plantPkt, tag: "match_tx_BombManager_autoPlant");
         var nowSec = ServerTimeSeconds();
         var fuseSec = EscalationFlowParams.BombFuse.TotalSeconds;
         var deadline = DefuseTimer.FuseWireDeadlineSec(nowSec, EscalationFlowParams.BombFuse);

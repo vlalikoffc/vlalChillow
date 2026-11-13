@@ -2,6 +2,7 @@ using LiteNetLib;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Kernel;
 using StandChillow.LanServer.Net.Match.Logic.Defuse;
 
 namespace StandChillow.LanServer.Net;
@@ -14,14 +15,13 @@ public sealed partial class GameMatchHost
     private const string DefuseModeId = "Defuse";
 
     /// <summary>
-    /// Bomb-round family that shares Allies gold FSM (C2=22→31→40?→101, host 109s combat).
-    /// Ranked2v2 / Ranked2v2Alt / RankedDefuse / Defuse — Escalation &amp; TDM stay separate.
+    /// Bomb-round family that shares the Allies gold FSM (C2=22→31→40?→101, host 109s combat).
+    /// The id list lives in <see cref="MatchPlantPolicy.BombFamilyModeIds"/> — one list, so a rule
+    /// written once lands in Ranked2v2 / Ranked2v2Alt / RankedDefuse / Defuse identically.
+    /// Escalation &amp; TDM stay separate.
     /// </summary>
     private static bool IsAlliesFamilyModeId(string? modeId) =>
-        string.Equals(modeId, AlliesModeId, StringComparison.Ordinal)
-        || string.Equals(modeId, AlliesAltModeId, StringComparison.Ordinal)
-        || string.Equals(modeId, RankedDefuseModeId, StringComparison.Ordinal)
-        || string.Equals(modeId, DefuseModeId, StringComparison.Ordinal);
+        MatchPlantPolicy.IsBombFamilyMode(modeId);
 
     private bool IsAlliesRoom(MatchRoom room)
     {
@@ -47,6 +47,7 @@ public sealed partial class GameMatchHost
                 return id switch
                 {
                     AlliesAltModeId => "allies-alt",
+                    AlliesModeId => "allies",
                     RankedDefuseModeId => "ranked-defuse",
                     DefuseModeId => "defuse",
                     _ => "allies",
@@ -281,6 +282,8 @@ public sealed partial class GameMatchHost
             room.Flow.BomberActorNr = bomberId;
         }
 
+        // Round start (buy C2=22) — the MVP counter is per round, not per match.
+        ResetBombModeRoundKills(room);
         ClearBombAuthority(room, $"Allies buy C2=22 round={round} bomberId={bomberId}");
         BroadcastAlliesReCreateSceneManagers(room);
         var nowSec = ServerTimeSeconds();
@@ -353,6 +356,9 @@ public sealed partial class GameMatchHost
             room.Flow.PendingEndReason = null;
             room.Flow.DeadActors.Clear();
             room.Flow.PendingCombatDestroy.Clear();
+            // #33: the wipe must be judged against who actually entered this round —
+            // a pawn on the field is the proof of entry (see MatchFlowRules.FreezeRoundRoster).
+            MatchFlowRules.FreezeRoundRoster(room.Flow, room.ActorProps);
             (trCount, ctCount) = CountFightingTeamRoster(room);
         }
 
@@ -412,21 +418,19 @@ public sealed partial class GameMatchHost
     }
 
     /// <summary>
-    /// Allies plant only during combat C2=31 (<see cref="MatchFlowPhase.PurchasePhase"/>).
-    /// Gold plant = BombManager field=3; field=1 near 22/31 is round-start reset, not plant.
+    /// The one plant entry point for <b>every</b> bomb mode — <c>Ranked2v2</c>, <c>Ranked2v2Alt</c>,
+    /// <c>RankedDefuse</c>, <c>Defuse</c> (one bomb family) and the classic Ranked/Escalation loop.
     /// </summary>
-    private bool IsAlliesPlantablePhase(MatchRoom room, MatchFlowPhase phase)
-    {
-        if (!IsAlliesRoom(room))
-            return phase == MatchFlowPhase.RoundLive;
-
-        return phase == MatchFlowPhase.PurchasePhase;
-    }
-
-    /// <summary>
-    /// Allies plant field=3 — fan-out + C2=40 C2-only (no Time). Gold 2026-07-24.
-    /// </summary>
-    private int TryEnterAlliesBombPlanted(
+    /// <remarks>
+    /// Issue #33 — there is no «only the assigned bomber may plant» gate. The bomb is carried: the
+    /// bomber can drop it, death drops it, another attacker picks it up and plants. What decides is
+    /// <see cref="MatchPlantPolicy"/> alone (one plant/round, combat phase, attackers only), and it
+    /// is asked exactly once — here. The wire differences that are evidence, not policy (family
+    /// plants on <c>C2=31</c> with a <c>C2</c>-only <c>C2=40</c> bag and a Rpc fan-out; classic
+    /// plants on Live with a <c>Time</c>/<c>RoundStartTime</c> bag) stay, driven by
+    /// <c>alliesFamily</c> — no per-mode branch.
+    /// </remarks>
+    private MatchPlantDecision TryEnterBombPlanted(
         MatchRoom room,
         byte sourceField,
         byte[]? plantPayload = null,
@@ -435,46 +439,45 @@ public sealed partial class GameMatchHost
         byte gaaTarget = 2,
         byte planterActorNr = 0)
     {
+        var alliesFamily = IsAlliesRoom(room);
+        var tag = alliesFamily ? AlliesFamilyLogTag(room) : "match-flow";
+
         MatchFlowPhase fromPhase;
+        bool handoff;
         lock (_roomGate)
         {
             fromPhase = room.Flow.Phase;
-            if (room.Flow.BombPlanted || room.Flow.Phase == MatchFlowPhase.BombPlanted)
+            var deny = MatchPlantPolicy.Judge(
+                room.Flow,
+                alliesFamily,
+                planterActorNr,
+                MatchFlowRules.GetActorTeam(room.ActorProps, planterActorNr));
+            if (deny != MatchPlantPolicy.Deny.None)
             {
+                var relay = MatchPlantPolicy.RelayPoseOnly(deny);
                 Console.WriteLine(
-                    $"[match-host] allies: BombManager plant field={sourceField} IGNORED — already planted");
-                return -1;
+                    $"[match-host] {tag}: BombManager plant field={sourceField} " +
+                    $"from actor={planterActorNr} REFUSED — {MatchPlantPolicy.Describe(deny)} " +
+                    $"(phase={fromPhase}; relay={(relay ? "pose only" : "no")}; no C2=40)");
+                return MatchPlantDecision.Refused(deny, fromPhase);
             }
-            if (room.Flow.PendingEndReason is not null)
-            {
-                Console.WriteLine(
-                    $"[match-host] allies: BombManager plant field={sourceField} " +
-                    $"IGNORED — pendingEnd={room.Flow.PendingEndReason}");
-                return -1;
-            }
-            if (!IsAlliesPlantablePhase(room, fromPhase))
-            {
-                Console.WriteLine(
-                    $"[match-host] allies: BombManager plant field={sourceField} " +
-                    $"IGNORED — phase={fromPhase} (combat C2=31 only)");
-                return -1;
-            }
-            // Issue #25: gold plant Rpc always carries the assigned bomber's pawn id.
-            if (!IsAuthoritativePlanter(room, planterActorNr))
-            {
-                Console.WriteLine(
-                    $"[match-host] allies: BombManager plant field={sourceField} " +
-                    $"IGNORED — actor={planterActorNr} is not the assigned bomber " +
-                    $"(bomberId={room.Flow.BomberActorNr}); no C2=40");
-                return -1;
-            }
+
+            // Handoff, not an identity check: a teammate who picked the dropped bomb up (or the
+            // one it dropped onto) is a legal planter. Logged so a capture shows the truth.
+            handoff = MatchPlantPolicy.IsHandoff(room.Flow, planterActorNr);
 
             var plantUtc = DateTime.UtcNow;
             room.Flow.PendingBombPlant = false;
             room.Flow.BombPlanted = true;
             room.Flow.BombPlantedUtc = plantUtc;
+            // The MVP must credit whoever actually planted (the bomb is carried and can be
+            // handed off) — BomberActorNr is only the round's assigned bomber.
+            room.Flow.RoundPlanterActorNr = planterActorNr;
             room.Flow.Phase = MatchFlowPhase.BombPlanted;
-            room.Flow.PhaseEndsUtc = DefuseTimer.FuseEndsUtc(plantUtc, AlliesFlowParams.BombFuse);
+            // Evidence, not policy: the family fuse constant differs from the classic one
+            // (AlliesFlowParams / DefuseFlowParams vs MatchFlowTestParams), so pick by family.
+            room.Flow.PhaseEndsUtc = DefuseTimer.FuseEndsUtc(
+                plantUtc, alliesFamily ? AlliesFlowParams.BombFuse : MatchFlowTestParams.BombFuse);
             // Keep planter Rpc for late-join / reconnect peers (C2=40 alone is not enough).
             if (plantPayload is { Length: > 0 })
             {
@@ -495,32 +498,57 @@ public sealed partial class GameMatchHost
         DateTime plantedAt;
         lock (_roomGate)
             plantedAt = room.Flow.BombPlantedUtc;
-        BroadcastRoomProps(room,
-        [
-            (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),
-        ], reason: $"Allies BombPlanted field={sourceField} C2=40 fromPhase={fromPhase}");
+
+        // Family gold C2=40 carries C2 only; the classic loop also re-anchors Time/RoundStartTime.
+        // Both bags are captured wire shapes — the split is evidence, not policy.
+        if (alliesFamily)
+        {
+            BroadcastRoomProps(room,
+            [
+                (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),
+            ], reason: $"{tag} BombPlanted field={sourceField} C2=40 fromPhase={fromPhase}");
+        }
+        else
+        {
+            var nowSec = ServerTimeSeconds();
+            var deadline = DefuseTimer.FuseWireDeadlineSec(
+                nowSec, alliesFamily ? AlliesFlowParams.BombFuse : MatchFlowTestParams.BombFuse);
+            BroadcastRoomProps(room,
+            [
+                (MatchRoomPropKeys.C2, LobbyVariant.FromByte(MatchC2States.BombPlanted)),
+                (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(deadline)),
+                (MatchRoomPropKeys.RoundStartTime, LobbyVariant.FromDouble(nowSec)),
+            ], reason: $"BombPlanted field={sourceField}", phaseDeadlineSec: deadline);
+        }
 
         var fanOutPeers = 0;
-        if (plantPayload is { Length: > 0 })
+        if (alliesFamily && plantPayload is { Length: > 0 })
         {
             fanOutPeers = FanOutAlliesBombPlantRpc(
                 room, sourceField, plantPayload, plantTimeValue, rpcId, gaaTarget);
         }
-        else
+        else if (alliesFamily)
         {
             Console.WriteLine(
-                "[match-host] allies: plant ACCEPTED but payload empty — " +
+                $"[match-host] {tag}: plant ACCEPTED but payload empty — " +
                 "C2=40 only; peers may miss bomb mesh");
         }
 
-        var fuseSec = AlliesFlowParams.BombFuse.TotalSeconds;
+        var fuseSec = (alliesFamily ? AlliesFlowParams.BombFuse : MatchFlowTestParams.BombFuse)
+            .TotalSeconds;
         Console.WriteLine(
-            $"[match-host] allies: plant field={sourceField} → C2=40 " +
+            $"[match-host] {tag}: plant field={sourceField} → C2=40 " +
+            $"planter={planterActorNr} handoff={handoff} " +
             $"(fromPhase={fromPhase}; plantUtc={plantedAt:O} fuse={fuseSec:0}s; " +
             $"Rpc fan-out peers={fanOutPeers})");
         PostServerDebugChat($"бомба установлена (fuse {fuseSec:0}s)");
         ApplyPlantEconomy(room, planterActorNr);
-        return fanOutPeers;
+        return new MatchPlantDecision(
+            Accepted: true,
+            Deny: MatchPlantPolicy.Deny.None,
+            FromPhase: fromPhase,
+            Handoff: handoff,
+            FanOutPeers: fanOutPeers);
     }
 
     /// <summary>
@@ -548,7 +576,9 @@ public sealed partial class GameMatchHost
             field: sourceField,
             timeValue: timeVal,
             payload: plantPayload);
-        var n = BroadcastInitReady(room, pkt, tag: "match_tx_BombManager_alliesPlant");
+        // Plant Rpc is decisive: C2=40 is already out, so a dropped Rpc leaves that peer with a
+        // planted bomb state but no bomb mesh (#33). Never droppable.
+        var n = BroadcastInitReadyCritical(room, pkt, tag: "match_tx_BombManager_alliesPlant");
         var nReady = CountInitReadyPeers(room);
         Console.WriteLine(
             $"[match-host] allies: BombManager plant fan-out field={sourceField} " +

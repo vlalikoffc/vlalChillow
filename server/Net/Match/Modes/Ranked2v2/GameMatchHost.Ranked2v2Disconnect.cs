@@ -36,6 +36,10 @@ public sealed partial class GameMatchHost
             room.Actors.RemoveAll(a => a.Nr == actorNr);
             room.SpawnedPawns.Remove(actorNr);
             room.Flow.DeadActors.Remove(actorNr);
+            // #33: a departed fighter must also leave the frozen round roster, otherwise the
+            // remaining side is never «wiped» and the round falls through to the 109s timeout
+            // instead of ending on the kill that decided it (log: round 3, timeout after a leave).
+            MatchFlowRules.RemoveFromRoundRoster(room.Flow, actorNr);
 
             var propKeys = room.ActorProps.Keys.Where(k => k.Actor == actorNr).ToList();
             foreach (var k in propKeys)

@@ -27,11 +27,20 @@ public sealed partial class GameMatchHost
     private static int ReliableQueueSoftLimit => MatchTuning.ReliableQueueSoftLimit;
 
     /// <summary>Какие надёжные пакеты можно дропнуть отстающему пиру (только косметика/позы).</summary>
+    /// <remarks>
+    /// <see cref="MatchOpcode.WorldObjectRpc"/> droppable только потому, что поток спавн-поз и
+    /// эффектов устаревает на следующем кадре. Но этим же опкодом идут <b>решающие</b> Rpc —
+    /// plant / defuse / explode BombManager. Их дроп = ровно десинк из #33: у плантера бомба
+    /// стоит, у остальных нет, C2=40 уже разослан. Такие пакеты отправляются через
+    /// <see cref="SendCritical"/> / <see cref="BroadcastInitReadyCritical"/> и под бэкпрешер
+    /// не попадают.
+    /// </remarks>
     internal static bool IsDroppableWhenBacklogged(MatchOpcode op) => op switch
     {
         // Поза/состояние мира — следующий тик всё равно перезапишет.
         MatchOpcode.WorldObjectState => true,
-        // Rpc-поток спавнов/эффектов: устаревает на следующем кадре.
+        // Rpc-поток спавнов/эффектов: устаревает на следующем кадре (критичные Rpc идут
+        // через SendCritical и здесь не оказываются).
         MatchOpcode.WorldObjectRpc => true,
         // Create/Destroy/SetProperty(-ies), ActorJoined/Left, CustomEvent, handshake,
         // JoinRoom, фазы (C2 идут как SetProperty) — структурные, НЕ дропаем.
@@ -79,6 +88,17 @@ public sealed partial class GameMatchHost
         if (tag is not null && Diag.LogVerbose)
             CaptureSink.Capture(tag!, payload);
         return n;
+    }
+
+    /// <summary>
+    /// Host-authored int actor prop (same packet Duel uses for <c>round_kills</c>). Keeps the
+    /// local room state and the wire in step, so a late-join snapshot and live peers agree.
+    /// </summary>
+    private void PublishActorIntProp(MatchRoom room, byte actorNr, string key, int value)
+    {
+        var pkt = MatchCodec.BuildSetProperty(
+            NextServerTime(), actorNr, key, LobbyVariant.FromInt(value));
+        BroadcastRoom(room, pkt, tag: "match_tx_SetProperty");
     }
 
     /// <summary>Reliable to room peers except one (ActorJoined excludes the joiner).</summary>
@@ -205,6 +225,35 @@ public sealed partial class GameMatchHost
     private double ServerTimeSeconds() => NextServerTime() / 1000.0;
 
     /// <summary>
+    /// Структурная отправка: тот же reliable-канал, но бэкпрешер не может её выбросить.
+    /// Для решающих BombManager Rpc (plant / defuse / explode) — потеря такого пакета
+    /// оставляет клиента с рассинхроненным раундом (#33), а C2=40 при этом уже ушёл.
+    /// </summary>
+    private bool SendCritical(NetPeer peer, byte[] payload) => SendCore(peer, payload);
+
+    /// <summary>
+    /// Критичный Rpc всем INIT-ready пирам: plant fan-out, defuse/explode forward.
+    /// В отличие от <see cref="BroadcastInitReady"/> бэкпрешер эти пакеты не дропает.
+    /// </summary>
+    private int BroadcastInitReadyCritical(
+        MatchRoom room, byte[] payload, string? tag, NetPeer? except = null)
+    {
+        var n = 0;
+        foreach (var (p, st) in _peers)
+        {
+            if (st.Room != room || !st.BootstrapSent)
+                continue;
+            if (except is not null && ReferenceEquals(p, except))
+                continue;
+            if (SendCritical(p, payload))
+                n++;
+        }
+        if (tag is not null && Diag.LogVerbose)
+            CaptureSink.Capture(tag!, payload);
+        return n;
+    }
+
+    /// <summary>
     /// Reliable send. Returns <c>false</c> when the peer's reliable queue is full
     /// (packet dropped on purpose — see <see cref="ReliableQueueSoftLimit"/>) or the send
     /// failed. Dropping a game tick for one slow phone is far cheaper than letting its
@@ -221,6 +270,12 @@ public sealed partial class GameMatchHost
             return false;
         }
 
+        return SendCore(peer, payload);
+    }
+
+    /// <summary>Wire write shared by <see cref="Send"/> and <see cref="SendCritical"/> — no policy.</summary>
+    private bool SendCore(NetPeer peer, byte[] payload)
+    {
         try
         {
             // gcv.Reliable → LiteNetLib ReliableOrdered (same as client match TX).

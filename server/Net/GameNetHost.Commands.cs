@@ -189,8 +189,11 @@ public sealed partial class GameNetHost
         Send(player.Peer, LobbyCodec.BuildChatEvent(LobbySession.ServerMemberId, text));
 
         // И в катку, но адресно: приватный ответ не должен всплыть в общем чате матча.
-        // Без этого любая команда из матча выглядела проигнорированной.
-        var peers = _match.SendServerChat(text, nick: player.Name);
+        // Без этого команда выглядела проигнорированной: клиент держит лобби-сокет весь
+        // матч, поэтому «ушло в лобби» в катке не видел никто. Last-chance добивает
+        // ответ в матч, если пир не нашёлся по нику.
+        var peers = _match.SendServerChat(
+            text, nick: player.Name, alsoLastChanceIp: player.Peer.Address);
         if (peers > 0)
             Console.WriteLine($"[chat] Server → {player.Name} (match, peers={peers}): {text}");
         else

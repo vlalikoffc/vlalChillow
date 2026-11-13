@@ -69,12 +69,44 @@ public sealed class MatchFlowState
     public bool PendingBombPlant { get; set; }
     public int BomberActorNr { get; set; }
     /// <summary>
+    /// Actor who actually planted the bomb this round (may differ from
+    /// <see cref="BomberActorNr"/>: the bomb is a carried entity and can be handed off or
+    /// dropped). Evidence for the plant MVP; 0 = no plant this round.
+    /// </summary>
+    public byte RoundPlanterActorNr { get; set; }
+    /// <summary>
+    /// Actor who actually defused the bomb this round — evidence for the defuse MVP. Previously
+    /// the award fell back to «first Ct in dictionary order», which is not the defuser.
+    /// 0 = no defuse this round.
+    /// </summary>
+    public byte RoundDefuseActorNr { get; set; }
+    /// <summary>Per-round eliminations (actor → kills), written by the host master.</summary>
+    /// <remarks>
+    /// The bomb family publishes <c>round_kills</c> actor props exactly like Duel does, and those
+    /// stay the wire truth. This mirror exists because a leaver's props can be dropped mid-round;
+    /// the award must survive that.
+    /// </remarks>
+    public Dictionary<byte, int> RoundKills { get; } = new();
+    /// <summary>
     /// Fighter actor nrs marked dead this round. Populated ONLY by a proven combat death —
     /// actor <c>death</c> SetProperty (non-zero), or the Live/BombPlanted no-respawn fallback.
     /// A bare pawn <c>DestroyWorldObject</c> is NOT a death (phase respawn) — see
     /// <see cref="PendingCombatDestroy"/> and MATCH_WORLD.md "death vs respawn".
     /// </summary>
     public HashSet<byte> DeadActors { get; } = new();
+    /// <summary>
+    /// Fighters that actually entered the current round (actor → team), frozen when combat
+    /// starts (C2=31 for the bomb family, Live for classic Ranked).
+    /// </summary>
+    /// <remarks>
+    /// Wipe must be judged against <b>who is in this round</b>, not against every team prop the
+    /// room has ever seen. Issue #33: a player who left, or who never spawned this round, kept a
+    /// stale <c>team</c> prop and made the "alive" counts wrong — one client saw a wipe, others did
+    /// not, and the round ended on some peers only. Frozen per round and torn down with the bomb
+    /// authority, so all four bomb-family modes (and classic Ranked) answer the same question the
+    /// same way.
+    /// </remarks>
+    public Dictionary<byte, MatchTeam> RoundRoster { get; } = new();
     /// <summary>
     /// Owners whose LivingPawn was Destroyed during <see cref="MatchFlowPhase.RoundLive"/> /
     /// <see cref="MatchFlowPhase.BombPlanted"/> with no respawn yet, keyed to the Destroy time.
@@ -233,6 +265,72 @@ public static class MatchFlowRules
         return false;
     }
 
+    /// <summary>
+    /// Freeze the fighters that entered this round. Call when combat starts; the roster then
+    /// survives respawns and any later <c>team</c> prop churn (half-time, rejoins, spectators)
+    /// until <see cref="ClearRoundRoster"/> at round end.
+    /// </summary>
+    public static void FreezeRoundRoster(
+        MatchFlowState flow,
+        IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps)
+    {
+        flow.RoundRoster.Clear();
+        // Snapshot, deliberately. A late joiner's `team` prop arrives after this point and is not
+        // added (cold start = dead for the running round). Spawn timing is NOT used as the entry
+        // proof instead: clients create their pawn shortly after C2=31 (latest.log), so a fighter
+        // who legitimately plays the round can still have no pawn here and would be dropped —
+        // that would fake a wipe on the other side.
+        foreach (var ((actor, key), value) in actorProps)
+        {
+            if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
+                continue;
+            if (value.Kind != LobbyVariantKind.Byte)
+                continue;
+            var team = (MatchTeam)value.Byte;
+            if (team is not (MatchTeam.Tr or MatchTeam.Ct))
+                continue;
+            flow.RoundRoster[actor] = team;
+        }
+    }
+
+    /// <summary>Tear the frozen roster down with the bomb authority (round end / PreStart).</summary>
+    public static void ClearRoundRoster(MatchFlowState flow) => flow.RoundRoster.Clear();
+
+    /// <summary>
+    /// Drop one actor from the frozen roster because it <b>left the room</b>. Without this a player
+    /// who disconnects mid-round stays in <see cref="MatchFlowState.RoundRoster"/> as «alive», so
+    /// the opposing side can never be wiped and the round runs to the 109s timeout instead of
+    /// ending on the kill that decided it (latest.log round 3).
+    /// </summary>
+    /// <remarks>
+    /// Disconnect only. Switching to Spectator is <b>not</b> a leave: a fighter who died and then
+    /// flipped his team prop must stay in the roster as dead, otherwise the side empties and
+    /// «everyone is dead» turns into a different, invented wipe.
+    /// </remarks>
+    public static void RemoveFromRoundRoster(MatchFlowState flow, byte actorNr) =>
+        flow.RoundRoster.Remove(actorNr);
+
+    /// <summary>
+    /// Is this actor part of the round that is being played? An empty roster means «not frozen
+    /// yet» and accepts everyone (Warmup / pre-combat), so the check can be used unconditionally.
+    /// </summary>
+    /// <remarks>
+    /// Issue #33: a pawn that belongs to somebody who never entered this round (late joiner still
+    /// loading, spectator with a lingering pawn, player who already left) must never be turned into
+    /// a combat death — that fake kill cost a round on the peers that saw the Destroy while the
+    /// others kept the player alive.
+    /// </remarks>
+    public static bool IsRoundParticipant(MatchFlowState flow, byte actorNr) =>
+        actorNr != 0
+        && actorNr != MatchHostActor.ActorNr
+        && (flow.RoundRoster.Count == 0 || flow.RoundRoster.ContainsKey(actorNr));
+
+    /// <summary>
+    /// Alive/total counts per side for the <b>current round</b>. Uses the frozen
+    /// <see cref="MatchFlowState.RoundRoster"/> when it is populated, so a stale team prop (a
+    /// player who left, never spawned, or rejoined) cannot fake a wipe (#33). Falls back to the
+    /// live team props before combat freezes the roster.
+    /// </summary>
     public static (int AliveTr, int AliveCt, int TotalTr, int TotalCt) CountAliveFighters(
         MatchFlowState flow,
         IReadOnlyDictionary<(byte Actor, string Key), LobbyVariant> actorProps)
@@ -241,6 +339,21 @@ public static class MatchFlowRules
         var aliveCt = 0;
         var totalTr = 0;
         var totalCt = 0;
+
+        if (flow.RoundRoster.Count > 0)
+        {
+            foreach (var (actor, team) in flow.RoundRoster)
+            {
+                if (team == MatchTeam.Tr) totalTr++;
+                else totalCt++;
+                if (IsActorDead(flow, actorProps, actor))
+                    continue;
+                if (team == MatchTeam.Tr) aliveTr++;
+                else aliveCt++;
+            }
+            return (aliveTr, aliveCt, totalTr, totalCt);
+        }
+
         foreach (var ((actor, key), value) in actorProps)
         {
             if (key != MatchRoomPropKeys.Team || actor == MatchHostActor.ActorNr)
@@ -280,11 +393,12 @@ public static class MatchFlowRules
 
         var (aliveTr, aliveCt, totalTr, totalCt) = CountAliveFighters(flow, actorProps);
         var planted = bombPlanted || flow.BombPlanted;
-        // Empty-roster wipe only during Live/BombPlanted (real mid-round disconnect).
-        // Prep: require observed deaths (alive==0 with total>0) — do not invent RoundEnd
-        // from a missing opposing team during buy time.
-        var allowEmptyRosterWipe = flow.Phase is MatchFlowPhase.RoundLive
-            or MatchFlowPhase.BombPlanted;
+        // Whole-team leave. This must work wherever the wipe check is allowed at all, including
+        // the bomb family, whose combat phase is PurchasePhase (C2=31) — limiting it to
+        // RoundLive/BombPlanted meant «every CT disconnected» produced no result and the round
+        // rolled on to the timeout. Buy time (no combat yet) still cannot invent a result:
+        // AllowsWipeCheck above is false there, so we never reach this.
+        var allowEmptyRosterWipe = AllowsWipeCheck(flow.Phase);
 
         if (allowEmptyRosterWipe && totalTr > 0 && totalCt == 0)
         {
@@ -327,6 +441,36 @@ public static class MatchFlowRules
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// A fighter changed his <c>team</c> prop after the round was frozen. Inside a running round
+    /// that is a death, never a transfer: switching to the other side is punished with a death,
+    /// and switching to Spectator means he stops playing («пропадает», can only watch).
+    /// </summary>
+    /// <remarks>
+    /// The frozen entry is kept (and the actor is marked dead) instead of being removed. Removing
+    /// him would drop the side out of the count entirely — with both totals at zero the
+    /// empty-team rule no longer applies and «everyone on this side is gone» would quietly become
+    /// «no result, wait for the timeout». Kept as dead, the wipe still resolves.
+    /// </remarks>
+    /// <returns>
+    /// <c>true</c> when this was a mid-round switch (the caller must count the actor as dead);
+    /// <c>false</c> for a no-op: not in this round, same team, or a phase where no result is being
+    /// played out (buy time / warmup — the client respawns, and that is not a death).
+    /// </returns>
+    public static bool IsMidRoundTeamSwitch(
+        MatchFlowState flow,
+        byte actorNr,
+        MatchTeam newTeam,
+        out MatchTeam frozenTeam)
+    {
+        frozenTeam = MatchTeam.None;
+        if (!flow.RoundRoster.TryGetValue(actorNr, out frozenTeam))
+            return false;
+        if (frozenTeam == newTeam)
+            return false;
+        return AllowsWipeCheck(flow.Phase);
     }
 
     public static MatchTeam GetActorTeam(
