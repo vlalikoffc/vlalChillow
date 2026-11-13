@@ -8,8 +8,6 @@ internal sealed class MatchRoom
 {
     public required string PasswordKey { get; init; }
     public required string RoomId { get; init; }
-    /// <summary>Next joiner nr; starts at 2 because actor 1 is always synthetic Server.</summary>
-    public int NextActorNr { get; set; } = MatchHostActor.ActorNr + 1;
     public readonly HashSet<string> UserIds = new(StringComparer.Ordinal);
     public readonly List<(byte Nr, string Name, string UserId)> Actors = new();
     public readonly Dictionary<(byte Actor, string Key), LobbyVariant> ActorProps = new();

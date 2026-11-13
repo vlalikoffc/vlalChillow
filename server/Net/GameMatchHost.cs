@@ -358,7 +358,8 @@ public sealed partial class GameMatchHost : IDisposable
             try { st?.BootstrapTimeoutCts?.Cancel(); }
             catch { /* ignore */ }
             if (st is { Room: { } room, ActorNr: > 0 })
-                RemoveActorFromMatch(room, st.ActorNr, st.UserId, reason: info.Reason.ToString());
+                RemoveActorFromMatch(
+                    room, st.ActorNr, st.UserId, st.IdentityKey, reason: info.Reason.ToString());
             Console.WriteLine($"[match-host] peer DISCONNECTED {peer.Address}:{peer.Port}: {info.Reason}");
         };
         _listener.NetworkReceiveEvent += OnNetworkReceive;
@@ -653,7 +654,6 @@ public sealed partial class GameMatchHost : IDisposable
         {
             PasswordKey = passwordKey,
             RoomId = roomId,
-            NextActorNr = MatchHostActor.ActorNr + 1,
         };
         // Actor 1 = lobby fake "Server" — master client / dedicated host, Spectators only.
         room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name, MatchHostActor.BootstrapUid));
@@ -1104,6 +1104,7 @@ public sealed partial class GameMatchHost : IDisposable
         st.RosterName = null;
         st.Handshaken = false;
         st.UserId = null;
+        st.IdentityKey = null;
         st.AppId = null;
         st.BootstrapPending = false;
         st.BootstrapSent = false;

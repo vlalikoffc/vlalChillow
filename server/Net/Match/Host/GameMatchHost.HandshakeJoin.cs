@@ -40,6 +40,7 @@ public sealed partial class GameMatchHost
         {
             st.Handshaken = true;
             st.UserId = req.UserId;
+            st.IdentityKey = MatchIdentity.StableKeyFromUserId(req.UserId);
             st.AppId = req.AppId;
         }
 
@@ -87,6 +88,8 @@ public sealed partial class GameMatchHost
             // (CLB… in handshake → LB… in gap), matching the live phone host.
             // 2.07 gap identity omits the handshake token's leading C (CLB… → LB…).
             st.UserId = req.AuthToken.Length > 0 ? req.AuthToken[1..] : req.AuthToken;
+            // Session-independent key: CLB<md5(userId)>_<guid> → LB<md5(userId)>.
+            st.IdentityKey = MatchIdentity.StableKeyFrom207Token(req.AuthToken);
             st.AppId = req.AppId;
         }
 
@@ -133,6 +136,9 @@ public sealed partial class GameMatchHost
 
         JoinRoomResult result;
         byte? actor = null;
+        // Issue #39: the same install returned with a fresh session token and took over its
+        // old actor. Peers never saw it leave, so no ActorJoined/ActorLeft may be sent.
+        var adoptedReconnect = false;
 
         if (room is null)
         {
@@ -144,47 +150,78 @@ public sealed partial class GameMatchHost
                 $"(registered keys: [{known}]) — RoomNotFound");
             result = JoinRoomResult.RoomNotFound;
         }
+        else if (st.IdentityKey is { Length: > 0 } identityKey
+                 && TryFindRejoinActor(room, identityKey, out var rejoinActor, out var rejoinState)
+                 && rejoinState is not null)
+        {
+            // Issue #39: same player, new session token, old socket not timed out yet.
+            // Restore the SAME actor instead of allocating a second one (which made the
+            // client throw inside OnJoinRoomResponse and hang).
+            AdoptReconnectingActor(room, st, rejoinActor, rejoinState);
+            actor = rejoinActor;
+            result = JoinRoomResult.Found;
+            adoptedReconnect = true;
+            Console.WriteLine(
+                $"[match-host] JoinRoom Found (reconnect) identity='{identityKey}' actorNr={rejoinActor} " +
+                $"roster='{st.RosterName}' — no second actor, no duplicate uid");
+        }
         else if (st.UserId is { } uid && room.UserIds.Contains(uid))
         {
+            // Same wire token but no live peer to take over (should not happen): keep the
+            // honest rejection rather than inventing an actor.
+            Console.WriteLine(
+                $"[match-host] JoinRoom duplicate token='{uid}' without a live actor — " +
+                "ActorWithSameUserIdExists");
             result = JoinRoomResult.ActorWithSameUserIdExists;
         }
         else
         {
             // Accept JoinOnly when password hits Dedik. Do not gate on room==LobbyId —
             // room is roster semantics, not the dict key. Multi-name encoding TBD.
-            byte nr;
+            byte? freeNr;
             lock (_roomGate)
+                freeNr = MatchRoomRoster.FindFreeActorNr(room.Actors);
+            if (freeNr is not { } nr)
             {
-                nr = (byte)Math.Clamp(room.NextActorNr++, 1, 255);
-                if (st.UserId is { } u)
-                    room.UserIds.Add(u);
-                var nick = string.IsNullOrWhiteSpace(req.Room) ? $"actor{nr}" : req.Room;
-                room.Actors.Add((nr, nick, st.UserId ?? ""));
-                st.RosterName = nick;
+                // 254 human actors + Server: no free id. Honest refusal (result=1).
+                Console.WriteLine(
+                    "[match-host] JoinRoom Found refused — all actor numbers 2..255 are in use");
+                result = JoinRoomResult.RoomIsFull;
             }
-            st.Room = room;
-            st.ActorNr = nr;
-            actor = nr;
-            result = JoinRoomResult.Found;
-            if (st.UserId is { } reconnectUid)
+            else
             {
-                MatchTeam prevTeam;
-                bool remembered;
                 lock (_roomGate)
-                    remembered = _reconnectTeams.TryGetValue(reconnectUid, out prevTeam);
-                if (remembered && prevTeam is MatchTeam.Tr or MatchTeam.Ct)
                 {
-                    st.PendingReconnectTeam = prevTeam;
-                    Console.WriteLine(
-                        $"[match-host] reconnect-pending: userId='{reconnectUid}' " +
-                        $"restore team={prevTeam} after INIT (new actor={nr})");
+                    if (st.UserId is { } u)
+                        room.UserIds.Add(u);
+                    var nick = string.IsNullOrWhiteSpace(req.Room) ? $"actor{nr}" : req.Room;
+                    room.Actors.Add((nr, nick, st.UserId ?? ""));
+                    st.RosterName = nick;
                 }
+                st.Room = room;
+                st.ActorNr = nr;
+                actor = nr;
+                result = JoinRoomResult.Found;
+                if (st.IdentityKey is { Length: > 0 } reconnectKey)
+                {
+                    var remembered = false;
+                    var prevTeam = MatchTeam.None;
+                    lock (_roomGate)
+                        remembered = _reconnectTeams.TryGetValue(reconnectKey, out prevTeam);
+                    if (remembered && prevTeam is MatchTeam.Tr or MatchTeam.Ct)
+                    {
+                        st.PendingReconnectTeam = prevTeam;
+                        Console.WriteLine(
+                            $"[match-host] reconnect-pending: identity='{reconnectKey}' " +
+                            $"restore team={prevTeam} after INIT (new actor={nr})");
+                    }
+                }
+                Console.WriteLine(
+                    $"[match-host] JoinRoom Found passwordKey='{room.PasswordKey}' " +
+                    $"roster={MatchRoomField.Describe(req.Room)} actorNr={nr} " +
+                    $"(host={MatchHostActor.ActorNr}/'{MatchHostActor.Name}' Spectator) " +
+                    $"userId='{st.UserId}'");
             }
-            Console.WriteLine(
-                $"[match-host] JoinRoom Found passwordKey='{room.PasswordKey}' " +
-                $"roster={MatchRoomField.Describe(req.Room)} actorNr={nr} " +
-                $"(host={MatchHostActor.ActorNr}/'{MatchHostActor.Name}' Spectator) " +
-                $"userId='{st.UserId}'");
         }
 
         MatchGapRoom? gap = null;
@@ -261,13 +298,25 @@ public sealed partial class GameMatchHost
             // Dynamic roster: peers who already Found only knew actors-at-entry.
             // Push ActorJoinedEvent (fup) so early humans learn about this joiner.
             var joinName = st.RosterName ?? $"actor{joinerNr}";
-            NotifyPeersActorJoined(room, peer, joinerNr, joinName);
-            BeginAwaitJoinerThenBootstrap(peer, room, joinerNr);
-            try { OnMatchPlayerJoined?.Invoke(joinName); }
-            catch (Exception ex)
+            if (adoptedReconnect)
             {
-                Console.WriteLine($"[match-host] OnMatchPlayerJoined: {ex.Message}");
+                // Issue #39: the actor never left the room. Re-announcing it would make peers
+                // allocate a second body for the same actorNr; the returning client only needs
+                // INIT + its world snapshot (bootstrap below).
+                Console.WriteLine(
+                    $"[match-host] reconnect-takeover: actor={joinerNr} — skip ActorJoined/" +
+                    "OnMatchPlayerJoined (peers still know this actor)");
             }
+            else
+            {
+                NotifyPeersActorJoined(room, peer, joinerNr, joinName);
+                try { OnMatchPlayerJoined?.Invoke(joinName); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[match-host] OnMatchPlayerJoined: {ex.Message}");
+                }
+            }
+            BeginAwaitJoinerThenBootstrap(peer, room, joinerNr);
         }
     }
 

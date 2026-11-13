@@ -8,7 +8,14 @@ namespace StandChillow.LanServer.Net.Match.Host;
 internal sealed class MatchPeerState
 {
     public bool Handshaken { get; set; }
+    /// <summary>Wire uid: 2.07 auth-токен без ведущей <c>C</c> (для legacy — userId).</summary>
     public string? UserId { get; set; }
+    /// <summary>
+    /// Issue #39: устойчивая часть токена (<see cref="MatchIdentity.StableKeyFrom207Token"/>).
+    /// Полный <see cref="UserId"/> содержит гуид сессии и меняется при каждом переподключении,
+    /// поэтому «тот же игрок» и память о команде ищутся по этому ключу.
+    /// </summary>
+    public string? IdentityKey { get; set; }
     public string? AppId { get; set; }
     public MatchRoom? Room { get; set; }
     public byte ActorNr { get; set; }

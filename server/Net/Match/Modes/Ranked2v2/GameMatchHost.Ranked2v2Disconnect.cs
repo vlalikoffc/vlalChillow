@@ -11,7 +11,8 @@ namespace StandChillow.LanServer.Net;
 public sealed partial class GameMatchHost
 {
     // Actor remove + mid-round wipe on disconnect.
-    private void RemoveActorFromMatch(MatchRoom room, byte actorNr, string? userId, string reason)
+    private void RemoveActorFromMatch(
+        MatchRoom room, byte actorNr, string? userId, string? identityKey, string reason)
     {
         if (actorNr == 0 || actorNr == MatchHostActor.ActorNr)
             return;
@@ -62,14 +63,17 @@ public sealed partial class GameMatchHost
             }
         }
 
-        if (userId is { } reconnectUid
+        // Issue #39: remember the team under the session-independent identity key — the
+        // returning phone arrives with a NEW auth token, so the old uid would never match.
+        var memoryKey = string.IsNullOrEmpty(identityKey) ? userId : identityKey;
+        if (memoryKey is { } reconnectKey
             && remembered is MatchTeam.Tr or MatchTeam.Ct)
         {
             lock (_roomGate)
-                _reconnectTeams[reconnectUid] = remembered;
+                _reconnectTeams[reconnectKey] = remembered;
             Console.WriteLine(
-                $"[match-host] reconnect-remember: userId='{reconnectUid}' team={remembered} " +
-                $"(actor={actorNr} left reason={reason})");
+                $"[match-host] reconnect-remember: identity='{reconnectKey}' team={remembered} " +
+                $"(actor={actorNr} left reason={reason}, wire uid='{userId}')");
         }
 
         foreach (var id in pawnIds)

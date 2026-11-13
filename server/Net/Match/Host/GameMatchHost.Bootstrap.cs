@@ -295,11 +295,12 @@ public sealed partial class GameMatchHost
         }
 
         st.PendingReconnectTeam = null;
-        var userId = st.UserId;
+        // Issue #39: memory about «same player» must survive a new session token.
+        var identityKey = st.IdentityKey ?? st.UserId;
         var actorNr = joinerActorNr;
         Console.WriteLine(
             $"[match-host] reconnect-restore: scheduled team={team} actor={actorNr} " +
-            $"userId='{userId}' settle={ReconnectRestoreSettle.TotalMilliseconds:0}ms " +
+            $"identity='{identityKey}' settle={ReconnectRestoreSettle.TotalMilliseconds:0}ms " +
             $"timeout={ReconnectRestoreTimeout.TotalSeconds:0}s");
 
         _ = Task.Run(async () =>
@@ -339,7 +340,7 @@ public sealed partial class GameMatchHost
                 {
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: peer left before timeout actor={actorNr}");
-                    if (userId is { } uidLeft)
+                    if (identityKey is { } uidLeft)
                     {
                         lock (_roomGate)
                             _reconnectTeams.Remove(uidLeft);
@@ -352,7 +353,7 @@ public sealed partial class GameMatchHost
                 {
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: skip Spectator actor={actorNr} — once only");
-                    if (userId is { } uidOnce)
+                    if (identityKey is { } uidOnce)
                     {
                         lock (_roomGate)
                             _reconnectTeams.Remove(uidOnce);
@@ -383,7 +384,7 @@ public sealed partial class GameMatchHost
                     SendMatchStateSnapshotToPeer(peer, room, excludeActorNr: actorNr);
                     SendLivingPawnSnapshotToPeer(peer, room, excludeOwnerActorNr: actorNr);
                     SyncBombPlantStateToPeer(peer, room);
-                    if (userId is { } uidOk)
+                    if (identityKey is { } uidOk)
                     {
                         lock (_roomGate)
                             _reconnectTeams.Remove(uidOk);
@@ -397,7 +398,7 @@ public sealed partial class GameMatchHost
                     cur.ReconnectSpectatorFallbackDone = true;
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: actor={actorNr} already Spectator — once done");
-                    if (userId is { } uidSpec)
+                    if (identityKey is { } uidSpec)
                     {
                         lock (_roomGate)
                             _reconnectTeams.Remove(uidSpec);
@@ -415,7 +416,7 @@ public sealed partial class GameMatchHost
                 else
                     Console.WriteLine(
                         $"[match-host] reconnect-restore: Spectator force failed actor={actorNr}: {specMsg}");
-                if (userId is { } uidFail)
+                if (identityKey is { } uidFail)
                 {
                     lock (_roomGate)
                         _reconnectTeams.Remove(uidFail);

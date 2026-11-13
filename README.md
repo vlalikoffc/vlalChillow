@@ -12,6 +12,9 @@ Unofficial LAN dedicated server for **self-hosted multiplayer** — reverse-engi
 - **Auto-discovery** — 2.07 Bonjour V3 (`SC LAN Bonjour V3`) probe/reply on UDP **5056**; when phones search LAN lobbies, this host appears automatically (same as a phone-hosted lobby)
 - **Match channel** — after `play`, clients move to UDP **7777**
 - **CLI dashboard** — TTY console + phone chat slash commands (`/mode`, `/map`, `/start`, `/play`, `/end`, …)
+- **Reconnect** — a phone that loses the network and comes back **inside the match** keeps its
+  actor (same number, same name/team): the host recognises the install by the stable part of the
+  2.07 auth token instead of the per-session tail, so no second actor/ghost body appears (#39)
 - **Graceful shutdown** — CTRL+C tears down cleanly; rematch via `play` again
 - **ConnectAsClient probe** — optional learning client (`--client`) can observe a real phone host or spawn a visible CT/Tr fighter from the map spawn catalog (see `server/Net/PROBE_README.md`)
 
