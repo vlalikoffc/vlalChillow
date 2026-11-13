@@ -70,14 +70,25 @@ public sealed partial class GameMatchHost
                 pingFromRtt = true;
             }
 
-            // uid: клиент шлёт «Offline» (заглушка в списке игроков). Сервер отдаёт свой
-            // постоянный id — то же число, что в /ids и что принимает /banid. Проверка
-            // только на этом входе, дальше свойство идёт по обычному пути.
+            // uid: клиент шлёт «Offline» (заглушка в списке игроков). Сервер отдаёт своё
+            // значение — числовой id игрока или «Server» для актора сервера. Если автора
+            // не опознали, свойство ОТБРАСЫВАЕТСЯ, а не проходит как есть: иначе через
+            // этот путь можно было бы протолкнуть чужой id.
             LobbyVariant serverUid = default;
-            var uidRewritten = key == MatchRoomPropKeys.Uid
-                && TryServerUid(actorNr, st, room, out serverUid);
-            if (uidRewritten)
+            var uidRewritten = false;
+            if (key == MatchRoomPropKeys.Uid && ExposeServerUid)
+            {
+                if (!TryServerUid(actorNr, st, room, out serverUid))
+                {
+                    Console.WriteLine(
+                        $"[match-host] SetProperty uid actor={actorNr} — ник не опознан, " +
+                        "свойство отброшено (id ставит только сервер)");
+                    return;
+                }
+
                 value = serverUid;
+                uidRewritten = true;
+            }
 
             // SetProperty is one of the hottest paths (every hit/death/team change). Log it
             // only in verbose mode; the per-key combat/buy traces below stay (decisive).
@@ -225,9 +236,20 @@ public sealed partial class GameMatchHost
                         continue;
                     }
 
-                    // uid — как в одиночном SetProperty: серверный id вместо клиентского.
-                    if (k == MatchRoomPropKeys.Uid && TryServerUid(actorNr, st, room, out var serverUid))
+                    // uid — как в одиночном SetProperty: серверный id вместо клиентского,
+                    // а неопознанный автор это свойство не получает вовсе.
+                    if (k == MatchRoomPropKeys.Uid && ExposeServerUid)
+                    {
+                        if (!TryServerUid(actorNr, st, room, out var serverUid))
+                        {
+                            Console.WriteLine(
+                                $"[match-host] SetProperties uid actor={actorNr} — ник не опознан, " +
+                                "свойство отброшено (id ставит только сервер)");
+                            continue;
+                        }
+
                         v = serverUid;
+                    }
 
                     var had = room.ActorProps.TryGetValue((actorNr, k), out var prevK);
                     diag.Add((k, had ? prevK : default, had, v));

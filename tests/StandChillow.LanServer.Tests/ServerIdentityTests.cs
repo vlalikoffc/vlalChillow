@@ -44,19 +44,33 @@ public sealed class ServerIdentityTests
     }
 
     [Fact]
-    public void ServerHasItsOwnDeterministicId()
+    public void ServerIdIsTheHardcodedString()
     {
-        Assert.Equal(MatchPublicId.ForNick("Server"), ServerIdentity.Uid);
-        Assert.Equal(MatchPublicId.ForNick(ServerIdentity.Nick), ServerIdentity.Uid);
-        Assert.InRange(ServerIdentity.Uid, MatchPublicId.Min, MatchPublicId.Max);
-        Assert.Equal(ServerIdentity.Uid.ToString(), ServerIdentity.UidText);
+        // «У того, кто сервер, id захардкожен Server»: это не число из нумерации игроков.
+        Assert.Equal("Server", ServerIdentity.Uid);
+        Assert.False(int.TryParse(ServerIdentity.Uid, out _));
     }
 
     [Fact]
     public void ServerIdIsRecognisedAndNothingElseIs()
     {
-        Assert.True(ServerIdentity.IsServerUid(ServerIdentity.Uid));
-        Assert.False(ServerIdentity.IsServerUid(0));
-        Assert.False(ServerIdentity.IsServerUid(ServerIdentity.Uid + 1));
+        Assert.True(ServerIdentity.IsServerUid("Server"));
+        Assert.True(ServerIdentity.IsServerUid("server"));
+        Assert.False(ServerIdentity.IsServerUid("Server2"));
+        Assert.False(ServerIdentity.IsServerUid("39772292"));
+        Assert.False(ServerIdentity.IsServerUid(""));
+        Assert.False(ServerIdentity.IsServerUid(null));
+    }
+
+    [Fact]
+    public void PlayersNumberingStaysSeparateFromTheServerId()
+    {
+        // Игроки нумеруются 1…100 000 000; сервер — строка «Server», в диапазон не входит.
+        var playerId = MatchPublicId.ForNick("Ktulxy");
+        Assert.InRange(playerId, MatchPublicId.Min, MatchPublicId.Max);
+        Assert.NotEqual(ServerIdentity.Uid, playerId.ToString());
+
+        Assert.True(MatchPublicId.TryWireUid("Ktulxy", out var wireUid));
+        Assert.False(ServerIdentity.IsServerUid(wireUid));
     }
 }

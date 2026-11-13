@@ -4,6 +4,7 @@ using StandChillow.LanServer.Bans;
 using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Net.Lobby;
+using StandChillow.LanServer.Net.Match;
 
 namespace StandChillow.LanServer.Net;
 
@@ -222,13 +223,6 @@ public sealed partial class GameNetHost
             return;
         }
 
-        // id сервера — не игрок и не ключ бана: никого по нему не баним.
-        if (ServerIdentity.IsServerUid(id))
-        {
-            reply($"id {id} — это сервер ({ServerIdentity.Nick}); он не банится и id его не банит");
-            return;
-        }
-
         // 1) кто сейчас в катке. Коллизия id (два ника → один id) — отказ, а не
         // «баню первого попавшегося»: забанить не того хуже, чем попросить уточнить.
         var inMatch = _match.SnapshotPublicIds().Where(e => e.Id == id).ToList();
@@ -371,13 +365,9 @@ public sealed partial class GameNetHost
 
         // Id детерминирован от ника: даже /ban по нику тегирует запись, чтобы /unbanid
         // потом нашёл её без отдельной истории.
-        // Id сервера в банлист не попадает: иначе /unbanid по нему стал бы невозможен,
-        // а сам id — ключом бана. Игрок с таким же id банится по своему нику/IP.
         var idForRecord = matchId is { } requested && requested != 0
             ? requested
             : MatchPublicId.ForNick(nick);
-        if (ServerIdentity.IsServerUid(idForRecord))
-            idForRecord = 0;
 
         var record = _bans.Add(
             new BanProbe(nick, ip?.ToString()),
@@ -475,12 +465,6 @@ public sealed partial class GameNetHost
             return;
         }
 
-        if (ServerIdentity.IsServerUid(id))
-        {
-            reply($"id {id} — сервер; записей с ним не бывает");
-            return;
-        }
-
         var removed = _bans.RemoveByMatchId(id);
         if (removed.Count == 0)
         {
@@ -533,7 +517,11 @@ public sealed partial class GameNetHost
         {
             foreach (var entry in entries)
             {
-                reply($"#{entry.Id} · {entry.Nick} · " +
+                // У актора сервера id — строка «Server», а не число: он вне нумерации.
+                var idText = entry.ActorNr == MatchHostActor.ActorNr
+                    ? ServerIdentity.Uid
+                    : $"#{entry.Id}";
+                reply($"{idText} · {entry.Nick} · " +
                       $"{entry.Address?.ToString() ?? "—"} · actor {entry.ActorNr}");
             }
             return;

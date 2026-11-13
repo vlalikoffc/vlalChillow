@@ -188,9 +188,8 @@ public sealed partial class GameMatchHost
         SendAndDump(peer, MatchCodec.BuildSetInternalProperty(
             NextServerTime(), MatchHostActor.ActorNr, MatchCodec.InternalPropNick,
             LobbyVariant.FromString(MatchHostActor.Name)));
-        // Серверу — его id (в списке игроков вместо «Offline»); BootstrapUid остаётся
-        // внутренним токеном сессии, не на провод.
-        SetHostProp(MatchRoomPropKeys.Uid, LobbyVariant.FromString(ServerIdentity.UidText));
+        // Серверу — его захардкоженный id «Server» (не «Offline» и не число).
+        SetHostProp(MatchRoomPropKeys.Uid, LobbyVariant.FromString(ServerIdentity.Uid));
         SetHostProp(MatchRoomPropKeys.BadgeId, LobbyVariant.FromInt(0));
         // Phone host identity order is uid → badgeId → verified → from_lobby → avatar → ping
         // (gold 20261111_074258_049..053). Dedicated skipped verified, so the block was short.

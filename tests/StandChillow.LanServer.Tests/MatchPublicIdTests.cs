@@ -22,7 +22,6 @@ public sealed class MatchPublicIdTests
     [InlineData("влал", 25354325)]
     [InlineData("  влал  ", 25354325)]
     [InlineData("Ktu lxy", 87780421)]
-    [InlineData("Server", 39772292)]
     public void IdIsPinnedAcrossVersions(string nick, int expected)
     {
         Assert.Equal(expected, MatchPublicId.ForNick(nick));

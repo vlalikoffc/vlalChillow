@@ -682,14 +682,13 @@ public sealed partial class GameMatchHost : IDisposable
             RoomId = roomId,
         };
         // Actor 1 = lobby fake "Server" — master client / dedicated host, Spectators only.
-        room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name, MatchHostActor.BootstrapUid));
+        // Его id — захардкоженная строка «Server», а не «Offline» и не число: сервер выше
+        // игроков и админов, и в росписи он тоже должен называться своим id.
+        room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name, ServerIdentity.Uid));
         room.ActorProps[(MatchHostActor.ActorNr, MatchRoomPropKeys.Team)] =
             LobbyVariant.FromByte((byte)MatchHostActor.Team);
-        // На проводе у сервера свой id, а не клиентская заглушка «Offline»: «Server» в
-        // списке игроков тоже должен быть с номером. BootstrapUid остаётся только
-        // внутренним токеном в room.Actors (по нему работает дедуп/reconnect).
         room.ActorProps[(MatchHostActor.ActorNr, MatchRoomPropKeys.Uid)] =
-            LobbyVariant.FromString(ServerIdentity.UidText);
+            LobbyVariant.FromString(ServerIdentity.Uid);
         return room;
     }
 

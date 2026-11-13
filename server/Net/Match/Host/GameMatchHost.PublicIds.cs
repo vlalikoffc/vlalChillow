@@ -77,7 +77,8 @@ public sealed partial class GameMatchHost
     /// <remarks>
     /// Ник берём из состояния сессии (<c>RosterName</c> после JoinRoom), а не из пакета:
     /// свойство может прислать кто угодно и про любого актора, а id должен быть тем же,
-    /// что показал <c>/ids</c>. Актор 1 — сам сервер: ему всегда его id, подменить нельзя.
+    /// что показал <c>/ids</c>. Актор 1 — сам сервер: ему всегда захардкоженный «Server»,
+    /// и клиент не может ни присвоить этот id себе, ни подменить его серверу.
     /// </remarks>
     private bool TryServerUid(byte actorNr, MatchPeerState state, MatchRoom room, out LobbyVariant uid)
     {
@@ -87,7 +88,7 @@ public sealed partial class GameMatchHost
 
         if (actorNr == MatchHostActor.ActorNr)
         {
-            uid = LobbyVariant.FromString(ServerIdentity.UidText);
+            uid = LobbyVariant.FromString(ServerIdentity.Uid);
             return true;
         }
 

@@ -46,10 +46,11 @@ Ban keys are never the public id: `/banid` is a selector that resolves to nick +
 normalized nick); it carries no state, so `/banid` survives restarts. The host also
 substitutes it for the client-authored actor property `uid` (players send the `Offline`
 placeholder from the gold capture) so the in-game player list shows the same number
-`/ids` and `/banid` use; the Server actor carries its own id too. The server nickname is
-reserved (lobby and match reject it, derived from `LobbySession.ServerPlayerName` so a rename
-moves the reservation), the server is never bannable, and its id is never written as a ban
-tag. `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/banid` still
+`/ids` and `/banid` use. The Server actor carries the hardcoded string id `Server` instead —
+it is outside the player numbering, never bannable, and no client can claim it: the host
+overwrites `uid` from session state on every SetProperty/SetProperties and drops the property
+when the author cannot be resolved. The server nickname is reserved (lobby and match reject
+it, derived from `LobbySession.ServerPlayerName` so a rename moves the reservation). `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/banid` still
 resolves a player who already left. `banlist.json` lives beside `config.json` and is
 git-ignored.
 

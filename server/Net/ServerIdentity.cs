@@ -1,12 +1,11 @@
-using System.Globalization;
-using StandChillow.LanServer.Bans;
 using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Net.Lobby;
 
 namespace StandChillow.LanServer.Net;
 
 /// <summary>
-/// Личность самого сервера: его ник зарезервирован, у него есть свой id, и его нельзя забанить.
+/// Личность самого сервера: его ник зарезервирован, его id — захардкоженная строка
+/// <see cref="Uid"/>, и его нельзя забанить.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -16,10 +15,11 @@ namespace StandChillow.LanServer.Net;
 /// под новым именем тоже не будет.
 /// </para>
 /// <para>
-/// Id сервера — обычная функция от ника (<see cref="MatchPublicId"/>), но он выведен из
-/// пространства ключей бана: <c>/banid</c> и <c>/unbanid</c> по нему отказывают, а записи
-/// банлиста им не тегируются. Игрок, чей ник случайно даёт тот же id, банится по нику/IP —
-/// id сервера при этом никого не задевает.
+/// Id сервера — не число, а строка <c>Server</c>: сервер стоит выше игроков и админов, и
+/// этот id не участвует в нумерации игроков вообще. Клиент не может его присвоить: у
+/// актора сервера хост всегда пишет своё значение, а игроку — его собственный числовой id.
+/// Забанить <c>Server</c> нельзя ни командой <c>/ban</c>, ни через <c>/banid</c> (тот
+/// принимает только числа), и никто из игроков не может получить этот id.
 /// </para>
 /// </remarks>
 public static class ServerIdentity
@@ -27,12 +27,12 @@ public static class ServerIdentity
     /// <summary>Ник сервера («Server», см. <see cref="LobbySession.ServerPlayerName"/>).</summary>
     public const string Nick = LobbySession.ServerPlayerName;
 
-    /// <summary>Серверный id сервера: та же функция от ника, что и у игроков.</summary>
-    public static readonly int Uid = MatchPublicId.ForNick(Nick);
-
-    /// <summary>Он же десятичной строкой — значение actor-свойства <c>uid</c>.</summary>
-    public static string UidText { get; } =
-        Uid.ToString(CultureInfo.InvariantCulture);
+    /// <summary>
+    /// Id сервера — захардкоженная строка, а не число: это не «ещё один игрок в нумерации»,
+    /// а отдельная сущность выше админов. Именно это значение уходит в actor-свойство
+    /// <c>uid</c> у актора сервера.
+    /// </summary>
+    public const string Uid = "Server";
 
     /// <summary>
     /// Ник занят сервером? Сравнение после <see cref="ServerConfig.NormalizeNick"/> и без
@@ -45,6 +45,10 @@ public static class ServerIdentity
             && string.Equals(normalized, Nick, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Это id сервера? Такой id — не ключ бана, а сам сервер.</summary>
-    public static bool IsServerUid(int id) => id == Uid;
+    /// <summary>
+    /// Это id сервера (строка <c>Server</c>)? Такой id не банится и игрокам не выдаётся.
+    /// </summary>
+    public static bool IsServerUid(string? uid) =>
+        !string.IsNullOrEmpty(uid)
+        && string.Equals(uid, Uid, StringComparison.OrdinalIgnoreCase);
 }
