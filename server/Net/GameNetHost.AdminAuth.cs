@@ -66,13 +66,36 @@ public sealed partial class GameNetHost
             Console.WriteLine(
                 "[auth] админских ников нет — код никому не понадобится, пока в " +
                 "config.json admin.nicknames пусто");
+            PublishAuthCodeFile();
             return;
         }
 
         Console.WriteLine(
             $"[auth] админские ники: {string.Join(", ", _config.Admin.Nicknames)} — " +
             "без кода они видят только Server, как забаненные");
+        PublishAuthCodeFile();
     }
+
+    /// <summary>
+    /// Дубль кода в <c>auth.txt</c> рядом с конфигом: консоль не всегда на виду, а файл лежит
+    /// там, куда пользователь и так ходит за настройками.
+    /// </summary>
+    private void PublishAuthCodeFile()
+    {
+        var path = AdminAuthFile.ResolvePath(ServerConfig.LastLoadedPath);
+        if (AdminAuthFile.TryWrite(
+                path, _adminAuth.Code, ServerConfig.LastLoadedPath, DateTime.Now, out var error))
+        {
+            Console.WriteLine($"[auth] код также в файле: {path}");
+            return;
+        }
+
+        Console.WriteLine($"[auth] не смог записать {path}: {error} — код только в этой консоли");
+    }
+
+    /// <summary>Остановка сервера: код мёртв, файл с ним только путает.</summary>
+    private void RemoveAuthCodeFile() =>
+        AdminAuthFile.TryDelete(AdminAuthFile.ResolvePath(ServerConfig.LastLoadedPath));
 
     /// <summary>
     /// Вход под админским ником без кода: теневой лобби (роспись из одного Server) и просьба
@@ -260,12 +283,15 @@ public sealed partial class GameNetHost
         {
             var code = _adminAuth.Reset();
             Console.WriteLine($"[auth] код сброшен, новый: {code}");
+            PublishAuthCodeFile();
             reply($"новый код: {code}");
+            reply($"он же записан в {AdminAuthFile.ResolvePath(ServerConfig.LastLoadedPath)}");
             reply("все авторизованные адреса забыты");
             return;
         }
 
         reply($"код на этот запуск: {_adminAuth.Code}");
+        reply($"файл с кодом: {AdminAuthFile.ResolvePath(ServerConfig.LastLoadedPath)}");
         reply($"авторизованных адресов: {_adminAuth.AuthorizedCount}; " +
               $"ждут код: {PendingAdminCount}");
         foreach (var ip in _adminAuth.AuthorizedIps)

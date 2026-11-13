@@ -975,6 +975,7 @@ public sealed partial class GameNetHost : IDisposable
         // Disconnect peers + PollEvents so LiteNetLib sends close packets before Stop.
         LiteNetGracefulStop.DisconnectFlushAndStop(_manager);
         _match.Dispose();
+        RemoveAuthCodeFile();
         try { _cts.Dispose(); } catch { /* ignore */ }
     }
 }
