@@ -47,6 +47,7 @@ public sealed partial class GameNetHost
         // Матч проверяет те же записи: IP на коннекте, ник до выдачи актора.
         _match.Bans = _bans;
         _match.IsAdminNick = _config.IsAdmin;
+        _match.ExposeServerUid = settings.ExposeIds;
 
         Console.WriteLine(
             $"[ban] реестр: {_bans.Count} банов, {_directory.Count} личностей в справочнике, файл {path}, срок " +

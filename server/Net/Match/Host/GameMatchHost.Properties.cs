@@ -70,13 +70,23 @@ public sealed partial class GameMatchHost
                 pingFromRtt = true;
             }
 
+            // uid: клиент шлёт «Offline» (заглушка в списке игроков). Сервер отдаёт свой
+            // постоянный id — то же число, что в /ids и что принимает /banid. Проверка
+            // только на этом входе, дальше свойство идёт по обычному пути.
+            LobbyVariant serverUid = default;
+            var uidRewritten = key == MatchRoomPropKeys.Uid
+                && TryServerUid(actorNr, st, room, out serverUid);
+            if (uidRewritten)
+                value = serverUid;
+
             // SetProperty is one of the hottest paths (every hit/death/team change). Log it
             // only in verbose mode; the per-key combat/buy traces below stay (decisive).
             if (Diag.LogVerbose)
                 Console.WriteLine(
                     $"[match-host] SetProperty actor={actorNr} key='{key}' value={value}" +
                     (compressed ? " (LZ4→echo uncompressed HasServerTime)" : "") +
-                    (pingFromRtt ? $" (server RTT={peer.RoundTripTime}ms, not client echo)" : ""));
+                    (pingFromRtt ? $" (server RTT={peer.RoundTripTime}ms, not client echo)" : "") +
+                    (uidRewritten ? " (server id instead of client uid)" : ""));
 
             LobbyVariant prevValue = default;
             bool hadPrev;
@@ -210,6 +220,10 @@ public sealed partial class GameMatchHost
                             "(host-owned room prop — not applied/relayed)");
                         continue;
                     }
+
+                    // uid — как в одиночном SetProperty: серверный id вместо клиентского.
+                    if (k == MatchRoomPropKeys.Uid && TryServerUid(actorNr, st, room, out var serverUid))
+                        v = serverUid;
 
                     var had = room.ActorProps.TryGetValue((actorNr, k), out var prevK);
                     diag.Add((k, had ? prevK : default, had, v));

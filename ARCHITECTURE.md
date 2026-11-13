@@ -40,10 +40,13 @@ The last gate matters: a mid-match reconnect adopts the old actor and never runs
 join, so a ban checked only at the first connect could be bypassed (e.g. leave VPN →
 reconnect from the banned address). Admins are exempt by nickname at every gate; banning
 an admin is rejected. The install token is deliberately **not** used — nick + IP only.
+Ban keys are never the public id: `/banid` is a selector that resolves to nick + IPs.
 
 `MatchPublicId` derives a stable `1…100 000 000` id from the nickname (SHA-256 of the
-normalized nick); it never goes on the wire and carries no state, so `/banid` survives
-restarts. `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/banid` still
+normalized nick); it carries no state, so `/banid` survives restarts. The host also
+substitutes it for the client-authored actor property `uid` (players send the `Offline`
+placeholder from the gold capture) so the in-game player list shows the same number
+`/ids` and `/banid` use; the Server actor keeps `Offline`. `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/banid` still
 resolves a player who already left. `banlist.json` lives beside `config.json` and is
 git-ignored.
 

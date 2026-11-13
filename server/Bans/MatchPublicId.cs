@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using StandChillow.LanServer.Config;
@@ -46,6 +47,28 @@ public static class MatchPublicId
 
         const ulong span = (ulong)(Max - Min + 1);
         return (int)(value % span) + Min;
+    }
+
+    /// <summary>
+    /// Значение, которое сервер отдаёт в actor-свойстве <c>uid</c> вместо клиентского
+    /// «Offline»: десятичная строка id (клиент рисует это поле как номер игрока).
+    /// </summary>
+    /// <remarks>
+    /// Строкой, а не числом: в захватах поле <c>uid</c> — String, и любой разбор
+    /// <c>int.TryParse</c> на стороне клиента такую строку принимает. Пустой ник → false,
+    /// тогда исходное значение не трогаем.
+    /// </remarks>
+    public static bool TryWireUid(string? nick, out string uid)
+    {
+        var id = ForNick(nick);
+        if (id == 0)
+        {
+            uid = string.Empty;
+            return false;
+        }
+
+        uid = id.ToString(CultureInfo.InvariantCulture);
+        return true;
     }
 
     /// <summary>Короткая форма для логов.</summary>

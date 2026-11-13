@@ -23,6 +23,25 @@ public sealed class MatchPublicIdTests
     }
 
     [Fact]
+    public void WireUidIsTheDecimalId()
+    {
+        // Клиент присылает uid строкой «Offline» — сервер отдаёт то же самое поле числом.
+        Assert.True(MatchPublicId.TryWireUid("Ktulxy", out var latin));
+        Assert.Equal("8799747", latin);
+
+        Assert.True(MatchPublicId.TryWireUid("влал", out var cyrillic));
+        Assert.Equal("6390243", cyrillic);
+    }
+
+    [Fact]
+    public void WireUidIsRefusedForEmptyNick()
+    {
+        Assert.False(MatchPublicId.TryWireUid(null, out var none));
+        Assert.Equal(string.Empty, none);
+        Assert.False(MatchPublicId.TryWireUid("   ", out _));
+    }
+
+    [Fact]
     public void SameNickAlwaysGivesSameId()
     {
         var first = MatchPublicId.ForNick("Ktulxy");

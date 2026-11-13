@@ -819,6 +819,7 @@ public sealed partial class GameNetHost : IDisposable
         if (_bans is not null)
         {
             _bans.LearnAliases = _config.Admin.Ban.BindAliases;
+            _match.ExposeServerUid = _config.Admin.Ban.ExposeIds;
             var wanted = ResolveBanPath(_config.Admin.Ban.File);
             if (_banStore is not null
                 && !string.Equals(wanted, _banStore.Path, StringComparison.Ordinal))

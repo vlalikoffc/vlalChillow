@@ -90,6 +90,13 @@ public sealed class BanConfig
 
     /// <summary>Как часто проверять, у кого вышел срок, секунд.</summary>
     public int SweepSec { get; set; } = 5;
+
+    /// <summary>
+    /// Отдавать в матч серверный id вместо клиентского <c>uid</c> («Offline»): тогда в игре
+    /// в списке игроков видно число, которое принимает <c>/banid</c>. Выключить — клиент
+    /// снова покажет свою заглушку.
+    /// </summary>
+    public bool ExposeIds { get; set; } = true;
 }
 
 /// <summary>Настройки автостарта (<c>matchStart.mode = "auto"</c>).</summary>
@@ -892,7 +899,8 @@ public sealed class ServerConfig
       "bindAliases": true,        // новый ник/новый IP дописываются в ту же запись
       "notifyEveryone": true,     // всем в лобби: «X забанен на 30м (причина)»
       "shadowRefreshSec": 60,     // как часто обновлять «Разбан через: …»
-      "sweepSec": 5               // как часто проверять, у кого вышел срок
+      "sweepSec": 5,              // как часто проверять, у кого вышел срок
+      "exposeIds": true           // в игре вместо uid «Offline» — серверный id
     }
   },
 

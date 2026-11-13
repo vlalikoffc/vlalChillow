@@ -2,6 +2,7 @@ using System.Net;
 using StandChillow.LanServer.Bans;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Lobby;
 
 namespace StandChillow.LanServer.Net;
 
@@ -62,6 +63,52 @@ public sealed partial class GameMatchHost
 
         entry = default;
         return false;
+    }
+
+    /// <summary>
+    /// Подменять ли клиентский <c>uid</c> («Offline») на серверный id игрока. По умолчанию да:
+    /// тогда в игре вместо заглушки виден номер, который принимает <c>/banid</c>.
+    /// </summary>
+    public bool ExposeServerUid { get; set; } = true;
+
+    /// <summary>
+    /// Новое значение <c>uid</c> для автора свойства: постоянный id его ника.
+    /// </summary>
+    /// <remarks>
+    /// Ник берём из состояния сессии (<c>RosterName</c> после JoinRoom), а не из пакета:
+    /// свойство может прислать кто угодно и про любого актора, а id должен быть тем же,
+    /// что показал <c>/ids</c>. Актор 1 (Server) — не человек, его «Offline» не трогаем.
+    /// </remarks>
+    private bool TryServerUid(byte actorNr, MatchPeerState state, MatchRoom room, out LobbyVariant uid)
+    {
+        uid = default;
+        if (!ExposeServerUid || actorNr == MatchHostActor.ActorNr)
+            return false;
+
+        var nick = actorNr == state.ActorNr && ReferenceEquals(state.Room, room)
+            ? state.RosterName
+            : null;
+
+        if (string.IsNullOrWhiteSpace(nick))
+        {
+            // Свойства может прислать хост за игрока — тогда его состояния под рукой нет
+            // и ник ищем по сессиям комнаты (после JoinRoom он уже записан).
+            foreach (var other in _peers.Values)
+            {
+                if (other.ActorNr != actorNr || !ReferenceEquals(other.Room, room))
+                    continue;
+                if (string.IsNullOrWhiteSpace(other.RosterName))
+                    continue;
+                nick = other.RosterName;
+                break;
+            }
+        }
+
+        if (!MatchPublicId.TryWireUid(nick, out var text))
+            return false;
+
+        uid = LobbyVariant.FromString(text);
+        return true;
     }
 
     private IPAddress? AddressOfActorLocked(MatchRoom room, byte actorNr)
