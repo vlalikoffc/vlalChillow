@@ -20,7 +20,9 @@ internal static class MatchRoomRoster
     public static byte? FindFreeActorNr(
         IReadOnlyList<(byte Nr, string Name, string UserId)> actors)
     {
-        for (var nr = FirstHumanActorNr; nr <= 255; nr++)
+        // int, not byte: a byte loop wraps 255→0, so a full roster returned actor 0 instead of
+        // "no free id" (caught by the full-roster test).
+        for (var nr = (int)FirstHumanActorNr; nr <= 255; nr++)
         {
             var used = false;
             for (var i = 0; i < actors.Count; i++)
