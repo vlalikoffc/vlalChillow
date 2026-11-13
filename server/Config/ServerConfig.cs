@@ -468,10 +468,10 @@ public sealed class ServerConfig
             Admin.Ban.MaxDays, 1, 365, 14, "admin.ban.maxDays");
         if (Admin.Ban.MaxDays * 1440 < Admin.Ban.MinMinutes)
         {
-            Report("admin.ban.maxDays", Admin.Ban.MaxDays,
-                Admin.Ban.MinMinutes.ToString(),
+            var fixedDays = (Admin.Ban.MinMinutes + 1439) / 1440;
+            Report("admin.ban.maxDays", Admin.Ban.MaxDays.ToString(), fixedDays.ToString(),
                 $"меньше минимального срока ({Admin.Ban.MinMinutes} мин) — поднял до него");
-            Admin.Ban.MaxDays = (Admin.Ban.MinMinutes + 1439) / 1440;
+            Admin.Ban.MaxDays = fixedDays;
         }
         Admin.Ban.ShadowRefreshSec = Check(
             Admin.Ban.ShadowRefreshSec, 10, 600, 60, "admin.ban.shadowRefreshSec");
