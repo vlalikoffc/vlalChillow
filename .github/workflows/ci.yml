@@ -29,7 +29,7 @@ jobs:
           - os: macos-latest
             rid: osx-x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -97,7 +97,7 @@ jobs:
       # gh release create --generate-notes needs a git repo to find the previous tag
       # ("fatal: not a git repository (or any of the parent directories): .git"),
       # so check out the tagged commit before touching the release.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -139,7 +139,7 @@ jobs:
     # once `dotnet format` reports a clean run.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -152,7 +152,7 @@ jobs:
     name: hygiene guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Reverse-engineering dumps, game binaries and runtime captures must never
       # enter the published tree.
