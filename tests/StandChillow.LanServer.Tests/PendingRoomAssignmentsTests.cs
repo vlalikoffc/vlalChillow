@@ -191,12 +191,39 @@ public sealed class PendingRoomAssignmentsTests
         reg.Reserve("room#1", "старый", ttl: TimeSpan.FromSeconds(10));
 
         clock.Now = clock.Now.AddSeconds(30);
+
+        // Reserve сам чистит просроченные записи, поэтому к этому моменту
+        // room#1 уже удалён — Prune не находит ничего нового.
         reg.Reserve("room#2", "новый", ttl: TimeSpan.FromSeconds(600));
 
-        Assert.Equal(1, reg.Prune());
+        Assert.Equal(0, reg.Prune());
         Assert.Single(reg.Snapshot());
         Assert.True(reg.TryResolve("новый", null, null, out var key));
         Assert.Equal("room#2", key);
+
+        // И старая бронь больше не резолвится.
+        Assert.False(reg.TryResolve("старый", null, null, out _));
+    }
+
+    [Fact]
+    public void PruneKeepsLiveReservationsAndDropsExpiredOnes()
+    {
+        // Prune должен снимать только истёкшие записи. Свежая и старая, но живая —
+        // остаются. Проверяем без Reserve между шагами: Reserve чистит сам.
+        var clock = new ClockState { Now = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc) };
+        var reg = new PendingRoomAssignments(() => clock.Now);
+        reg.Reserve("room#expired", "старый", ttl: TimeSpan.FromSeconds(10));
+        reg.Reserve("room#live", "живой", ttl: TimeSpan.FromSeconds(600));
+
+        clock.Now = clock.Now.AddSeconds(30);
+
+        Assert.Equal(1, reg.Prune());
+        var snap = reg.Snapshot();
+        Assert.Single(snap);
+        Assert.Equal("room#live", snap[0].PasswordKey);
+
+        // Повторный Prune ничего не находит — идемпотентность.
+        Assert.Equal(0, reg.Prune());
     }
 
     [Fact]

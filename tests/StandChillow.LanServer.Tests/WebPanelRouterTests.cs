@@ -185,7 +185,8 @@ public sealed class WebPanelRouterTests
     [Fact]
     public void FailedGameRoomCreationRollsBackRegistry()
     {
-        var router = NewRouter(out var rooms, _ => "игровой порт не поднялся");
+        var attempts = 0;
+        var router = NewRouter(out var rooms, _ => ++attempts == 1 ? "игровой порт не поднялся" : null);
 
         var response = router.Route(Post("/api/rooms", """{"mode":"2v2","owner":"a"}"""));
 
