@@ -235,15 +235,68 @@ public sealed partial class GameNetHost : IDisposable
         lock (_gate)
             _matchStarted = true;
 
-        _session.Searching = true;
-        _session.GameInProgress = true;
+        // ВАЖНО: здесь НЕ шлём op9 всем. Клиент на любой op9 с hasHosting=1 сразу
+        // прыгает на 7777 (BeginMatchConnect), где без брони его ждёт fallback в
+        // legacy-комнату 'Dedik' с глобальными режимом и картой. Именно поэтому
+        // всех, кто ничего не писал, уносило «в параллельное измерение».
+        // Сигнал уходит адресно — см. NotifyPanelRoomReady(nick).
+        Console.WriteLine(
+            $"[lobby] матч-порт открыт ({reason}): ждём /join " +
+            $"<режим> #<номер> (баннер всем не шлём — только вошедшим)");
+        return true;
+    }
 
-        PushInProgressLobbySignals(broadcastAll: true);
+    /// <summary>
+    /// Позвать конкретного игрока в комнату: <c>op9</c> с адресом матча уходит только
+    /// ему, после того как он сам написал <c>/join</c> и получил бронь.
+    /// </summary>
+    /// <remarks>
+    /// Без этого либо никто не попадает в комнату (op9 никому), либо туда уносит всех
+    /// подряд (op9 всем) — второй вариант и был багом: клиент не знает, бронировал ли
+    /// он что-нибудь, и на любой hosting-сигнал идёт на 7777, где попадает в
+    /// legacy-комнату.
+    /// </remarks>
+    /// <returns><c>true</c>, если игрок найден и сигнал отправлен.</returns>
+    public bool NotifyPanelRoomReady(string nick)
+    {
+        if (string.IsNullOrWhiteSpace(nick))
+            return false;
+
+        ConnectedPlayer? target = null;
+        foreach (var p in _session.JoinedPlayers())
+        {
+            if (string.Equals(
+                    ServerConfig.NormalizeNick(p.Name),
+                    ServerConfig.NormalizeNick(nick),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                target = p;
+                break;
+            }
+        }
+
+        if (target is null)
+        {
+            // Игрок ещё не в лобби: он узнает адрес матча из JoinResponse
+            // (hasHosting=1 проставляется по _matchStarted) — путь штатный.
+            Console.WriteLine(
+                $"[lobby] игрок '{nick}' ещё не в лобби — адрес матча получит при входе");
+            return false;
+        }
+
+        var modePkt = LobbyCodec.BuildCustomProperties(_session.BuildModeLevelProps());
+        var searchingPkt = LobbyCodec.BuildCustomProperty(
+            LobbyPropKeys.SearchingStarted, LobbyVariant.FromBool(true));
+        var hostingPkt = LobbyCodec.BuildGameHostingState(
+            _advertiseLanIp.ToString(), (ushort)GameMatchHost.DefaultMatchPort);
+
+        Send(target.Peer, modePkt);
+        Send(target.Peer, searchingPkt);
+        Send(target.Peer, hostingPkt);
 
         Console.WriteLine(
-            $"[lobby] матч-порт открыт ({reason}): op9 " +
-            $"{_advertiseLanIp}:{GameMatchHost.DefaultMatchPort} " +
-            "(комнаты панели ждут игроков)");
+            $"[lobby] '{target.Name}' → op9 {_advertiseLanIp}:{GameMatchHost.DefaultMatchPort} " +
+            "(по своей брони, остальные остаются в лобби)");
         return true;
     }
 

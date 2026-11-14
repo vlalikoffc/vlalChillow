@@ -86,9 +86,14 @@ public sealed partial class GameNetHost
         }
 
         // Комнату создали с панели — она уже armed; здесь ничего не армим.
+
+        // Бронь лежит — зовём именно этого игрока на 7777. Клиент не угадывает:
+        // адрес матча приходит ему одному в op9, остальные остаются в лобби.
+        var sent = NotifyPanelRoomReady(nick);
+
         var ok =
             $"комната «{room.Name}» ({mode.DisplayName} * {parsed.RoomNumber}) — " +
-            $"заходи в игру, попадёшь туда (бронь 2 мин)";
+            (sent ? "входи" : "бронь есть, зайди в игру и ты попадёшь туда (2 мин)");
         Console.WriteLine($"[lobby] {who}: {ok}");
         reply(ok);
         BroadcastServerChat($"{nick} → комната «{room.Name}» {mode.DisplayName} * {parsed.RoomNumber}");
