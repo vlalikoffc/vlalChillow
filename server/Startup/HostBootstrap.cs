@@ -205,11 +205,9 @@ public static class HostBootstrap
         Console.WriteLine($"  mode/levels  : {game.Session.GameModeId} / [{string.Join(", ", game.Session.SelectedLevels)}]");
         Console.WriteLine($"  discovery    : cxbl={(current.HasExtraStrings ? 1 : 0)} (1=map waiting, 0=Join in-progress)");
         Console.WriteLine($"  payload hex  : {current.ToHex()}");
-        Console.WriteLine("Phone: LAN list → join → chat /mode /map /set · /play · /start · /end · /help");
-        Console.WriteLine("Expect: op7 → SearchingStarted → op9 LAN:7777 → Handshake → JoinRoom Dedik.");
-        Console.WriteLine("After both teams: /set start | set start | start | startmatch → WarmUp.");
-        Console.WriteLine("Rematch: after MatchResults wait 5s → lobby idle (7777 stopped); /play then /set start.");
-        Console.WriteLine("Early end: /end | set end | stopmatch — immediate teardown (no 5s).");
+        Console.WriteLine("Phone: LAN list → join → chat /join <режим> #<номер> · /help");
+        Console.WriteLine("Комнаты создаются на сайте; вход — только /join. Старт — сам, когда обе команды ≥1.");
+        Console.WriteLine("End: /end | set end | stopmatch — immediate teardown (no 5s).");
         Console.WriteLine(
             serverConfig.Debug.Captures
                 ? $"Captures: {(string.IsNullOrWhiteSpace(serverConfig.Debug.CapturesDir) ? "captures/" : serverConfig.Debug.CapturesDir)}"

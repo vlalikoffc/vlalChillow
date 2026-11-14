@@ -70,12 +70,13 @@ public sealed class BanCommandAccessTests
     }
 
     [Fact]
-    public void StartingTheMatchStaysOpenWhenBanGateIsOn()
+    public void ModeAndMapStayOpenWhenBanGateIsOn()
     {
+        // Бановый гейт закрывает /ban и /ids — на выбор режима/карты он не влияет.
+        // /play и /start из проверки убраны: этих команд больше нет.
         var cfg = Config("влал");
 
         Assert.True(CommandAccessPolicy.IsAllowed(cfg, "игрок", "/mode Escalation", out _));
-        Assert.True(CommandAccessPolicy.IsAllowed(cfg, "игрок", "/play", out _));
-        Assert.True(CommandAccessPolicy.IsAllowed(cfg, "игрок", "/start", out _));
+        Assert.True(CommandAccessPolicy.IsAllowed(cfg, "игрок", "/map Sandstone", out _));
     }
 }

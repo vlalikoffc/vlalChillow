@@ -283,8 +283,6 @@ public static class MatchHostSettings
     public static string FormatSetHelp() =>
         """
         /set — параметры дедика:
-          /set start         разрешить WarmUp когда обе команды ≥1 (иначе C2=10 ждёт)
-                             (то же: console start|startmatch; НЕ /play — /play = rematch teardown)
           /set round <N>     Escalation MR-N max rounds (default 8)
           /set wins <N>      bomb-family first-to-N (Allies/Alt/RankedDefuse=8, Defuse=6)
           /set team <t>      ct|tr|t|spectator — себе в матче (SetProperty team)

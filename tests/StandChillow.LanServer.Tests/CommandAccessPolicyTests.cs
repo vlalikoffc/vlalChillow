@@ -29,14 +29,7 @@ public sealed class CommandAccessPolicyTests
     [InlineData("/mode Escalation")]
     [InlineData("/map")]
     [InlineData("/map Sandstone")]
-    [InlineData("/start")]
-    [InlineData("/startmatch")]
-    [InlineData("/старт")]
-    [InlineData("/play")]
-    [InlineData("/игра")]
-    [InlineData("start")]
-    [InlineData("play")]
-    public void StartingTheMatch_IsAllowedForEveryoneByDefault(string message)
+    public void ChoosingModeAndMap_IsAllowedForEveryoneByDefault(string message)
     {
         var cfg = Default();
 
@@ -48,11 +41,13 @@ public sealed class CommandAccessPolicyTests
     [Theory]
     [InlineData("/set start")]
     [InlineData("set start")]
-    public void SetStart_StartsTheMatchAndIsAllowedForEveryone(string message)
+    public void SetStart_IsStillRecognisedAsAMatchStartByThePolicy(string message)
     {
         var cfg = Default();
 
-        // anyoneCanStart=true по умолчанию: /set start — это запуск катки, а не настройка.
+        // Запуска катки командой больше нет — диспетчер на «/set start» отвечает
+        // «убран». Но разбор строки и права остались прежними, и тест держит эту
+        // границу: политика не должна начать считать запуск админской настройкой.
         Assert.True(Allowed(cfg, "случайный игрок", message, out _));
     }
 
@@ -131,19 +126,14 @@ public sealed class CommandAccessPolicyTests
     }
 
     [Fact]
-    public void WhenNobodyCanStart_StartIsClosedByTheAdminList()
+    public void StartCommandsAreGoneButTheGateStillTreatsSetAsAdminOnly()
     {
-        // anyoneCanStart только снимает гейт; чтобы /start стал админским,
-        // его надо явно добавить в adminOnlyCommands (по умолчанию там set и end).
+        // Запуска катки командой больше нет: /play и /start не разбирает диспетчер.
+        // Гейт прав остался прежним и по-прежнему закрывает /set (а значит и
+        // «/set start», если такой текст вообще придёт) от не-админов.
         var cfg = Default();
         cfg.Admin.Nicknames.Add("влал");
-        cfg.Admin.AnyoneCanStart = false;
-        cfg.Admin.AdminOnlyCommands.Add("start");
 
-        Assert.False(Allowed(cfg, "случайный игрок", "/start", out _));
-        Assert.True(Allowed(cfg, "влал", "/start", out _));
-
-        // /set start по-прежнему закрыт админ-гейтом на set.
         Assert.False(Allowed(cfg, "случайный игрок", "/set start", out _));
         Assert.True(Allowed(cfg, "влал", "/set start", out _));
     }
@@ -162,13 +152,16 @@ public sealed class CommandAccessPolicyTests
     [Fact]
     public void CustomAdminOnlyList_IsRespectedForOtherCommands()
     {
+        // Список админских команд — общий механизм конфига, а не перечень
+        // существующих команд. Запуск катки из него убран, поэтому проверяем
+        // на команде, которая осталась: /mode закрыли — она закрыта только админу.
         var cfg = Default();
-        cfg.Admin.AdminOnlyCommands.Add("play");
+        cfg.Admin.AdminOnlyCommands.Add("mode");
         cfg.Admin.Nicknames.Add("влал");
 
-        Assert.False(Allowed(cfg, "игрок", "/play", out _));
-        Assert.True(Allowed(cfg, "влал", "/play", out _));
-        Assert.True(Allowed(cfg, "игрок", "/mode", out _));
+        Assert.False(Allowed(cfg, "игрок", "/mode", out _));
+        Assert.True(Allowed(cfg, "влал", "/mode", out _));
+        Assert.True(Allowed(cfg, "игрок", "/help", out _));
     }
 
     [Fact]
@@ -249,7 +242,6 @@ public sealed class CommandAccessPolicyTests
     [Theory]
     [InlineData("/help")]
     [InlineData("/ready")]
-    [InlineData("/start")]
     [InlineData("/set start")]
     public void PublicCommands_NeverAskForAdminRights(string message)
     {

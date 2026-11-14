@@ -798,36 +798,6 @@ public sealed partial class GameNetHost : IDisposable
     }
 
     /// <summary>
-    /// Explicit rematch / first Play: <c>/play</c> (or Russian <c>игра</c>). May HardReset.
-    /// </summary>
-    public static bool IsPlayCommand(string message)
-    {
-        var m = message.Trim();
-        if (m.StartsWith('/'))
-            m = m[1..];
-        return m.Equals("play", StringComparison.OrdinalIgnoreCase)
-               || m.Equals("игра", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Arm WarmUp gate (<c>/start</c>, <c>старт</c>, <c>startmatch</c>) — never HardReset.
-    /// First launch still needs <see cref="IsPlayCommand"/> / <c>play</c> if match not up.
-    /// </summary>
-    public static bool IsArmWarmupCommand(string message)
-    {
-        var m = message.Trim();
-        if (m.StartsWith('/'))
-            m = m[1..];
-        return m.Equals("start", StringComparison.OrdinalIgnoreCase)
-               || m.Equals("startmatch", StringComparison.OrdinalIgnoreCase)
-               || m.Equals("старт", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>Legacy alias — prefer <see cref="IsPlayCommand"/> / <see cref="IsArmWarmupCommand"/>.</summary>
-    public static bool IsStartCommand(string message) =>
-        IsPlayCommand(message) || IsArmWarmupCommand(message);
-
-    /// <summary>
     /// Console/chat <c>start</c>: if match not launched yet, first Play (no rematch teardown);
     /// if already in Dedik WaitingPlayers / mid-match, arm WarmUp only (never HardReset).
     /// </summary>
