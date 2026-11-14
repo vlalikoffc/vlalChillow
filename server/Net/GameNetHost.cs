@@ -612,10 +612,16 @@ public sealed partial class GameNetHost : IDisposable
             // Lobby join is quiet for match-style Подключился — that fires on JoinRoom Found.
             BroadcastServerChat(_session.BuildPlayerListMessage());
         });
-        Schedule(80, () => SendServerChatTo(peer,
-            _matchStarted
-                ? "матч уже идёт — JoinRoom Dedik на 7777 (не новый start)"
-                : FormatCommandHelp()));
+
+        // Инструкцию по командам при входе НЕ шлём: она занимала весь экран чата
+        // раньше, чем человек успевал что-то прочитать, и половина строк была про
+        // команды, которые больше не нужны (комнаты теперь создаются на сайте).
+        // Игрок видит только «кто он такой», а список — по /help, когда сам попросит.
+        if (_matchStarted)
+        {
+            Schedule(80, () => SendServerChatTo(peer,
+                "матч уже идёт — /join <режим> #<номер> или JoinRoom Dedik на 7777"));
+        }
 
         // Late joiner into running match: also push PropertyChanged + op9 (JoinResponse may already
         // embed hasHosting; op9 is the live phone path clients always listen for).

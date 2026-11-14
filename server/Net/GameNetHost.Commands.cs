@@ -79,7 +79,10 @@ public sealed partial class GameNetHost
             || cmd.Equals("?", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("команды", StringComparison.OrdinalIgnoreCase))
         {
-            foreach (var line in FormatCommandHelp().Split('\n'))
+            // Игроку — короткая памятка, оператору в консоли — полная.
+            // Консоль зовёт диспетчер с who = "console".
+            var help = who == "console" ? FormatConsoleHelp() : FormatPlayerHelp();
+            foreach (var line in help.Split('\n'))
                 reply(line.TrimEnd());
             return true;
         }
@@ -247,7 +250,30 @@ public sealed partial class GameNetHost
         || cmd.Equals("stopmatch", StringComparison.OrdinalIgnoreCase)
         || cmd.Equals("стопматч", StringComparison.OrdinalIgnoreCase);
 
-    public static string FormatCommandHelp() =>
+    /// <summary>
+    /// Краткая памятка для игрока: только то, что ему действительно нужно.
+    /// </summary>
+    /// <remarks>
+    /// Комнаты создаются на сайте, поэтому <c>/mode</c>, <c>/map</c>, <c>/start</c>,
+    /// <c>/play</c> и <c>/set</c> в этой памятке не упоминаются: игроку они больше не
+    /// нужны, а длинный список при входе только закрывал экран чата. Команды не
+    /// удалены — они остались для консоли сервера и легаси-пути (см.
+    /// <see cref="FormatConsoleHelp"/>), но игрок о них не узнаёт.
+    /// </remarks>
+    public static string FormatPlayerHelp() =>
+        """
+        /join <режим> #<номер>  войти в комнату с сайта
+        /ready, /unready        готовность к старту
+        /whoami                 твой ник, ID и IP
+        /help                   эта памятка
+        Комнату создают на сайте — там же кнопка «создать» и номер комнаты.
+        """.Trim();
+
+    /// <summary>
+    /// Полная памятка: консоль сервера и дашборд. Здесь оператору нужны все команды,
+    /// включая те, что игрокам больше не показываются.
+    /// </summary>
+    public static string FormatConsoleHelp() =>
         """
         команды: /mode /map /join /set /play /start /end /ready /ban /help
           /mode [alias]  список или сменить режим
@@ -269,6 +295,11 @@ public sealed partial class GameNetHost
         Те же команды работают в чате катки: ответ придёт туда же и только тебе.
         «Только админ» — это ник в admin.nicknames плюс код этого запуска (/whoami).
         """.Trim();
+
+    /// <summary>
+    /// Совместимость: прежнее имя полной памятки.
+    /// </summary>
+    public static string FormatCommandHelp() => FormatConsoleHelp();
 
     private static string FormatUnknownCommandHelp(string message) =>
         $"неизвестная команда '{message}' — /help";
