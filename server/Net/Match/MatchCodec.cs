@@ -753,10 +753,16 @@ public static class MatchCodec
     };
 
     /// <summary>
-    /// WorldObjectRpc (<c>fuo=203</c> / <c>fvh</c>): objectId, rpc byte, <c>gaa</c> target,
-    /// short, double, then method payload. Live pawn rpc: id=129, rpc=1,
-    /// gaa=AllCachedViaServer(4), short=2, double≈serverTime/1000.
+    /// WorldObjectRpc (<c>fuo=203</c> / <c>fvh</c>): objectId, invoker-actor byte, <c>gaa</c>
+    /// target, method <c>field</c>, double, then method payload. Live pawn rpc: id=129,
+    /// actor=1 (owner пешки), gaa=AllCachedViaServer(4), field=2, double≈serverTime/1000.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="rpcId"/> исторически назван «rpc», но это <b>номер актора, вызвавшего
+    /// Rpc</b>: метод задаёт <paramref name="field"/> (<c>[Rpc(N)]</c>). Доказательство в
+    /// капчах — см. <see cref="ChatRpcId"/>. Релей всегда передаёт кадр как есть, поэтому
+    /// автор чужого сообщения сохраняется; менять байт можно только осознанно.
+    /// </remarks>
     public static byte[] BuildWorldObjectRpc(
         int serverTime,
         short objectId,
@@ -773,9 +779,14 @@ public static class MatchCodec
     }
 
     /// <summary>
-    /// Chat bubble in a live match: <b>ChatManager</b> scene object (id=7), <c>rpc=1</c>,
+    /// Chat bubble in a live match: <b>ChatManager</b> scene object (id=7), author actor byte,
     /// <c>gaa=AllCachedViaServer(3)</c>, <c>field=1</c>, payload = length byte + UTF-8 text.
     /// </summary>
+    /// <param name="authorActorNr">
+    /// Кем подписано сообщение: клиент подставляет номер своего актора (капчи chat.zip: 1, 2, 3),
+    /// сервер — актора хоста (<see cref="ChatRpcId"/>). Байт не влияет на текст, но именно по
+    /// нему клиент понимает, чей это пузырь.
+    /// </param>
     /// <remarks>
     /// Rebuilt from three Dedik <b>host→client</b> captures of real chat
     /// (<c>20261112_040303_23056_match_rx65980_WorldObjectRpc_len38.bin</c> «уебище »,
@@ -788,6 +799,7 @@ public static class MatchCodec
     public static byte[] BuildChatManagerText(
         int serverTime,
         string text,
+        byte authorActorNr = ChatRpcId,
         byte gaaTarget = 3,
         short field = 1)
     {
@@ -800,15 +812,27 @@ public static class MatchCodec
         return BuildWorldObjectRpc(
             serverTime,
             objectId: MatchSceneManagers.ChatManagerObjectId,
-            rpcId: ChatRpcId,
+            rpcId: authorActorNr,
             gaaTarget: gaaTarget,
             field: field,
             timeValue: serverTime / 1000.0,
             payload: payload);
     }
 
-    /// <summary>ChatManager <c>rpc</c> observed on every live chat capture (host and relayed).</summary>
-    public const byte ChatRpcId = 1;
+    /// <summary>
+    /// Байт перед <c>gaa</c> в теле <c>WorldObjectRpc</c> — <b>номер актора, вызвавшего Rpc</b>,
+    /// а не id метода (метод — это <c>field</c>, <c>[Rpc(N)]</c>). Серверное сообщение в чате
+    /// катки подписано актором хоста: <see cref="MatchHostActor.ActorNr"/> = 1, «Server».
+    /// </summary>
+    /// <remarks>
+    /// Капчи, а не догадка: в gold-наборе у RadarManager (id=6) один и тот же
+    /// <c>field=7</c> с пустым payload ходит с этим байтом 1, 2, 3 и 4 — по 56 кадров на
+    /// каждое значение, ровно по числу игроков в матче; у пешек байт совпадает с <c>owner</c>
+    /// их <c>CreateWorldObject</c> в 9 случаях из 10 (единственное расхождение — Rpc актора 1
+    /// на пешке актора 2, <c>field=5</c>). В <c>captures/chat.zip</c> три сообщения чата
+    /// подписаны 1, 2 и 3 («я хост», «я клиент», «ya client») — по актору автора.
+    /// </remarks>
+    public const byte ChatRpcId = MatchHostActor.ActorNr;
 
     /// <summary>
     /// Payload begins with a single length byte, so at most 255 UTF-8 bytes of text fit.

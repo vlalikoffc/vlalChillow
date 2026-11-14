@@ -23,6 +23,12 @@ public sealed partial class GameNetHost
     private const int PendingReplyTtlSeconds = 60;
     private const int PendingReplyMaxPerNick = 8;
 
+    /// <summary>
+    /// Ключ очереди для сообщения «всем в катке» (без адресата). Нормализованный ник живого
+    /// игрока пустым не бывает, поэтому ключ не конфликтует с адресными ответами.
+    /// </summary>
+    public const string BroadcastReplyNick = "";
+
     private readonly object _replyGate = new();
 
     /// <summary>1 — свипер уже крутится (не плодим таймеры на каждое сообщение).</summary>
@@ -56,8 +62,10 @@ public sealed partial class GameNetHost
     /// </summary>
     private void RememberMatchReply(string nick, string text, IPAddress? address)
     {
-        var key = ServerConfig.NormalizeNick(nick);
-        if (key.Length == 0 || string.IsNullOrWhiteSpace(text))
+        // Пустой ник — это не «никто», а легальный ключ широкого сообщения (всем в катке):
+        // нормализованный ник живого игрока пустым не бывает.
+        var key = nick.Length == 0 ? BroadcastReplyNick : ServerConfig.NormalizeNick(nick);
+        if (string.IsNullOrWhiteSpace(text))
             return;
 
         lock (_replyGate)
@@ -76,7 +84,9 @@ public sealed partial class GameNetHost
 
         // Не три попытки по таймеру, а свипер раз в секунду: бутстрап пира ждёт identity
         // до 15 с (softTimeout), и ответ, отправленный «через 6 секунд», просто терялся.
-        Console.WriteLine($"[chat] Server → {nick}: ответ отложен до подключения к катке");
+        Console.WriteLine(key.Length == 0
+            ? "[chat] Server → match: в катке пока никого — сообщение отложено"
+            : $"[chat] Server → {nick}: ответ отложен до подключения к катке");
         StartMatchReplySweeper();
     }
 
@@ -126,9 +136,8 @@ public sealed partial class GameNetHost
     /// </summary>
     private void FlushMatchReplies(string nick)
     {
-        var key = ServerConfig.NormalizeNick(nick);
-        if (key.Length == 0)
-            return;
+        var key = nick.Length == 0 ? BroadcastReplyNick : ServerConfig.NormalizeNick(nick);
+        var broadcast = key.Length == 0;
 
         List<PendingMatchReply>? batch;
         lock (_replyGate)
@@ -144,13 +153,25 @@ public sealed partial class GameNetHost
         {
             if (item.IsExpired)
             {
-                Console.WriteLine($"[chat] Server → {nick}: ответ так и не доставлен (истёк): {item.Text}");
+                Console.WriteLine(broadcast
+                    ? $"[chat] Server → match: сообщение так и не доставлено (истекло): {item.Text}"
+                    : $"[chat] Server → {nick}: ответ так и не доставлен (истёк): {item.Text}");
                 continue;
             }
-            if (_match.SendServerChat(item.Text, nick: nick, alsoLastChanceIp: item.Address) > 0)
-                Console.WriteLine($"[chat] Server → {nick} (match, отложенно): {item.Text}");
+
+            var delivered = broadcast
+                ? _match.SendServerChat(item.Text)
+                : _match.SendServerChat(item.Text, nick: nick, alsoLastChanceIp: item.Address);
+            if (delivered > 0)
+            {
+                Console.WriteLine(broadcast
+                    ? $"[chat] Server → match (отложенно, peers={delivered}): {item.Text}"
+                    : $"[chat] Server → {nick} (match, отложенно): {item.Text}");
+            }
             else
+            {
                 keep.Add(item);
+            }
         }
 
         if (keep.Count == 0)

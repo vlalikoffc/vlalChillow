@@ -105,4 +105,89 @@ public sealed class MatchChatWireTests
         Assert.True(MatchCodec.TryParseChatManagerText(payload, out var text));
         Assert.All(text, ch => Assert.Equal('я', ch));
     }
+
+    /// <summary>
+    /// <c>captures/chat.zip</c> (проба-клиент у телефон-хоста, 2026-11-14): три настоящих
+    /// сообщения чата катки. Байт перед <c>gaa</c> — <b>номер актора автора</b>, а не id метода:
+    /// «я хост» подписан актором 1, «я клиент» — 2, «ya client» — 3, <c>field</c> у всех 1.
+    /// Тот же вывод по gold-набору: у RadarManager <c>field=7</c> с пустым payload ходит со
+    /// значениями 1..4 (по 56 кадров), а у пешек байт совпадает с <c>owner</c>.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "04CBFF2B410000000000070001030100F0A7C64B17AFB0400BD18F20D185D0BED181D182",
+        1, "я хост")]
+    [InlineData(
+        "04CBAF404100000000000700020301000000000060B4B0400FD18F20D0BAD0BBD0B8D0B5D0BDD182",
+        2, "я клиент")]
+    [InlineData(
+        "04CBA65F41000000000007000303010079E9263148BCB04009796120636C69656E74",
+        3, "ya client")]
+    public void CapturedMatchChat_DecodesWithItsAuthorActor(string hex, byte author, string expected)
+    {
+        var raw = Convert.FromHexString(hex);
+        Assert.True(MatchCodec.TryOpenBody(raw, out _, out var op, out _, out var body));
+        Assert.Equal(MatchOpcode.WorldObjectRpc, op);
+
+        var parsed = MatchCodec.ParseWorldObjectRpcBody(new LobbyReader(body));
+        Assert.Equal(MatchSceneManagers.ChatManagerObjectId, parsed.ObjectId);
+        Assert.Equal(author, parsed.RpcId);
+        Assert.Equal(3, parsed.GaaTarget); // AllCachedViaServer — эхо уходит и автору
+        Assert.Equal(1, parsed.Field);
+        Assert.True(MatchCodec.TryParseChatManagerText(parsed.Payload, out var text));
+        Assert.Equal(expected, text);
+    }
+
+    /// <summary>
+    /// Релей чужого чата не переподписывает сообщение: тело эха совпадает с принятым кадром
+    /// побайтово (меняется только serverTime в заголовке хоста).
+    /// </summary>
+    [Fact]
+    public void RelayEcho_KeepsTheCapturedBodyByteForByte()
+    {
+        var raw = Convert.FromHexString(
+            "04CBAF404100000000000700020301000000000060B4B0400FD18F20D0BAD0BBD0B8D0B5D0BDD182");
+        Assert.True(MatchCodec.TryOpenBody(raw, out _, out _, out _, out var body));
+        var parsed = MatchCodec.ParseWorldObjectRpcBody(new LobbyReader(body));
+
+        var echo = MatchCodec.BuildWorldObjectRpc(
+            4276999,
+            parsed.ObjectId,
+            parsed.RpcId,
+            parsed.GaaTarget,
+            parsed.Field,
+            parsed.TimeValue,
+            parsed.Payload);
+
+        Assert.Equal(body, echo.AsSpan(HostHeaderLen).ToArray());
+    }
+
+    /// <summary>
+    /// Серверное сообщение подписано актором хоста: клиент берёт имя автора из этого байта,
+    /// поэтому «Server» в ростере комнаты (актор 1) и есть подпись серверного пузыря.
+    /// </summary>
+    [Fact]
+    public void ServerAuthoredChat_IsSignedByTheHostActor()
+    {
+        var packet = MatchCodec.BuildChatManagerText(4276399, "я клиент");
+
+        // Байт автора стоит сразу за i16 id объекта: 10 (заголовок) + 2 (id) = 12.
+        Assert.Equal(MatchHostActor.ActorNr, packet[HostHeaderLen + 2]);
+        Assert.Equal(MatchHostActor.ActorNr, MatchCodec.ChatRpcId);
+    }
+
+    /// <summary>
+    /// Номер актора — ровно один байт: два автора при том же тексте и времени дают кадры,
+    /// которые отличаются только им. Ничего другого подпись за собой не тянет.
+    /// </summary>
+    [Fact]
+    public void AuthorByte_IsTheOnlyDifferenceBetweenTwoAuthors()
+    {
+        var one = MatchCodec.BuildChatManagerText(1000, "привет", authorActorNr: 2);
+        var other = MatchCodec.BuildChatManagerText(1000, "привет", authorActorNr: 3);
+
+        Assert.Equal(one.Length, other.Length);
+        var diff = Enumerable.Range(0, one.Length).Where(i => one[i] != other[i]).ToArray();
+        Assert.Equal(new[] { HostHeaderLen + 2 }, diff);
+    }
 }

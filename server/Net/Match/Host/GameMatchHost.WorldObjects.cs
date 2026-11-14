@@ -243,6 +243,10 @@ public sealed partial class GameMatchHost
                 Console.WriteLine(
                     $"[match-host] ChatManager text actor={st.ActorNr}" +
                     (chatActorName.Length > 0 ? $" ({chatActorName})" : "") +
+                    // Байт «rpc» в теле — номер актора, который вызвал Rpc (капчи: у пешек он
+                    // совпадает с owner, у RadarManager field=7 ходит 1..4 по числу игроков).
+                    // В журнале видно, тем ли актором подписался клиент.
+                    $" wire-author={parsed.RpcId} gaa={parsed.GaaTarget} field={parsed.Field}" +
                     $": {chatText}");
 
                 // Обычный чат катки живёт только на 7777 — сервер и дашборд его раньше
@@ -420,18 +424,22 @@ public sealed partial class GameMatchHost
 
             // BombManager Rpc carry plant / defuse / explode. Relaying them is structural: a
             // dropped defuse or explode Rpc leaves that peer in a live round that is already
-            // over on everyone else (#33). Everything else stays droppable cosmetic traffic.
+            // over on everyone else (#33). ChatManager Rpc is structural for the same reason:
+            // the client does not draw its own bubble, it waits for this echo — a drop here is
+            // a message nobody ever sees (MatchChatDelivery). Everything else stays droppable.
             var isBombManagerRpc = parsed.ObjectId == MatchFlowTestParams.BombManagerObjectId;
-            var n = isBombManagerRpc
+            var isChatManagerRpc = MatchChatDelivery.IsChatRpc(parsed.ObjectId);
+            var n = MatchChatDelivery.IsStructuralRpc(parsed.ObjectId)
                 ? BroadcastInitReadyCritical(
                     st.Room, echo, tag: "match_tx_WorldObjectRpc", except: exceptSender)
                 : BroadcastInitReadyExcept(
                     st.Room, exceptSender, echo, tag: "match_tx_WorldObjectRpc", capture: logRpc);
             if (logRpc)
             {
+                var critical = isBombManagerRpc ? " critical=bomb" : isChatManagerRpc ? " critical=chat" : "";
                 Console.WriteLine(
                     $"[match-host] TX relay WorldObjectRpc id={parsed.ObjectId} rpc={parsed.RpcId} " +
-                    $"→ peers={n} exceptSender={(exceptSender is null ? "no(ViaServer)" : "yes")}");
+                    $"→ peers={n} exceptSender={(exceptSender is null ? "no(ViaServer)" : "yes")}{critical}");
             }
         }
         catch (Exception ex)

@@ -917,7 +917,16 @@ public sealed partial class GameNetHost : IDisposable
         {
             var peers = _match.SendServerChat(text);
             if (peers > 0)
+            {
                 Console.WriteLine($"[chat] Server → match: {text} (peers={peers})");
+                return;
+            }
+
+            // Широкая рассылка без адресата раньше терялась молча: в катке ещё нет пиров
+            // (сообщение «матч armed» уходит ровно в этот момент) или их сцена строится за
+            // world-gate. Адресные ответы уже умеют ждать в очереди — пусть умеет и эта.
+            if (_match.IsListening)
+                RememberMatchReply(BroadcastReplyNick, text, address: null);
         }
         catch (Exception ex)
         {

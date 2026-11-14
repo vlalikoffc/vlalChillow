@@ -189,10 +189,21 @@ public sealed partial class GameMatchHost : IDisposable
         {
             if (target.Length == 0)
             {
-                sent += BroadcastInitReady(
-                    room,
-                    MatchCodec.BuildChatManagerText(NextServerTime(), text),
-                    tag: "match_tx_ChatManager_server");
+                // Недропаемый путь: чат — не косметика (см. MatchChatDelivery). Дроп на
+                // бэкпрешере выглядел как «сервер вовсе не шлёт в матч»: Send возвращает
+                // false, доставка 0, и эта ветка (без ника) про это даже не логировала.
+                var broadcast = MatchCodec.BuildChatManagerText(NextServerTime(), text);
+                var n = BroadcastInitReadyCritical(
+                    room, broadcast, tag: "match_tx_ChatManager_server");
+                sent += n;
+                if (n == 0)
+                {
+                    var (inRoom, ready, held) = CountChatTargets(room);
+                    Console.WriteLine(
+                        $"[chat] Server → match: '{text}' — никто не получил " +
+                        $"({MatchChatDelivery.DescribeNoTarget(inRoom, ready, held)})");
+                }
+
                 continue;
             }
 
@@ -206,7 +217,7 @@ public sealed partial class GameMatchHost : IDisposable
                         target,
                         StringComparison.OrdinalIgnoreCase))
                     continue;
-                if (Send(p, payload))
+                if (SendCritical(p, payload))
                 {
                     sent++;
                     // Нашли адресата — второй раз в ту же комнату не шлём, иначе он
@@ -220,6 +231,33 @@ public sealed partial class GameMatchHost : IDisposable
             sent = SendServerChatLastChance(text, alsoLastChanceIp);
 
         return sent;
+    }
+
+    /// <summary>
+    /// Сколько в комнате адресатов у чата: всего пиров, сколько прошло bootstrap и не держится
+    /// world-gate'ом, и сколько сейчас за гейтом (сцена ещё строится). Нужно для честной строки
+    /// «никто не получил» — без неё <c>peers=0</c> не отличить от «сервер ничего не отправил».
+    /// </summary>
+    private (int InRoom, int InitReady, int GateHeld) CountChatTargets(MatchRoom room)
+    {
+        int inRoom = 0, ready = 0, held = 0;
+        foreach (var st in _peers.Values)
+        {
+            if (st.Room != room)
+                continue;
+            inRoom++;
+            if (!st.BootstrapSent)
+                continue;
+            if (MatchWorldGate.HoldsTraffic(st.BootstrapSent, st.WorldReady))
+            {
+                held++;
+                continue;
+            }
+
+            ready++;
+        }
+
+        return (inRoom, ready, held);
     }
 
     /// <summary>
@@ -292,7 +330,7 @@ public sealed partial class GameMatchHost : IDisposable
             }
             var target = final[0].State;
             var payload = MatchCodec.BuildChatManagerText(NextServerTime(), text);
-            if (!Send(final[0].Peer, payload))
+            if (!SendCritical(final[0].Peer, payload))
                 return 0;
             Console.WriteLine(
                 $"[chat] Server → actor={target.ActorNr} " +
