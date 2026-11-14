@@ -158,7 +158,7 @@ public sealed partial class GameNetHost
 
         if (CommandAccessPolicy.IsChatTestCommand(cmd))
         {
-            HandleChatTestCommand(reply);
+            HandleChatTestCommand(reply, player);
             return true;
         }
 
@@ -754,13 +754,26 @@ public sealed partial class GameNetHost
     /// а байт автора — это номер актора (в том же логе id=257→rpc=2, id=385→rpc=3, id=513→rpc=4,
     /// то есть rpc==owner пешки). Выбрать между ними по капчурам нельзя — нужно наблюдение.
     /// </remarks>
-    private void HandleChatTestCommand(Action<string> reply)
+    private void HandleChatTestCommand(Action<string> reply, ConnectedPlayer? player)
     {
         if (!_match.IsListening || !_match.HasMatchPeers)
         {
             reply("chattest: катка не идёт — сначала /start, нужны живые клиенты на 7777");
             return;
         }
+
+        // Аудитория важнее самих проб: кадры, ушедшие в комнату без заказчика, не отвечают
+        // ни на один вопрос (latest-3.log: /chattest из лобби при отключённом 7777 — буквы
+        // увидели двое других, а ответы заказчику истекли в очереди).
+        var audience = _match.DescribeChatAudience(
+            player?.Name, player?.Peer.Address, out var requesterPresent);
+        Console.WriteLine(
+            $"[chat] chattest: аудитория — {audience}; заказчик " +
+            (player is null ? "неизвестен (консоль)" : player.Name) +
+            (requesterPresent ? " в катке" : " НЕ в катке"));
+        reply($"chattest: аудитория — {audience}");
+        if (!requesterPresent)
+            reply("chattest: тебя среди них нет — буквы увидят только они (зайди в катку и повтори)");
 
         // SnapshotPublicIds уже без актора сервера, поэтому первый — живой игрок.
         var human = _match.SnapshotPublicIds().FirstOrDefault();
@@ -780,13 +793,19 @@ public sealed partial class GameNetHost
         {
             var text = $"chattest {label} (автор {author}={who}, field={field})";
             var peers = _match.SendServerChatProbe(text, author, field);
-            Console.WriteLine($"[chat] chattest {label}: author={author} field={field} → peers={peers}");
+            Console.WriteLine(
+                $"[chat] chattest {label}: author={author} field={field} → peers={peers} " +
+                $"(аудитория: {audience})");
             reply($"chattest {label} → peers={peers}: автор {author} ({who}), field={field}");
         }
 
+        // Прогон 2026-11-14 (3 пира) дал ответ: видна только C — живой автор и field=1.
+        // A/B (актор сервера) и D (field=2) клиент не рисует, поэтому серверный чат теперь
+        // подписывается живым актором (MatchChatAuthor). Проба оставлена как регрессия.
         reply(hasHuman
-            ? $"chattest: какие буквы появились в чате катки? C/D подписаны актором {human.ActorNr} " +
-              $"({human.Nick}) — на его собственном экране их не будет (клиент не рисует своё сообщение)."
+            ? "chattest: известно с 2026-11-14 — видна только C (живой автор, field=1); " +
+              "A/B от актора сервера и D с field=2 клиент не рисует. Серверный чат теперь " +
+              $"подписывается живым актором как C (здесь это {human.ActorNr}={human.Nick})."
             : "chattest: живых игроков в ростере нет — отправлены только варианты от актора сервера.");
     }
 }

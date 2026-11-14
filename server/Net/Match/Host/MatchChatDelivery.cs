@@ -68,4 +68,32 @@ internal static class MatchChatDelivery
     /// <param name="peersInRoom">Сколько пиров в комнате вообще (не только готовых).</param>
     public static bool LastChanceMaySend(int sameIpMatches, int peersInRoom) =>
         sameIpMatches > 0 || peersInRoom <= 1;
+
+    /// <summary>Как часто повторять в журнале один и тот же промах доставки.</summary>
+    public const int MissRepeatSeconds = 15;
+
+    /// <summary>
+    /// Писать ли промах доставки в журнал сейчас. Свипер отложенных ответов повторяет
+    /// попытку каждую секунду, поэтому промах без ограничения печатался бы раз в секунду:
+    /// latest-3.log — 300 одинаковых отказов last-chance (5 сообщений × 60 секунд) и 60
+    /// «никто не получил» на одном окне бутстрапа. Первый промах виден сразу, дальше —
+    /// только смена причины или раз в <see cref="MissRepeatSeconds"/>.
+    /// </summary>
+    /// <param name="lastLoggedAt">Когда это сообщение в последний раз писали (null — никогда).</param>
+    /// <param name="now">Текущий момент.</param>
+    /// <param name="lastReason">Прошлая причина промаха.</param>
+    /// <param name="reason">Причина сейчас.</param>
+    public static bool ShouldLogMiss(
+        DateTime? lastLoggedAt,
+        DateTime now,
+        string? lastReason,
+        string reason)
+    {
+        if (lastLoggedAt is not { } at)
+            return true;
+        if (!string.Equals(lastReason, reason, StringComparison.Ordinal))
+            return true;
+
+        return (now - at).TotalSeconds >= MissRepeatSeconds;
+    }
 }

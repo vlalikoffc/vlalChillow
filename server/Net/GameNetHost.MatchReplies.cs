@@ -15,13 +15,28 @@ namespace StandChillow.LanServer.Net;
 /// <para>
 /// Лечим не новым пакетом, а тем же <c>ChatManager</c>: ответ запоминается и досылается, когда
 /// пир с таким ником действительно есть в матче. Очередь живёт в памяти, ограничена по размеру и
-/// по времени (минута).
+/// по времени: минута для широких сообщений и пять для адресного ответа на команду
+/// (<see cref="ReplyTtl"/>) — игрок успевает выпасть из катки и вернуться.
 /// </para>
 /// </remarks>
 public sealed partial class GameNetHost
 {
+    /// <summary>Широкие сообщения (зеркало ростера, «Подключился!») устаревают быстро.</summary>
     private const int PendingReplyTtlSeconds = 60;
+
+    /// <summary>
+    /// Адресный ответ на команду ждёт дольше: игрок выходит из катки на минуту-другую, и
+    /// ответ обязан дождаться его возвращения. latest-3.log: матч-пир отвалился
+    /// (<c>RemoteConnectionClose</c>) до <c>/chattest</c> и вернулся позже — все пять
+    /// ответов истекли ровно за это окно.
+    /// </summary>
+    private const int PendingAddressedReplyTtlSeconds = 300;
+
     private const int PendingReplyMaxPerNick = 8;
+
+    /// <summary>Сколько держать отложенный ответ: адресный — дольше широкого.</summary>
+    internal static TimeSpan ReplyTtl(bool broadcast) =>
+        TimeSpan.FromSeconds(broadcast ? PendingReplyTtlSeconds : PendingAddressedReplyTtlSeconds);
 
     /// <summary>
     /// Ключ очереди для сообщения «всем в катке» (без адресата). Нормализованный ник живого
@@ -52,8 +67,10 @@ public sealed partial class GameNetHost
         public IPAddress? Address { get; init; }
         public DateTime CreatedAt { get; init; }
 
-        public bool IsExpired =>
-            DateTime.UtcNow - CreatedAt > TimeSpan.FromSeconds(PendingReplyTtlSeconds);
+        /// <summary>Срок жизни этого ответа: у адресного и широкого он разный.</summary>
+        public required TimeSpan Ttl { get; init; }
+
+        public bool IsExpired => DateTime.UtcNow - CreatedAt > Ttl;
     }
 
     /// <summary>
@@ -82,6 +99,7 @@ public sealed partial class GameNetHost
                 Text = text,
                 Address = address,
                 CreatedAt = DateTime.UtcNow,
+                Ttl = ReplyTtl(key.Length == 0),
             });
             if (list.Count > PendingReplyMaxPerNick)
                 list.RemoveAt(0);

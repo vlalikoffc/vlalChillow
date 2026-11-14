@@ -1,3 +1,4 @@
+using StandChillow.LanServer.Net;
 using Xunit;
 
 namespace StandChillow.LanServer.Tests;
@@ -85,6 +86,32 @@ public sealed class MatchChatCommandTests
             "nick => IsAdminAuthorized(nick, player.Peer.Address)",
             commands,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ответ на команду ждёт адресата дольше зеркала ростера: игрок выпадает из катки и
+    /// возвращается. latest-3.log — матч-пир отвалился (<c>RemoteConnectionClose</c>) до
+    /// <c>/chattest</c>, и все пять ответов истекли за минуту ровно в это окно.
+    /// </summary>
+    [Fact]
+    public void AddressedReplyOutlivesTheRosterMirror()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(60), GameNetHost.ReplyTtl(broadcast: true));
+        Assert.Equal(TimeSpan.FromSeconds(300), GameNetHost.ReplyTtl(broadcast: false));
+    }
+
+    /// <summary>
+    /// <c>/chattest</c> обязан назвать аудиторию: проба, ушедшая в комнату без заказчика, не
+    /// отвечает ни на один вопрос (latest-3.log — буквы увидели двое других игроков, а
+    /// заказчик не увидел ничего).
+    /// </summary>
+    [Fact]
+    public void ChatTestNamesItsAudience()
+    {
+        var commands = ReadServer("Net", "GameNetHost.Commands.cs");
+
+        Assert.Contains("DescribeChatAudience(", commands, StringComparison.Ordinal);
+        Assert.Contains("тебя среди них нет", commands, StringComparison.Ordinal);
     }
 
     private static string ReadServer(params string[] parts)

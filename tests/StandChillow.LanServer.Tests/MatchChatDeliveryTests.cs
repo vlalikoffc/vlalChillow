@@ -94,9 +94,40 @@ public sealed class MatchChatDeliveryTests
             "MatchChatDelivery.LastChanceMaySend(sameIp.Count, inRoom)",
             host,
             StringComparison.Ordinal);
+        // Серверный кадр подписывает живой актор и помечает текст: кадр от актора сервера
+        // клиент не рисует (проба /chattest, latest-3.log — видна только буква C).
+        Assert.Contains("MatchChatAuthor.PickServerVoice(", host, StringComparison.Ordinal);
+        Assert.Contains("MatchChatAuthor.Sign(text)", host, StringComparison.Ordinal);
         // Релей чужого чата: решение о критичности — из той же политики, автор байтом как пришёл.
         Assert.Contains("MatchChatDelivery.IsStructuralRpc(parsed.ObjectId)", worldObjects, StringComparison.Ordinal);
         Assert.Contains("parsed.RpcId,", worldObjects, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Повтор одного и того же промаха в журнал — не чаще раза в
+    /// <see cref="MatchChatDelivery.MissRepeatSeconds"/>: свипер отложенных ответов пробует
+    /// каждую секунду, и latest-3.log принёс 300 одинаковых отказов last-chance (пять
+    /// сообщений × 60 секунд) плюс 60 «никто не получил» на одном окне бутстрапа.
+    /// </summary>
+    [Fact]
+    public void RepeatedDeliveryMiss_IsLoggedOnceUntilTheReasonChanges()
+    {
+        var t0 = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc);
+        const string noPeers = "в катке нет пиров";
+
+        // Первый промах виден сразу.
+        Assert.True(MatchChatDelivery.ShouldLogMiss(null, t0, null, noPeers));
+        // Через секунду та же причина — молчим (это и есть шторм из latest-3.log).
+        Assert.False(MatchChatDelivery.ShouldLogMiss(t0, t0.AddSeconds(1), noPeers, noPeers));
+        // Причина сменилась — пишем сразу: это уже другое событие.
+        Assert.True(MatchChatDelivery.ShouldLogMiss(
+            t0, t0.AddSeconds(1), noPeers, "3 пир(а) без bootstrap — INIT не разблокирован"));
+        // Та же причина, но время пришло — напоминаем, что ничего не изменилось.
+        Assert.True(MatchChatDelivery.ShouldLogMiss(
+            t0,
+            t0.AddSeconds(MatchChatDelivery.MissRepeatSeconds),
+            noPeers,
+            noPeers));
     }
 
     private static string ServerSourceRoot()
