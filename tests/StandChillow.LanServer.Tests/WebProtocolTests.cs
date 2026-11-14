@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Web;
 using Xunit;
 using WebResponse = StandChillow.LanServer.Web.WebResponse;
@@ -123,5 +124,37 @@ public sealed class WebProtocolTests
         // Падение сборки не должно ронять панель: отдаём error-JSON, а не исключение.
         Assert.True(ok);
         Assert.Contains("error", cache.Current);
+    }
+
+    [Fact]
+    public void PanelListensOnAllInterfacesByDefault()
+    {
+        // Прокси на другой машине (nginx -> 192.168.x.x:8080) до loopback
+        // не достучится и отдаст 502, хотя сервер жив. Дефолт обязан быть 0.0.0.0.
+        var cfg = new ServerConfig();
+        cfg.Normalize();
+
+        Assert.Equal("0.0.0.0", cfg.Web.BindAddress);
+    }
+
+    [Fact]
+    public void EmptyWebBindAddressNormalizesToAllInterfaces()
+    {
+        var cfg = new ServerConfig();
+        cfg.Web.BindAddress = "   ";
+        cfg.Normalize();
+
+        Assert.Equal("0.0.0.0", cfg.Web.BindAddress);
+    }
+
+    [Fact]
+    public void ExplicitLoopbackBindAddressIsHonoured()
+    {
+        // Ручной выбор не перетираем: nginx на этом же хосте — валидный случай.
+        var cfg = new ServerConfig();
+        cfg.Web.BindAddress = "127.0.0.1";
+        cfg.Normalize();
+
+        Assert.Equal("127.0.0.1", cfg.Web.BindAddress);
     }
 }

@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using StandChillow.LanServer.Config;
+using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match.Kernel;
@@ -82,7 +83,7 @@ public sealed class WebPanelHost : IDisposable
             new WebPanelOptions
             {
                 BindAddress = string.IsNullOrWhiteSpace(_config.BindAddress)
-                    ? "127.0.0.1"
+                    ? "0.0.0.0"
                     : _config.BindAddress.Trim(),
                 Port = Math.Clamp(_config.Port, 1, 65535),
                 Limits = limits,
@@ -114,12 +115,62 @@ public sealed class WebPanelHost : IDisposable
         if (!_server_.TryStart(out error))
             return false;
 
-        Console.WriteLine(
-            $"[web] панель на http://{_server_.BindAddress}:{_server_.Port}/ " +
-            $"(комнат до {_rooms.MaxRooms}, лимит {_config.Limits.RequestsPerSecond} запр/с с IP)");
+        PrintAddresses();
 
         _tickLoop = Task.Run(() => TickLoopAsync(_tickCts.Token));
         return true;
+    }
+
+    /// <summary>
+    /// Напечатать, где панель реально доступна. Запуск не должен требовать поиска
+    /// адреса в конфиге: строка «открой с телефона вот это» — единственное, что
+    /// нужно человеку, чтобы начать.
+    /// </summary>
+    private void PrintAddresses()
+    {
+        var port = _server_.Port;
+        Console.WriteLine(
+            $"[web] панель на порту {port} " +
+            $"(комнат до {_rooms.MaxRooms}, лимит {_config.Limits.RequestsPerSecond} запр/с с IP)");
+
+        // ВАЖНО: не зовём Resolve() — он может пойти в интернет за внешним IP и
+        // подвесить старт на пару секунд. На запуске нужен только локальный адрес.
+        var lan = LanAddress();
+        if (!string.IsNullOrEmpty(lan))
+            Console.WriteLine($"[web]   с телефона (та же сеть): http://{lan}:{port}/");
+        Console.WriteLine($"[web]   на этой машине:         http://127.0.0.1:{port}/");
+
+        if (_server_.BindAddress is "127.0.0.1" or "localhost" or "::1")
+        {
+            // Честно предупреждаем: с других машин и от обратного прокси этот адрес
+            // недоступен. Молчание здесь стоило бы часа поисков «почему 502».
+            Console.WriteLine(
+                "[web]   внимание: bindAddress = " + _server_.BindAddress +
+                " — с других машин и от nginx панель недоступна. " +
+                "Для LAN и прокси нужен \"0.0.0.0\" (это дефолт).");
+        }
+    }
+
+    /// <summary>
+    /// LAN-адрес этой машины или пустая строка. Без обращений в интернет.
+    /// </summary>
+    private string LanAddress()
+    {
+        try
+        {
+            foreach (var lan in LanInterfacePicker.GetLanIpv4Endpoints())
+            {
+                var text = lan.Address.ToString();
+                if (!string.IsNullOrEmpty(text))
+                    return text;
+            }
+        }
+        catch
+        {
+            // Нет интерфейсов — не повод падать на старте.
+        }
+
+        return string.Empty;
     }
 
     /// <summary>

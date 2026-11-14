@@ -214,8 +214,16 @@ public sealed class WebConfig
     /// <summary>Поднимать ли панель вообще.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Где слушать. По умолчанию локально — наружу через nginx.</summary>
-    public string BindAddress { get; set; } = "127.0.0.1";
+    /// <summary>
+    /// Где слушать. По умолчанию — все интерфейсы.
+    /// </summary>
+    /// <remarks>
+    /// Loopback не годится как дефолт: обратный прокси на другой машине
+    /// (nginx → <c>192.168.x.x:8080</c>) до неё не достучится, и сайт отдаст 502,
+    /// хотя сервер жив. Порт панели — не игровой, доступ к нему даёт только тот,
+    /// кто уже в сети; отдельного пароля у панели нет и не будет.
+    /// </remarks>
+    public string BindAddress { get; set; } = "0.0.0.0";
 
     /// <summary>TCP-порт панели (не игровой; игровые порты не меняются никогда).</summary>
     public int Port { get; set; } = 8080;
@@ -794,7 +802,7 @@ public sealed class ServerConfig
         Web.EmptyRoomTtlSec = Check(Web.EmptyRoomTtlSec, 60, 86400, 600, "web.emptyRoomTtlSec");
 
         Web.BindAddress = string.IsNullOrWhiteSpace(Web.BindAddress)
-            ? "127.0.0.1"
+            ? "0.0.0.0"
             : Web.BindAddress.Trim();
 
         // Пустая строка — «определи сам», а не ошибка.
@@ -1147,7 +1155,8 @@ public sealed class ServerConfig
   // не меняются никогда.
   "web": {
     "enabled": true,
-    "bindAddress": "127.0.0.1",  // снаружи — через nginx; "0.0.0.0" для LAN без прокси
+    "bindAddress": "0.0.0.0",    // все интерфейсы: и LAN с телефона, и nginx с другой машины
+                                 // "127.0.0.1" — только если nginx на этом же хосте
     "port": 8080,
     "maxRooms": 64,              // предохранитель; правило — одна комната на игрока
     "emptyRoomTtlSec": 600,      // пустая комната закрывается через 10 минут

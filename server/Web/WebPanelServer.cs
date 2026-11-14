@@ -425,7 +425,7 @@ public sealed class WebPanelServer : IDisposable
     private static IPAddress ResolveBindAddress(string bind)
     {
         if (string.IsNullOrWhiteSpace(bind))
-            return IPAddress.Loopback;
+            return IPAddress.Any;
         if (bind is "*" or "+" or "any")
             return IPAddress.Any;
         return IPAddress.TryParse(bind, out var parsed) ? parsed : IPAddress.Loopback;
@@ -464,7 +464,9 @@ public sealed class WebPanelServer : IDisposable
 /// </summary>
 public sealed class WebPanelOptions
 {
-    public string BindAddress { get; init; } = "127.0.0.1";
+    /// <summary>Где слушать. По умолчанию все интерфейсы — иначе прокси не достучится.</summary>
+    public string BindAddress { get; init; } = "0.0.0.0";
+
     public int Port { get; init; } = 8080;
     public WebLimits Limits { get; init; } = new();
 
