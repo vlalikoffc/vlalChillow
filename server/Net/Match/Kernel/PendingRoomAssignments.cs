@@ -176,6 +176,29 @@ public sealed class PendingRoomAssignments
         }
     }
 
+    /// <summary>
+    /// Есть ли у этого ника бронь прямо сейчас (без выдачи ключа комнаты).
+    /// </summary>
+    /// <remarks>
+    /// Нужно лобби: <c>hasHosting</c> в JoinResponse и push «матч идёт» положены
+    /// только тому, кто уже написал <c>/join</c>. Без этой проверки клиент любого
+    /// нового игрока получал адрес 7777 и сам прыгал в катку, где его ждал
+    /// RoomNotFound.
+    /// </remarks>
+    public bool HasReservation(string? nick)
+    {
+        var normalized = ServerConfig.NormalizeNick(nick ?? "");
+        if (normalized.Length == 0)
+            return false;
+
+        var now = _clock();
+        lock (_gate)
+        {
+            PruneLocked(now);
+            return _items.Any(a => string.Equals(a.Nick, normalized, NickComparison));
+        }
+    }
+
     /// <summary>Снять бронь по нику (игрок ушёл из лобби).</summary>
     public bool ReleaseByNick(string nick)
     {
