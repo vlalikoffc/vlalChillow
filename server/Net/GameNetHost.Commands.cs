@@ -118,10 +118,11 @@ public sealed partial class GameNetHost
             return true;
         }
 
+        // Старое имя оставлено тихим алиасом: делает то же, что /ban.
         if (cmd.Equals("banid", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("банид", StringComparison.OrdinalIgnoreCase))
         {
-            HandleBanIdCommand(reply, args, player);
+            HandleBanCommand(reply, args, player);
             return true;
         }
 
@@ -134,7 +135,7 @@ public sealed partial class GameNetHost
 
         if (cmd.Equals("unbanid", StringComparison.OrdinalIgnoreCase))
         {
-            HandleUnbanIdCommand(reply, args);
+            HandleUnbanCommand(reply, args);
             return true;
         }
 
@@ -233,12 +234,10 @@ public sealed partial class GameNetHost
           /end           завершить матч сразу (без 5с)
           /ready         отметить готовность (режим старта ready)
           /unready       отменить готовность
-          /ban ник срок [причина]   бан на 10m…14d (только админ)
-          /banid id срок [причина]  бан по серверному id из /ids (только админ)
-          /unban ник|IP             снять бан (только админ)
-          /unbanid id               снять все баны под этим id (только админ)
+          /ban id срок [причина]    бан на 10m…14d по серверному id (только админ)
+          /unban id                 снять все баны этого id (только админ)
           /bans                     активные баны и остаток (только админ)
-          /ids                      кто в катке: id, ник, IP (только админ)
+          /ids                      кто в лобби и катке: id, ник, IP (только админ)
           /whoami                   что сервер знает про тебя: ник, id, IP, права
           /auth                     код админа (только из консоли сервера)
         """.Trim();

@@ -4,7 +4,7 @@ using Xunit;
 namespace StandChillow.LanServer.Tests;
 
 /// <summary>
-/// Справочник «ник ↔ id ↔ IP»: нужен, чтобы <c>/banid</c> работал для ушедшего игрока
+/// Справочник «ник ↔ id ↔ IP»: нужен, чтобы <c>/ban</c> работал для ушедшего игрока
 /// и после рестарта, и чтобы 200 банов не путали личности между собой.
 /// </summary>
 public sealed class PlayerDirectoryTests

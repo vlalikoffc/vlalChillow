@@ -444,7 +444,7 @@ public sealed partial class GameNetHost : IDisposable
             $"verOk={LobbyAuth.HashEquals(req.VersionHash, LobbyAuth.VersionHash)} " +
             $"authOk={LobbyAuth.HashEquals(req.AuthHash, LobbyAuth.AuthHash)}");
 
-        // Справочник «ник ↔ id ↔ IP»: нужен, чтобы /banid находил человека и после
+        // Справочник «ник ↔ id ↔ IP»: нужен, чтобы /ban находил человека и после
         // выхода из катки. Пишется на диск только при новом нике/адресе, не на каждый вход.
         _directory.Remember(req.Profile.Name, peer.Address?.ToString(), DateTime.UtcNow);
 

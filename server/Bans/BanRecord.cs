@@ -32,7 +32,7 @@ public sealed class BanRecord
 
     /// <summary>
     /// Серверные id матча (100…1 000 000), под которыми личность попала в бан.
-    /// Нужны только для <c>/unbanid</c>: сам id — селектор, а не ключ бана.
+    /// Нужны только для <c>/unban</c>: сам id — селектор, а не ключ бана.
     /// </summary>
     public List<int> MatchIds { get; set; } = new();
 

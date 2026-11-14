@@ -16,7 +16,7 @@ public readonly record struct MatchPublicEntry(int Id, string Nick, IPAddress? A
 /// <para>
 /// Id не хранится и не выдаётся: он <b>вычисляется</b> (<see cref="MatchPublicId.ForNick"/>),
 /// поэтому переживает реконнект, рестарт хоста и удаление каталога сервера. Здесь он
-/// нужен только для админ-команд <c>/ids</c> и <c>/banid</c>.
+/// нужен только для админ-команд <c>/ids</c> и <c>/ban</c>.
 /// </para>
 /// <para>
 /// В провод id не уходит: клиент его не знает и подменить не может.
@@ -67,7 +67,7 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// Подменять ли клиентский <c>uid</c> («Offline») на серверный id игрока. По умолчанию да:
-    /// тогда в игре вместо заглушки виден номер, который принимает <c>/banid</c>.
+    /// тогда в игре вместо заглушки виден номер, который принимает <c>/ban</c>.
     /// </summary>
     public bool ExposeServerUid { get; set; } = true;
 

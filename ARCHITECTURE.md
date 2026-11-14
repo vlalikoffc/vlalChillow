@@ -40,13 +40,13 @@ The last gate matters: a mid-match reconnect adopts the old actor and never runs
 join, so a ban checked only at the first connect could be bypassed (e.g. leave VPN →
 reconnect from the banned address). Admins are exempt by nickname at every gate; banning
 an admin is rejected. The install token is deliberately **not** used — nick + IP only.
-Ban keys are never the public id: `/banid` is a selector that resolves to nick + IPs.
+Ban keys are never the public id: `/ban <id>` is a selector that resolves to nick + IPs.
 
 `MatchPublicId` derives a stable `1…100 000 000` id from the nickname (SHA-256 of the
-normalized nick); it carries no state, so `/banid` survives restarts. The host also
+normalized nick); it carries no state, so `/ban <id>` survives restarts. The host also
 substitutes it for the client-authored actor property `uid` (players send the `Offline`
 placeholder from the gold capture) so the in-game player list shows the same number
-`/ids` and `/banid` use. The Server actor carries the hardcoded string id `Server` instead —
+`/ids` and `/ban` use. The Server actor carries the hardcoded string id `Server` instead —
 it is outside the player numbering, never bannable, and no client can claim it: the host
 overwrites `uid` from session state on every SetProperty/SetProperties and drops the property
 when the author cannot be resolved. The server nickname is reserved (lobby and match reject
@@ -56,7 +56,7 @@ Admin rights are **not** granted by nickname alone (`AdminAuth`): the nickname a
 is untrusted, so an admin nick gets a shadow lobby until the address enters the per-run code
 printed to the console. The code is 24 random alphanumerics, regenerated on every start,
 authorized IPs live in memory only; the match host and the command dispatcher both consult
-`IsUnauthorizedAdmin`, so a shadowed admin cannot drop or sneak into 7777 either. `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/banid` still
+`IsUnauthorizedAdmin`, so a shadowed admin cannot drop or sneak into 7777 either. `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/ban` still
 resolves a player who already left. `banlist.json` lives beside `config.json` and is
 git-ignored.
 

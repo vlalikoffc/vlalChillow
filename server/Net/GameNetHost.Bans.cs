@@ -193,31 +193,16 @@ public sealed partial class GameNetHost
         }
     }
 
+    /// <summary>
+    /// <c>/ban &lt;id&gt; &lt;срок&gt; [причина]</c>. Id — только селектор: баним человека,
+    /// то есть его ник + IP, а не само число (оно достанется другому).
+    /// </summary>
     private void HandleBanCommand(Action<string> reply, string args, ConnectedPlayer? player)
     {
         if (!BanReady(reply))
             return;
 
-        if (!BanCommandLine.TryParse(args, out var rawNick, out var durationToken, out var reason, out var error))
-        {
-            reply(error);
-            return;
-        }
-
-        var nick = ServerConfig.NormalizeNick(rawNick);
-        TryBanTarget(reply, nick, address: null, durationToken, reason, player, matchId: null);
-    }
-
-    /// <summary>
-    /// <c>/banid &lt;id&gt; &lt;срок&gt; [причина]</c>. Id — только селектор: баним
-    /// человека, то есть его ник + IP, а не сам id (он достанется другому).
-    /// </summary>
-    private void HandleBanIdCommand(Action<string> reply, string args, ConnectedPlayer? player)
-    {
-        if (!BanReady(reply))
-            return;
-
-        if (!BanIdCommandLine.TryParse(args, out var id, out var durationToken, out var reason, out var error))
+        if (!BanCommandLine.TryParse(args, out var id, out var durationToken, out var reason, out var error))
         {
             reply(error);
             return;
@@ -230,7 +215,7 @@ public sealed partial class GameNetHost
         {
             reply($"id {id} делят {inMatch.Count} игрока: " +
                   string.Join(", ", inMatch.Select(e => $"'{e.Nick}' (actor {e.ActorNr})")) +
-                  " — уточни: /ban ник срок причина");
+                  " — совпадение ников, бан по id невозможен");
             return;
         }
         if (inMatch.Count == 1)
@@ -248,7 +233,7 @@ public sealed partial class GameNetHost
         {
             reply($"id {id} делят {inLobby.Count} игрока в лобби: " +
                   string.Join(", ", inLobby.Select(p => $"'{p.Name}'")) +
-                  " — уточни: /ban ник срок причина");
+                  " — совпадение ников, бан по id невозможен");
             return;
         }
         if (inLobby.Count == 1)
@@ -271,7 +256,7 @@ public sealed partial class GameNetHost
         if (sharing > 1)
         {
             reply($"id {id} делят {sharing} ника (коллизия) — чтобы не задеть не того, " +
-                  "забань по нику: /ban ник срок причина");
+                  "бан по id невозможен");
             return;
         }
 
@@ -300,7 +285,7 @@ public sealed partial class GameNetHost
     }
 
     /// <summary>
-    /// Общее тело <c>/ban</c> и <c>/banid</c>: проверки, запись, кик из матча и лобби.
+    /// Общее тело <c>/ban</c>: проверки, запись, кик из матча и лобби.
     /// </summary>
     private void TryBanTarget(
         Action<string> reply,
@@ -363,8 +348,8 @@ public sealed partial class GameNetHost
 
         var ip = address ?? targets.Select(t => t.Peer.Address).FirstOrDefault(a => a is not null);
 
-        // Id детерминирован от ника: даже /ban по нику тегирует запись, чтобы /unbanid
-        // потом нашёл её без отдельной истории.
+        // Id детерминирован от ника: запись всегда тегируется id, чтобы /unban потом
+        // нашёл её без отдельной истории.
         var idForRecord = matchId is { } requested && requested != 0
             ? requested
             : MatchPublicId.ForNick(nick);
@@ -433,10 +418,19 @@ public sealed partial class GameNetHost
         var token = (args ?? string.Empty).Trim();
         if (token.Length == 0)
         {
-            reply("формат: /unban <ник|IP>");
+            reply("формат: /unban <id> — id смотри в /ids и в /bans");
             return;
         }
 
+        // Id — основной адрес разбана: снимаем все записи, помеченные этим человеком.
+        var digits = token.StartsWith('#') ? token[1..] : token;
+        if (int.TryParse(digits, out var id) && id is >= BanCommandLine.MinId and <= BanCommandLine.MaxId)
+        {
+            RemoveBansById(reply, id);
+            return;
+        }
+
+        // Разбан по нику или IP оставлен для записей, сделанных до перехода на id.
         var removedOk = _bans.Remove(token, out var removed);
         if (!removedOk || removed is null)
         {
@@ -450,18 +444,12 @@ public sealed partial class GameNetHost
         BroadcastServerChat($"разбанен {removed.DisplayNick}");
     }
 
-    /// <summary><c>/unbanid &lt;id&gt;</c> — снять все баны, выданные под этим серверным id.</summary>
-    private void HandleUnbanIdCommand(Action<string> reply, string args)
+    /// <summary>Снять все баны, выданные под этим серверным id.</summary>
+    private void RemoveBansById(Action<string> reply, int id)
     {
         if (_bans is null)
         {
             reply("баны не инициализированы");
-            return;
-        }
-
-        if (!int.TryParse((args ?? string.Empty).Trim(), out var id))
-        {
-            reply("формат: /unbanid <id> — список id: /ids и в /bans");
             return;
         }
 
@@ -479,7 +467,7 @@ public sealed partial class GameNetHost
             BroadcastServerChat($"разбанен {record.DisplayNick}");
         }
 
-        Console.WriteLine($"[ban] /unbanid {id}: снято {removed.Count} записей");
+        Console.WriteLine($"[ban] /unban {id}: снято {removed.Count} записей");
     }
 
     private void HandleBansCommand(Action<string> reply)
@@ -509,37 +497,39 @@ public sealed partial class GameNetHost
         }
     }
 
-    /// <summary><c>/ids</c> — кто сейчас в катке: серверный id, ник, адрес.</summary>
+    /// <summary>
+    /// <c>/ids</c> — кто есть на сервере: серверный id, ник, адрес. Список общий для лобби и
+    /// катки, потому что баны теперь только по id: админ должен видеть id того, кто ещё не
+    /// входил в матч.
+    /// </summary>
     private void HandleIdsCommand(Action<string> reply)
     {
         var entries = _match.SnapshotPublicIds();
-        if (entries.Count > 0)
+        foreach (var entry in entries)
         {
-            foreach (var entry in entries)
-            {
-                // У актора сервера id — строка «Server», а не число: он вне нумерации.
-                var idText = entry.ActorNr == MatchHostActor.ActorNr
-                    ? ServerIdentity.Uid
-                    : $"#{entry.Id}";
-                reply($"{idText} · {entry.Nick} · " +
-                      $"{entry.Address?.ToString() ?? "—"} · actor {entry.ActorNr}");
-            }
-            return;
+            // У актора сервера id — строка «Server», а не число: он вне нумерации.
+            var idText = entry.ActorNr == MatchHostActor.ActorNr
+                ? ServerIdentity.Uid
+                : $"#{entry.Id}";
+            reply($"{idText} · {entry.Nick} · {entry.Address?.ToString() ?? "—"} · actor {entry.ActorNr}");
         }
 
-        // Катка ещё не началась — id всё равно выводится из ника.
-        var lobby = _session.JoinedPlayers();
-        if (lobby.Count == 0)
-        {
-            reply("в катке и в лобби никого нет");
-            return;
-        }
+        // Катка идёт, но кто-то сидит в лобби — его id тоже нужен.
+        var shown = entries
+            .Select(e => ServerConfig.NormalizeNick(e.Nick))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var lobby = _session.JoinedPlayers()
+            .Where(p => !shown.Contains(ServerConfig.NormalizeNick(p.Name)))
+            .ToList();
 
         foreach (var player in lobby)
         {
             reply($"#{MatchPublicId.ForNick(player.Name)} · {player.Name} · " +
                   $"{player.Peer.Address?.ToString() ?? "—"} · лобби");
         }
+
+        if (entries.Count == 0 && lobby.Count == 0)
+            reply("в катке и в лобби никого нет");
     }
 
     private List<(NetPeer Peer, string Nick)> SnapshotShadowPeers()

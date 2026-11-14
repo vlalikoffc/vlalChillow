@@ -115,7 +115,7 @@ public sealed class BanRegistry
 
     /// <summary>Выдать бан. Существующая запись для этого ника/IP продлевается, а не дублируется.</summary>
     /// <param name="matchId">
-    /// Серверный id матча, если бан выдан по нему: тег нужен для <c>/unbanid</c>.
+    /// Серверный id матча, если бан выдан по нему: тег нужен для <c>/unban</c>.
     /// </param>
     public BanRecord Add(
         BanProbe probe,
@@ -217,7 +217,7 @@ public sealed class BanRegistry
         }
     }
 
-    /// <summary>Снять все баны, выданные под серверным id матча (для <c>/unbanid</c>).</summary>
+    /// <summary>Снять все баны, выданные под серверным id матча (для <c>/unban</c>).</summary>
     public List<BanRecord> RemoveByMatchId(int matchId)
     {
         lock (_gate)
