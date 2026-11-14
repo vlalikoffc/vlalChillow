@@ -61,7 +61,7 @@ jobs:
 
       - name: Upload failed test report (${{ matrix.rid }})
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: failed-protocol-tests-${{ matrix.rid }}
           path: ${{ runner.temp }}/test-results
@@ -79,7 +79,7 @@ jobs:
       # PR runs upload too (shorter retention): lets a branch build be tested on a
       # real desktop/handset before merge without pushing to main.
       - name: Upload runnable server (${{ matrix.rid }})
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: standchillow-server-${{ matrix.rid }}
           path: ${{ runner.temp }}/standchillow-publish
