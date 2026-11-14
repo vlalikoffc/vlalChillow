@@ -33,15 +33,27 @@ public static class BanMessages
     }
 
     /// <summary>
-    /// Три строки в общий чат: кто забанил, на сколько и за что. Пользователь: «чтоб все
-    /// знали, сервер ваще нихуя не делает» — объявление должно быть видно и в лобби, и в катке.
+    /// Объявление в общий чат: кто забанил, кого (и его id), на сколько и за что.
     /// </summary>
+    /// <remarks>
+    /// Пользователь: «чтоб все знали, сервер ваще нихуя не делает» и «после ника добавь ещё
+    /// строку айди, чтоб было видно, вдруг разбан нужен». Id стоит сразу после ника: разбан
+    /// делается командой <c>/unban &lt;id&gt;</c>, и искать число в <c>/bans</c> потом поздно.
+    /// </remarks>
     public static string[] PublicLines(BanRecord record) => new[]
     {
         $"Игрок {DescribeAdmin(record)} забанил {record.DisplayNick}!",
+        $"Айди: {IdOf(record)}",
         $"Длительность бана: {BanDuration.FormatShort(record.Duration)}",
         $"Причина: {DescribeReason(record)}",
     };
+
+    /// <summary>
+    /// Id для объявления: из записи (там тег того, кого банили), а если запись старая и тега
+    /// нет — считается из ника, он детерминирован.
+    /// </summary>
+    public static int IdOf(BanRecord record) =>
+        record.MatchIds.Count > 0 ? record.MatchIds[0] : MatchPublicId.ForNick(record.Nick);
 
     private static string DescribeReason(BanRecord record) =>
         string.IsNullOrWhiteSpace(record.Reason) ? "не указана" : record.Reason.Trim();
