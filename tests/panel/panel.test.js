@@ -44,9 +44,9 @@ const MODES = {
 
 let roomsState = [
   { number: 1, mode: 'Ranked2v2', level: 'Sandstone 2x2', name: 'рялна',
-    owner: 'vlal', state: 'live', players: 4, joinCommand: '/join 2v2 #1',
+    owner: 'vlal', ownerId: 111, state: 'live', players: 4, joinCommand: '/join 2v2 #1',
     perTeam: 2, maxPlayers: 4, teamLabel: '2 на 2' },
-  { number: 2, mode: 'Duel', level: 'Yard', name: '', owner: 'botx',
+  { number: 2, mode: 'Duel', level: 'Yard', name: '', owner: 'botx', ownerId: 222,
     state: 'waiting', players: 1, joinCommand: '/join duel #2' },
 ];
 
@@ -71,7 +71,9 @@ function fakeFetch(url, opts) {
     if (postResponse) { body = postResponse.body; status = postResponse.status; }
     else {
       body = { number: 3, mode: 'Ranked2v2', modeName: 'Союзники', level: 'Sandstone 2x2',
-               name: 'новая', owner: 'новичок', joinCommand: '/join 2v2 #3', state: 'waiting' };
+               name: 'новая', owner: 'новичок', ownerId: 333,
+               joinCommand: '/join 2v2 #3', state: 'waiting',
+               perTeam: 2, maxPlayers: 4, teamLabel: '2 на 2' };
       status = 201;
     }
   } else if (u.indexOf('api/status') >= 0) body = statusState;
@@ -154,15 +156,15 @@ function fakeFetch(url, opts) {
 
   /* ── создание комнаты ── */
   P.switchTab('create');
-  $('nick').value = 'новичок';
+  $('player-id').value = '333';
   $('mode').selectedIndex = 0;
   $('mode').dispatchEvent(new window.Event('change'));
   $('room-name').value = 'новая';
   P.createRoom();
   await new Promise(r => setTimeout(r, 120));
 
-  check('POST ушёл с режимом/картой/ником',
-    posted && posted.mode === 'Ranked2v2' && posted.owner === 'новичок' && posted.level === 'Sandstone 2x2',
+  check('POST ушёл с режимом/картой/ID',
+    posted && posted.mode === 'Ranked2v2' && posted.ownerId === 333 && posted.level === 'Sandstone 2x2',
     JSON.stringify(posted));
   check('команда /join показана', $('result-cmd').textContent === '/join 2v2 #3',
     $('result-cmd').textContent);
@@ -172,12 +174,23 @@ function fakeFetch(url, opts) {
 
   /* ── ошибки сервера ── */
   postResponse = { status: 409, body: { code: 'one_room_per_player', message: 'x' } };
-  $('nick').value = 'другой';
+  $('player-id').value = '444';
   P.createRoom();
   await new Promise(r => setTimeout(r, 120));
   check('409 показан понятным текстом',
     $('create-err').textContent.indexOf('уже есть комната') >= 0, $('create-err').textContent);
   check('после ошибки новых комнат не появилось', P.rooms.length === 3);
+
+  postResponse = { status: 409, body: { code: 'player_offline', message: 'x' } };
+  P.createRoom();
+  await new Promise(r => setTimeout(r, 120));
+  check('«не в сети» объяснён по-русски',
+    $('create-err').textContent.indexOf('не в сети') >= 0, $('create-err').textContent);
+
+  postResponse = { status: 400, body: { code: 'nick_not_supported', message: 'x' } };
+  P.createRoom();
+  await new Promise(r => setTimeout(r, 120));
+  check('ник вместо ID объяснён', $('create-err').textContent.length > 0);
 
   postResponse = { status: 429, body: { code: 'rate' } };
   P.createRoom();
@@ -187,13 +200,20 @@ function fakeFetch(url, opts) {
 
   postResponse = null;
 
-  /* ── пустой ник не уходит на сервер ── */
+  /* ── пустой ID не уходит на сервер ── */
   posted = null;
-  $('nick').value = '   ';
+  $('player-id').value = '   ';
   P.createRoom();
   await new Promise(r => setTimeout(r, 60));
-  check('пустой ник не создаёт запрос', posted === null);
-  check('пустой ник объяснён', $('create-err').textContent.indexOf('укажи ник') >= 0);
+  check('пустой ID не создаёт запрос', posted === null);
+  check('пустой ID объяснён', $('create-err').textContent.indexOf('ID из лобби') >= 0);
+
+  /* ── ник вместо ID отвергается на месте ── */
+  posted = null;
+  $('player-id').value = 'влал';
+  P.createRoom();
+  await new Promise(r => setTimeout(r, 60));
+  check('ник вместо ID не уходит на сервер', posted === null);
 
   /* ── XSS: имя комнаты экранируется ── */
   P.setRooms([{ n: 9, name: '<img src=x onerror=alert(1)>', mode: 'Duel',
@@ -256,14 +276,14 @@ function fakeFetch(url, opts) {
 
   // Создание комнаты отправляет perTeam.
   posted = null;
-  $('nick').value = 'влал999';
+  $('player-id').value = '999';
   $('create-btn').dispatchEvent(new window.Event('click'));
   return new Promise(resolve => setTimeout(resolve, 30)).then(() => {
     check('perTeam уходит на сервер', posted && posted.perTeam === 1);
 
     /* ── потолок комнаты берётся из самой комнаты ── */
     P.setRooms([{ n: 7, name: 'малая', mode: 'Ranked2v2', map: 'Sandstone 2x2',
-                  players: 2, state: 'waiting', owner: 'x',
+                  players: 2, state: 'waiting', owner: 'x', ownerId: 999,
                   perTeam: 1, maxPlayers: 2, teamLabel: '1 на 1' }]);
     P.switchTab('list');
     const row = $('rooms').textContent;

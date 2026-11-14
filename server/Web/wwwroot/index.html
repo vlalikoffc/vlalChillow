@@ -687,10 +687,14 @@ select.md-field__box{
 
     <div class="md-section">
       <div class="md-field">
-        <input class="md-field__box" id="nick" maxlength="20" placeholder="Ник" autocomplete="off">
-        <label class="md-field__label" for="nick">Твой ник в лобби</label>
+        <input class="md-field__box" id="player-id" inputmode="numeric" maxlength="9"
+               placeholder="ID из лобби" autocomplete="off">
+        <label class="md-field__label" for="player-id">Твой ID в лобби</label>
       </div>
-      <p class="md-field__helper" style="margin-left:0">сервер сверяет с ником в игре — по нему комната закрепляется за тобой</p>
+      <p class="md-field__helper" style="margin-left:0">
+        ID приходит в чат лобби при входе: «Ты &lt;ник&gt; · ID: …».
+        Комната создаётся только за тем, кто сейчас в лобби — вписать чужой ник нельзя.
+      </p>
     </div>
 
     <div class="md-actions">
@@ -1025,13 +1029,17 @@ var creating = false;
 function createRoom(){
   if (creating) return;
 
-  var nick = $('nick').value.trim();
   var err = $('create-err');
   err.textContent = '';
 
-  if (!nick){
-    err.textContent = 'укажи ник, под которым ты в лобби';
-    $('nick').focus();
+  /* Владелец комнаты — ID из лобби, а не ник. Ник не уникален и его можно
+     вписать любой; ID сервер знает про конкретного присутствующего игрока. */
+  var rawId = $('player-id').value.trim();
+  var playerId = parseInt(rawId, 10);
+
+  if (!rawId || !isFinite(playerId) || playerId <= 0){
+    err.textContent = 'укажи свой ID из лобби — он приходит в чат при входе';
+    $('player-id').focus();
     return;
   }
 
@@ -1041,8 +1049,11 @@ function createRoom(){
     return;
   }
 
+  /* Свою комнату узнаём по id владельца. Сравнение именно по id: два человека
+     с одинаковым ником — обычное дело, и раньше второй видел «твоя комната #N»
+     про чужую комнату. */
   var mine = null;
-  for (var i=0;i<rooms.length;i++) if (rooms[i].owner === nick) mine = rooms[i];
+  for (var i=0;i<rooms.length;i++) if (rooms[i].ownerId === playerId) mine = rooms[i];
   if (mine){
     err.textContent = 'у тебя уже есть комната #' + mine.n;
     return;
@@ -1061,7 +1072,7 @@ function createRoom(){
   $('create-btn').disabled = true;
 
   api('POST', 'api/rooms', {
-    mode: mode.id, level: map, name: name, owner: nick,
+    mode: mode.id, level: map, name: name, ownerId: playerId,
     perTeam: selectedPerTeam()
   })
     .then(function(res){
@@ -1072,13 +1083,13 @@ function createRoom(){
       var r = res.data;
       rooms.unshift({
         n: r.number, name: r.name, mode: r.mode, map: r.level,
-        players: 0, state: r.state, owner: r.owner,
+        players: 0, state: r.state, owner: r.owner, ownerId: r.ownerId,
         perTeam: r.perTeam, maxPlayers: r.maxPlayers, teamLabel: r.teamLabel
       });
       $('result-cmd').textContent = r.joinCommand;
       $('result').hidden = false;
       $('room-name').value = '';
-      try { localStorage.setItem('vlal-nick', nick); } catch (e) { /* ignore */ }
+      try { localStorage.setItem('vlal-player-id', String(playerId)); } catch (e) { /* ignore */ }
       renderStats();
       renderRooms();
     })
@@ -1098,7 +1109,8 @@ function describeError(data, status){
   if (code === 'one_room_per_player') return 'у тебя уже есть комната — вторую нельзя';
   if (code === 'unknown_mode') return 'этот режим сервер не знает';
   if (code === 'unknown_level') return 'такой карты у этого режима нет';
-  if (code === 'empty_owner') return 'укажи ник, под которым ты в лобби';
+  if (code === 'empty_owner') return 'укажи свой ID из лобби';
+  if (code === 'player_offline') return 'этого ID нет в лобби — игрок не в сети';
   if (code === 'too_many_rooms') return 'комнат уже больше, чем игроков онлайн';
   if (code === 'room_limit') return 'на сервере кончились комнаты — попробуй позже';
   if (code === 'room_not_created') return (data && data.message) || 'комната не создалась';
@@ -1226,8 +1238,8 @@ function init(){
 
   // Ник запоминается локально: серверу он нужен, а вводить его каждый раз — лишний шаг.
   try {
-    var savedNick = localStorage.getItem('vlal-nick');
-    if (savedNick) $('nick').value = savedNick;
+    var savedId = localStorage.getItem('vlal-player-id');
+    if (savedId) $('player-id').value = savedId;
   } catch (e) { /* ignore */ }
 
   var saved = 'dark';

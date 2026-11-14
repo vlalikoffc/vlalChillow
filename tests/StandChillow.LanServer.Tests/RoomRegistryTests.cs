@@ -1,3 +1,4 @@
+using StandChillow.LanServer.Bans;
 using StandChillow.LanServer.Net.Match.Kernel;
 using Xunit;
 
@@ -102,22 +103,22 @@ public sealed class RoomRegistryTests
     }
 
     [Fact]
-    public void EmptyNick_IsRejected()
+    public void EmptyOwner_IsRejected()
     {
         var reg = new RoomRegistry();
 
         Assert.False(Create(reg, "2v2", null, "   ", out _, out var error));
-        Assert.Equal(RoomCreateError.EmptyNick, error);
+        Assert.Equal(RoomCreateError.EmptyOwner, error);
     }
 
     [Fact]
-    public void OneNick_OneRoom()
+    public void OneOwner_OneRoom()
     {
         var reg = new RoomRegistry();
 
         Assert.True(Create(reg, "2v2", null, "влал", out _, out _));
         Assert.False(Create(reg, "duel", null, "влал", out _, out var error));
-        Assert.Equal(RoomCreateError.DuplicateNick, error);
+        Assert.Equal(RoomCreateError.DuplicateOwner, error);
         Assert.Equal(1, reg.Count);
     }
 
@@ -129,7 +130,7 @@ public sealed class RoomRegistryTests
         Assert.True(Create(reg, "2v2", null, "Влал", out _, out _));
         // Другое написание того же ника — тот же владелец (нормализация как в банах).
         Assert.False(Create(reg, "duel", null, "вЛАЛ", out _, out var error));
-        Assert.Equal(RoomCreateError.DuplicateNick, error);
+        Assert.Equal(RoomCreateError.DuplicateOwner, error);
     }
 
     [Fact]
@@ -138,14 +139,14 @@ public sealed class RoomRegistryTests
         var reg = new RoomRegistry();
 
         Assert.True(Create(reg, "2v2", null, "влал", out var room, out _));
-        Assert.False(reg.Quota("влал").Allowed);
+        Assert.False(reg.Quota(MatchPublicId.ForNick("влал")).Allowed);
 
         Assert.True(reg.TryRemove(room!.Number, out var removed));
         Assert.Equal("влал", removed.OwnerNick);
 
         // Ник свободен — можно создать новую комнату. Номер тоже освободился:
         // #1 закрылась, значит следующая берёт наименьший свободный — #1.
-        Assert.True(reg.Quota("влал").Allowed);
+        Assert.True(reg.Quota(MatchPublicId.ForNick("влал")).Allowed);
         Assert.True(Create(reg, "duel", null, "влал", out var second, out _));
         Assert.Equal(1, second!.Number);
     }
@@ -359,24 +360,24 @@ public sealed class RoomRegistryTests
     {
         var reg = new RoomRegistry { MaxRooms = 1 };
 
-        var before = reg.Quota("влал");
+        var before = reg.Quota(MatchPublicId.ForNick("влал"));
         Assert.True(before.Allowed);
         Assert.Equal(0, before.OwnerRooms);
         Assert.Equal(RoomCreateError.None, before.Error);
 
         Assert.True(Create(reg, "2v2", null, "влал", out _, out _));
 
-        var mine = reg.Quota("влал");
+        var mine = reg.Quota(MatchPublicId.ForNick("влал"));
         Assert.False(mine.Allowed);
         Assert.Equal(1, mine.OwnerRooms);
-        Assert.Equal(RoomCreateError.DuplicateNick, mine.Error);
+        Assert.Equal(RoomCreateError.DuplicateOwner, mine.Error);
 
         // Другому нику места уже нет — но причина другая: потолок, а не «у тебя уже есть».
-        var other = reg.Quota("другой");
+        var other = reg.Quota(MatchPublicId.ForNick("другой"));
         Assert.False(other.Allowed);
         Assert.Equal(RoomCreateError.RoomLimitReached, other.Error);
 
-        Assert.Equal(RoomCreateError.EmptyNick, reg.Quota("  ").Error);
+        Assert.Equal(RoomCreateError.EmptyOwner, reg.Quota(0).Error);
     }
 
     [Fact]
@@ -387,6 +388,58 @@ public sealed class RoomRegistryTests
 
         Assert.Equal("влал", reg.OwnerOf(room!.Number));
         Assert.Equal(string.Empty, reg.OwnerOf(999));
+    }
+
+    [Fact]
+    public void OwnerIdOf_MatchesNickDerivedId()
+    {
+        // Реестр обязан считать id той же функцией, что и лобби: иначе бронь
+        // (PendingRooms.Reserve ищет по MatchPublicId.ForNick) не найдёт комнату.
+        var reg = new RoomRegistry();
+        Assert.True(Create(reg, "2v2", null, "влал", out var room, out _));
+
+        Assert.Equal(MatchPublicId.ForNick("влал"), reg.OwnerIdOf(room!.Number));
+        Assert.Equal(0, reg.OwnerIdOf(999));
+    }
+
+    [Fact]
+    public void ExplicitOwnerId_WinsOverNick()
+    {
+        // Панель присылает id, вычисленный по реальному нику из лобби.
+        // Даже если ник-подпись пустой, комната закрепляется за id.
+        var reg = new RoomRegistry();
+
+        Assert.True(reg.TryCreate("2v2", null, null, string.Empty, out var room, out _,
+            ownerId: 4242));
+
+        Assert.Equal(4242, reg.OwnerIdOf(room!.Number));
+        // Подпись не пустая — иначе владелец в списке выглядел бы безымянным.
+        Assert.Equal("#4242", reg.OwnerOf(room.Number));
+    }
+
+    [Fact]
+    public void SameIdCannotOpenSecondRoom()
+    {
+        var reg = new RoomRegistry();
+
+        Assert.True(reg.TryCreate("2v2", null, null, "первый", out _, out _, ownerId: 77));
+        Assert.False(reg.TryCreate("duel", null, null, "второй", out _, out var err,
+            ownerId: 77));
+
+        // Разные ники, один человек — вторую комнату не даём.
+        Assert.Equal(RoomCreateError.DuplicateOwner, err);
+    }
+
+    [Fact]
+    public void DifferentIdsWithSameNickBothGetRooms()
+    {
+        // Раньше ключом был ник: второй «влал» получал отказ, хотя это другой человек.
+        var reg = new RoomRegistry();
+
+        Assert.True(reg.TryCreate("2v2", null, null, "влал", out _, out _, ownerId: 501));
+        Assert.True(reg.TryCreate("2v2", null, null, "влал", out _, out _, ownerId: 502));
+
+        Assert.Equal(2, reg.Count);
     }
 
     [Fact]

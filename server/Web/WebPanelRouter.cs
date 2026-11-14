@@ -186,6 +186,7 @@ public sealed class WebPanelRouter
                 writer.WriteString("level", room.Level);
                 writer.WriteString("name", room.Name);
                 writer.WriteString("owner", room.OwnerNick);
+                writer.WriteNumber("ownerId", room.OwnerId);
                 writer.WriteString("state", room.State.ToString().ToLowerInvariant());
                 writer.WriteNumber("players", room.Players);
                 writer.WriteNumber("perTeam", room.PerTeam);
@@ -231,17 +232,45 @@ public sealed class WebPanelRouter
         if (parsed is null)
             return ApiError(400, "bad_json", "пустое тело запроса");
 
-        // Одна кнопка: владелец — тот, кто создаёт. Ник приходит из лобби, а не из пароля.
-        if (!_options.RequireOwnerNick && string.IsNullOrWhiteSpace(parsed.Owner))
-            return ApiError(400, "empty_owner", "нет ника владельца");
+        // Одна кнопка: владелец — тот, кто создаёт. Теперь это ID из лобби, а не ник:
+        // ник в лобби не уникален и его можно вписать какой угодно.
+        if (parsed.OwnerId <= 0)
+        {
+            // Прислали ник вместо ID — объясняем прямо, а не «пустое поле»:
+            // иначе человек ищет ошибку в форме, где всё заполнено.
+            return string.IsNullOrWhiteSpace(parsed.Owner)
+                ? ApiError(400, "empty_owner", "укажи свой ID из лобби")
+                : ApiError(400, "nick_not_supported",
+                    "комната создаётся по ID игрока, а не по нику — возьми ID из чата лобби");
+        }
+
+        var ownerNick = string.Empty;
+        var online = _options.OnlinePlayers?.Invoke();
+        if (online is not null)
+        {
+            // Ник берём с сервера: человек его не вводит и подделать не может.
+            var found = false;
+            foreach (var (id, nick) in online)
+            {
+                if (id != parsed.OwnerId)
+                    continue;
+                ownerNick = nick;
+                found = true;
+                break;
+            }
+
+            if (!found)
+                return ApiError(409, "player_offline",
+                    $"игрока с ID {parsed.OwnerId} нет в лобби — зайди в игру и создай комнату оттуда");
+        }
 
         var modeToken = string.IsNullOrWhiteSpace(parsed.Mode)
             ? _options.DefaultModeId
             : parsed.Mode;
 
         if (!_rooms.TryCreate(
-                modeToken, parsed.Level, parsed.Name, parsed.Owner, out var room, out var error,
-                perTeam: parsed.PerTeam)
+                modeToken, parsed.Level, parsed.Name, ownerNick, out var room, out var error,
+                perTeam: parsed.PerTeam, ownerId: parsed.OwnerId)
             || room is null)
         {
             var (status, code, message) = MapCreateError(error);
@@ -272,8 +301,14 @@ public sealed class WebPanelRouter
             writer.WriteString("level", room.Level);
             writer.WriteString("name", room.Name);
             writer.WriteString("owner", room.OwnerNick);
+            writer.WriteNumber("ownerId", room.OwnerId);
             writer.WriteString("joinCommand", FormatJoinCommand(room));
             writer.WriteString("state", room.State.ToString().ToLowerInvariant());
+            // Потолок и подпись размера — сразу, иначе только что созданная комната
+            // рисуется с глобальными 16 и врёт про «есть места» в 1 на 1.
+            writer.WriteNumber("perTeam", room.PerTeam);
+            writer.WriteNumber("maxPlayers", RoomCapacity.TotalFor(room.ModeId, room.PerTeam));
+            writer.WriteString("teamLabel", RoomCapacity.Describe(room.ModeId, room.PerTeam));
             writer.WriteEndObject();
         }
 
@@ -285,8 +320,8 @@ public sealed class WebPanelRouter
         {
             RoomCreateError.UnknownMode => (400, "unknown_mode", "неизвестный режим"),
             RoomCreateError.UnknownLevel => (400, "unknown_level", "такой карты у режима нет"),
-            RoomCreateError.EmptyNick => (400, "empty_owner", "нет ника владельца"),
-            RoomCreateError.DuplicateNick => (409, "one_room_per_player",
+            RoomCreateError.EmptyOwner => (400, "empty_owner", "не указан ID владельца"),
+            RoomCreateError.DuplicateOwner => (409, "one_room_per_player",
                 "у этого игрока уже есть комната"),
             RoomCreateError.TooManyRooms => (409, "too_many_rooms",
                 "комнат больше, чем игроков онлайн"),
@@ -329,8 +364,11 @@ public sealed class WebPanelRouter
         string? Mode,
         string? Level,
         string? Name,
-        string? Owner,
-        int PerTeam = 0);
+        int OwnerId = 0,
+        int PerTeam = 0,
+        // Оставлено только чтобы отличить «прислали ник» от «не прислали ничего».
+        // Значение никак не используется: подпись берётся из списка лобби.
+        string? Owner = null);
 }
 
 /// <summary>Что роутеру нужно от хоста и конфига.</summary>
@@ -338,12 +376,6 @@ public sealed class WebPanelRouterOptions
 {
     /// <summary>Режим по умолчанию, если панель не прислала ни одного.</summary>
     public string DefaultModeId { get; init; } = LobbyPropKeys.DefaultGameModeId;
-
-    /// <summary>
-    /// Требовать ли ник владельца. Спека — «одна кнопка», ник в лобби есть всегда,
-    /// поэтому true; false оставлено для тестов и локальных запусков.
-    /// </summary>
-    public bool RequireOwnerNick { get; init; } = true;
 
     /// <summary>
     /// Префикс подпути за прокси (например <c>/vlalchillow</c>). Пусто — панель в корне.
@@ -354,4 +386,15 @@ public sealed class WebPanelRouterOptions
     /// Поднять игровую комнату по записи реестра. Возвращает текст ошибки или <c>null</c>.
     /// </summary>
     public Func<RoomDescriptor, string?>? OnRoomCreated { get; init; }
+
+    /// <summary>
+    /// Кто сейчас в лобби: (серверный id, ник).
+    /// </summary>
+    /// <remarks>
+    /// Комната создаётся <b>за конкретным присутствующим человеком</b>, а не за
+    /// строчкой текста. Без этой проверки можно было вписать любой ник (в том числе
+    /// чужой или несуществующий) и получить комнату «за игрока», которого нет.
+    /// <c>null</c> — проверка выключена (тесты реестра и режим без хоста).
+    /// </remarks>
+    public Func<IReadOnlyList<(int Id, string Nick)>>? OnlinePlayers { get; init; }
 }

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using StandChillow.LanServer.Bans;
 using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net;
@@ -77,6 +78,10 @@ public sealed class WebPanelHost : IDisposable
             new WebPanelRouterOptions
             {
                 OnRoomCreated = CreateGameRoom,
+
+                // Кто сейчас в лобби — источник правды для «комната за этим ID».
+                // Ник берётся отсюда, а не из тела запроса: вписать чужой нельзя.
+                OnlinePlayers = ListOnlinePlayers,
             });
 
         _server_ = new WebPanelServer(
@@ -341,9 +346,36 @@ public sealed class WebPanelHost : IDisposable
 
         Console.WriteLine(
             $"[web] создана комната #{room.Number} «{BuildRoomLabel(room)}» " +
-            $"({room.ModeId} / {room.Level}) владелец '{room.OwnerNick}' — " +
+            $"({room.ModeId} / {room.Level}) владелец '{room.OwnerNick}' " +
+            $"(ID {room.OwnerId}) — " +
             $"ждать: /join {GameModeCatalogAlias(room.ModeId)} #{room.Number}");
         return null;
+    }
+
+    /// <summary>
+    /// Кто сейчас в лобби: серверный id и ник. Пусто, пока хост не подключён.
+    /// </summary>
+    /// <remarks>
+    /// id считается той же функцией, что даёт <c>uid</c> в катке и строку
+    /// «Ты &lt;ник&gt; · ID: …» при входе в лобби, поэтому человек называет ровно
+    /// то число, которое сервер и так про него знает.
+    /// </remarks>
+    private IReadOnlyList<(int Id, string Nick)> ListOnlinePlayers()
+    {
+        var host = _host;
+        if (host is null)
+            return Array.Empty<(int, string)>();
+
+        var players = host.Session.JoinedPlayers();
+        var list = new List<(int Id, string Nick)>(players.Count);
+        foreach (var player in players)
+        {
+            var id = MatchPublicId.ForNick(player.Name);
+            if (id > 0)
+                list.Add((id, player.Name));
+        }
+
+        return list;
     }
 
     /// <summary>Подпись комнаты для лога и страницы: имя или «Комната #N».</summary>

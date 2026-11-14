@@ -29,7 +29,14 @@ public sealed class WebPanelRouterTests
             {
                 BasePath = basePath,
                 OnRoomCreated = onCreated,
-                RequireOwnerNick = true,
+
+                // «В лобби» — те же три игрока, чьи id используют тесты ниже.
+                OnlinePlayers = () => new List<(int Id, string Nick)>
+                {
+                    (1000, "влал"),
+                    (1001, "a"),
+                    (1002, "b"),
+                },
             });
     }
 
@@ -93,7 +100,7 @@ public sealed class WebPanelRouterTests
     {
         var router = NewRouter(out var rooms);
         var response = router.Route(Post("/api/rooms",
-            """{"mode":"2v2","level":"Sandstone","name":"вечерняя","owner":"влал"}"""));
+            """{"mode":"2v2","level":"Sandstone","name":"вечерняя","ownerId":1000}"""));
 
         Assert.Equal(201, response.Status);
         var json = Body(response);
@@ -107,20 +114,118 @@ public sealed class WebPanelRouterTests
     public void NumbersGrowMonotonically()
     {
         var router = NewRouter(out _);
-        router.Route(Post("/api/rooms", """{"mode":"2v2","owner":"a"}"""));
-        var second = router.Route(Post("/api/rooms", """{"mode":"duel","owner":"b"}"""));
+        router.Route(Post("/api/rooms", """{"mode":"2v2","ownerId":1001}"""));
+        var second = router.Route(Post("/api/rooms", """{"mode":"duel","ownerId":1002}"""));
 
         Assert.Contains("\"number\":2", Body(second));
         Assert.Contains("\"joinCommand\":\"/join duel #2\"", Body(second));
     }
 
     [Fact]
+    public void RoomIsCreatedOnlyForPlayerInLobby()
+    {
+        var router = NewRouter(out var rooms);
+
+        // 9999 в лобби нет — комната не создаётся, и человеку сказано почему.
+        var response = router.Route(Post("/api/rooms", """{"mode":"2v2","ownerId":9999}"""));
+
+        Assert.Equal(409, response.Status);
+        Assert.Contains("player_offline", Body(response));
+        Assert.Equal(0, rooms.Count);
+    }
+
+    [Fact]
+    public void NickComesFromServerNotFromRequest()
+    {
+        // Ник в теле запроса вообще не участвует: даже если прислать чужой,
+        // владельцем станет тот, чей id пришёл, и подпись будет его настоящая.
+        var router = NewRouter(out _);
+        router.Route(Post("/api/rooms",
+            """{"mode":"2v2","name":"моя","ownerId":1001,"owner":"подмена"}"""));
+
+        var json = Body(router.Route(Get("/api/rooms")));
+
+        Assert.Contains("\"owner\":\"a\"", json);
+        Assert.DoesNotContain("подмена", json);
+    }
+
+    [Fact]
+    public void MissingOwnerIdIsRejected()
+    {
+        var router = NewRouter(out var rooms);
+
+        var response = router.Route(Post("/api/rooms", """{"mode":"2v2"}"""));
+
+        Assert.Equal(400, response.Status);
+        Assert.Contains("empty_owner", Body(response));
+        Assert.Equal(0, rooms.Count);
+    }
+
+    [Fact]
+    public void NickInsteadOfIdIsRejectedClearly()
+    {
+        // Ник — не идентификатор: сервер говорит об этом отдельным кодом,
+        // а не «пустое поле», иначе человек чинит не ту часть формы.
+        var router = NewRouter(out var rooms);
+
+        var response = router.Route(Post("/api/rooms", """{"mode":"2v2","owner":"влал"}"""));
+
+        Assert.Equal(400, response.Status);
+        Assert.Contains("nick_not_supported", Body(response));
+        Assert.Equal(0, rooms.Count);
+    }
+
+    [Fact]
+    public void DifferentPlayersGetSeparateRooms()
+    {
+        // Раньше ключом был ник: двое с одинаковым ником не могли оба создать
+        // комнату, а один мог занять «чужую» комнату, вписав чужой ник.
+        var router = NewRouter(out var rooms);
+
+        Assert.Equal(201, router.Route(Post("/api/rooms",
+            """{"mode":"2v2","ownerId":1001}""")).Status);
+        Assert.Equal(201, router.Route(Post("/api/rooms",
+            """{"mode":"2v2","ownerId":1002}""")).Status);
+        Assert.Equal(2, rooms.Count);
+    }
+
+    [Fact]
+    public void CreatedRoomReportsItsOwnCapacity()
+    {
+        // Ответ создания обязан нести потолок: иначе панель рисует 4/16
+        // у комнаты «2 на 2», где мест всего четыре.
+        var router = NewRouter(out _);
+
+        var response = router.Route(Post("/api/rooms",
+            """{"mode":"2v2","ownerId":1001,"perTeam":1}"""));
+        var json = Body(response);
+
+        Assert.Equal(201, response.Status);
+        Assert.Contains("\"perTeam\":1", json);
+        Assert.Contains("\"maxPlayers\":2", json);
+        Assert.Contains("\"teamLabel\":\"1 на 1\"", json);
+    }
+
+    [Fact]
+    public void RoomListCarriesOwnerIdAndCapacity()
+    {
+        var router = NewRouter(out _);
+        router.Route(Post("/api/rooms", """{"mode":"duel","ownerId":1002,"perTeam":2}"""));
+
+        var json = Body(router.Route(Get("/api/rooms")));
+
+        Assert.Contains("\"ownerId\":1002", json);
+        Assert.Contains("\"maxPlayers\":4", json);
+        Assert.Contains("\"teamLabel\":\"2 на 2\"", json);
+    }
+
+    [Fact]
     public void SecondRoomForSameOwnerIsConflict()
     {
         var router = NewRouter(out _);
-        router.Route(Post("/api/rooms", """{"mode":"2v2","owner":"влал"}"""));
+        router.Route(Post("/api/rooms", """{"mode":"2v2","ownerId":1000}"""));
 
-        var dup = router.Route(Post("/api/rooms", """{"mode":"duel","owner":"ВЛАЛ"}"""));
+        var dup = router.Route(Post("/api/rooms", """{"mode":"duel","ownerId":1000}"""));
 
         Assert.Equal(409, dup.Status);
         Assert.Contains("one_room_per_player", Body(dup));
@@ -130,7 +235,7 @@ public sealed class WebPanelRouterTests
     public void UnknownModeIs400()
     {
         var router = NewRouter(out _);
-        var response = router.Route(Post("/api/rooms", """{"mode":"нетакого","owner":"a"}"""));
+        var response = router.Route(Post("/api/rooms", """{"mode":"нетакого","ownerId":1001}"""));
 
         Assert.Equal(400, response.Status);
         Assert.Contains("unknown_mode", Body(response));
@@ -141,7 +246,7 @@ public sealed class WebPanelRouterTests
     {
         var router = NewRouter(out _);
         var response = router.Route(Post("/api/rooms",
-            """{"mode":"2v2","level":"Block","owner":"a"}"""));
+            """{"mode":"2v2","level":"Block","ownerId":1001}"""));
 
         Assert.Equal(400, response.Status);
         Assert.Contains("unknown_level", Body(response));
@@ -178,7 +283,7 @@ public sealed class WebPanelRouterTests
     public void ModeDefaultsWhenOmitted()
     {
         var router = NewRouter(out _);
-        var response = router.Route(Post("/api/rooms", """{"owner":"влал"}"""));
+        var response = router.Route(Post("/api/rooms", """{"ownerId":1000}"""));
         Assert.Equal(201, response.Status);
     }
 
@@ -188,7 +293,7 @@ public sealed class WebPanelRouterTests
         var attempts = 0;
         var router = NewRouter(out var rooms, _ => ++attempts == 1 ? "игровой порт не поднялся" : null);
 
-        var response = router.Route(Post("/api/rooms", """{"mode":"2v2","owner":"a"}"""));
+        var response = router.Route(Post("/api/rooms", """{"mode":"2v2","ownerId":1001}"""));
 
         Assert.Equal(500, response.Status);
         Assert.Contains("room_not_created", Body(response));
@@ -198,7 +303,7 @@ public sealed class WebPanelRouterTests
 
         // Номер освободился вместе с откатом: следующая комната снова берёт
         // наименьший свободный, то есть #1. Комнаты #1 в реестре больше нет.
-        var retry = router.Route(Post("/api/rooms", """{"mode":"2v2","owner":"b"}"""));
+        var retry = router.Route(Post("/api/rooms", """{"mode":"2v2","ownerId":1002}"""));
         Assert.Equal(201, retry.Status);
         Assert.Contains("\"number\":1", Body(retry));
     }
@@ -208,7 +313,7 @@ public sealed class WebPanelRouterTests
     {
         var router = NewRouter(out _);
         router.Route(Post("/api/rooms",
-            """{"mode":"tdm","name":"тестовая","owner":"влал"}"""));
+            """{"mode":"tdm","name":"тестовая","ownerId":1000}"""));
 
         var json = Body(router.Route(Get("/api/rooms")));
 
@@ -277,7 +382,7 @@ public sealed class WebPanelRouterTests
     public void JsonDoesNotEscapeCyrillicIntoAscii()
     {
         var router = NewRouter(out _);
-        router.Route(Post("/api/rooms", """{"mode":"2v2","owner":"влал"}"""));
+        router.Route(Post("/api/rooms", """{"mode":"2v2","ownerId":1000}"""));
 
         // Читаемая кириллица в JSON — иначе в отладке сети всё превращается в \uXXXX.
         Assert.Contains("влал", Body(router.Route(Get("/api/rooms"))));

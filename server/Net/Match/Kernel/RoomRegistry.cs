@@ -40,6 +40,7 @@ public sealed record RoomDescriptor(
     string Level,
     string Name,
     string PasswordKey,
+    int OwnerId,
     string OwnerNick,
     DateTime CreatedUtc,
     RoomState State,
@@ -62,8 +63,10 @@ public enum RoomCreateError : byte
     None = 0,
     UnknownMode = 1,
     UnknownLevel = 2,
-    EmptyNick = 3,
-    DuplicateNick = 4,
+    /// <summary>Не удалось определить владельца: ни id, ни пригодного ника.</summary>
+    EmptyOwner = 3,
+    /// <summary>У этого владельца уже есть комната — одна на человека.</summary>
+    DuplicateOwner = 4,
     TooManyRooms = 5,
     RoomLimitReached = 6,
     UnknownTeamSize = 7,
@@ -99,7 +102,8 @@ public sealed class RoomRegistry
 
     private readonly object _gate = new();
     private readonly Dictionary<int, RoomDescriptor> _rooms = new();
-    private readonly Dictionary<string, int> _byOwner = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Одна комната на игрока: ключ — серверный id, не ник.</summary>
+    private readonly Dictionary<int, int> _byOwner = new();
     private int _maxRooms = DefaultMaxRooms;
 
     /// <summary>Потолок открытых комнат. Значения вне 1..1024 подтягиваются в диапазон.</summary>
@@ -155,7 +159,11 @@ public sealed class RoomRegistry
     /// <param name="modeToken">Режим как его набрал человек: <c>2v2</c>, <c>Duel</c>, <c>defuse</c>.</param>
     /// <param name="levelToken">Карта: <c>Sandstone</c> тоже подойдёт — каталог умеет префиксы.</param>
     /// <param name="name">Название комнаты; пустое допустимо (UI покажет «Комната #N»).</param>
-    /// <param name="ownerNick">Ник из лобби, он же ключ квоты.</param>
+    /// <param name="ownerNick">Ник из лобби — только подпись в списке, не ключ.</param>
+    /// <param name="ownerId">
+    /// Серверный id игрока — по нему считается квота «одна комната на человека».
+    /// Ноль означает «вычислить из ника» (старые вызовы и тесты).
+    /// </param>
     public bool TryCreate(
         string? modeToken,
         string? levelToken,
@@ -163,7 +171,8 @@ public sealed class RoomRegistry
         string? ownerNick,
         out RoomDescriptor? room,
         out RoomCreateError error,
-        int perTeam = 0)
+        int perTeam = 0,
+        int ownerId = 0)
     {
         room = null;
         error = RoomCreateError.None;
@@ -188,18 +197,25 @@ public sealed class RoomRegistry
             return false;
         }
 
+        // Владелец — серверный id игрока (тот же расчёт, что даёт uid в катке),
+        // а не ник. Ник в лобби не уникален: двое «влал» — обычное дело, а id
+        // у них разные. Ник остаётся только подписью в списке комнат.
         var nick = NormalizeNick(ownerNick);
-        if (nick.Length == 0)
+        var resolvedId = ownerId > 0 ? ownerId : MatchPublicId.ForNick(nick);
+        if (resolvedId <= 0)
         {
-            error = RoomCreateError.EmptyNick;
+            error = RoomCreateError.EmptyOwner;
             return false;
         }
 
+        if (nick.Length == 0)
+            nick = "#" + resolvedId; // комната без ника — всё равно называем владельца
+
         lock (_gate)
         {
-            if (_byOwner.ContainsKey(nick))
+            if (_byOwner.ContainsKey(resolvedId))
             {
-                error = RoomCreateError.DuplicateNick;
+                error = RoomCreateError.DuplicateOwner;
                 return false;
             }
 
@@ -231,6 +247,7 @@ public sealed class RoomRegistry
                 Level: level,
                 Name: CleanName(name, number),
                 PasswordKey: BuildPasswordKey(number),
+                OwnerId: resolvedId,
                 OwnerNick: nick,
                 CreatedUtc: DateTime.UtcNow,
                 State: RoomState.Waiting,
@@ -239,7 +256,7 @@ public sealed class RoomRegistry
                 PerTeam: teamSize);
 
             _rooms[number] = created;
-            _byOwner[nick] = number;
+            _byOwner[resolvedId] = number;
             room = created;
             return true;
         }
@@ -294,25 +311,31 @@ public sealed class RoomRegistry
             return _rooms.Values.OrderByDescending(r => r.Number).ToList();
     }
 
-    /// <summary>Сколько комнат ещё может создать этот ник.</summary>
-    public RoomQuota Quota(string? ownerNick)
+    /// <summary>Сколько комнат ещё может создать этот игрок (по серверному id).</summary>
+    public RoomQuota Quota(int ownerId)
     {
-        var nick = NormalizeNick(ownerNick);
-        if (nick.Length == 0)
-            return new RoomQuota(false, 0, Count, RoomCreateError.EmptyNick);
+        if (ownerId <= 0)
+            return new RoomQuota(false, 0, Count, RoomCreateError.EmptyOwner);
 
         lock (_gate)
         {
-            var mine = _byOwner.ContainsKey(nick) ? 1 : 0;
+            var mine = _byOwner.ContainsKey(ownerId) ? 1 : 0;
             var total = _rooms.Count;
-            var error = mine > 0 ? RoomCreateError.DuplicateNick
+            var error = mine > 0 ? RoomCreateError.DuplicateOwner
                 : total >= _maxRooms ? RoomCreateError.RoomLimitReached
                 : RoomCreateError.None;
             return new RoomQuota(error == RoomCreateError.None, mine, total, error);
         }
     }
 
-    /// <summary>Кто владелец комнаты с этим номером (пусто — нет такой).</summary>
+    /// <summary>Id владельца комнаты (0 — нет такой комнаты).</summary>
+    public int OwnerIdOf(int number)
+    {
+        lock (_gate)
+            return _rooms.TryGetValue(number, out var r) ? r.OwnerId : 0;
+    }
+
+    /// <summary>Ник владельца комнаты — только подпись (пусто — нет такой комнаты).</summary>
     public string OwnerOf(int number)
     {
         lock (_gate)
@@ -364,8 +387,8 @@ public sealed class RoomRegistry
             if (!_rooms.Remove(number, out var removed))
                 return false;
 
-            if (_byOwner.TryGetValue(removed.OwnerNick, out var owned) && owned == number)
-                _byOwner.Remove(removed.OwnerNick);
+            if (_byOwner.TryGetValue(removed.OwnerId, out var owned) && owned == number)
+                _byOwner.Remove(removed.OwnerId);
 
             room = removed;
             return true;
