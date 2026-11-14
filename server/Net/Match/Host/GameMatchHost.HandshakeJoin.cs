@@ -113,23 +113,6 @@ public sealed partial class GameMatchHost
     /// в общей комнате.
     /// </remarks>
     /// <summary>
-    /// Есть ли в этом процессе хотя бы одна комната, созданная с сайта.
-    /// </summary>
-    /// <remarks>
-    /// Нужен, чтобы отличить две разные ситуации с одинаковым симптомом «брони нет»:
-    /// <list type="bullet">
-    /// <item>панельных комнат нет вовсе — это обычный legacy-сервер, ведём в 'Dedik';</item>
-    /// <item>панельные комнаты есть — игрок просто не писал <c>/join</c>, и пускать его
-    /// в чужую катку нельзя (баг «всех унесло на другую карту»).</item>
-    /// </list>
-    /// </remarks>
-    private bool HasPanelRooms()
-    {
-        lock (_roomGate)
-            return _roomsByPassword.Values.Any(r => r.IsPanelRoom);
-    }
-
-    /// <summary>
     /// Ключ, которого не бывает: <c>ResolveJoinRoomKey</c> возвращает его, когда
     /// комната нужна игроку, но брони нет. Дальше вызывающий код видит
     /// <c>room is null</c> и отвечает <c>RoomNotFound</c> — без выдуманных комнат.
