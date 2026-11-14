@@ -156,7 +156,7 @@ public sealed class WebPanelRouter
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    private WebResponse BuildRoomsJson()
+    private string BuildRoomsJson()
     {
         var rooms = _rooms.Snapshot();
         using var stream = new MemoryStream();
@@ -186,7 +186,7 @@ public sealed class WebPanelRouter
             writer.WriteEndObject();
         }
 
-        return WebResponse.Json(Encoding.UTF8.GetString(stream.ToArray()));
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     /// <summary>Команда, которую панель даёт скопировать: ровно то, что понимает лобби.</summary>
