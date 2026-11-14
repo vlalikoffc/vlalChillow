@@ -223,6 +223,26 @@ public sealed partial class GameMatchHost : IDisposable
     }
 
     /// <summary>
+    /// Кто сейчас в катке — для лога доставки: «ждал ник X, а в катке вот кто».
+    /// </summary>
+    /// <remarks>
+    /// Без этого строка «ответ только в лобби» ничего не объясняла: ни кто подключён, ни
+    /// готов ли его bootstrap (а он ждёт identity до 15 с).
+    /// </remarks>
+    public string DescribePeers()
+    {
+        var parts = new List<string>();
+        foreach (var (p, st) in _peers)
+        {
+            parts.Add(
+                $"{st.ActorNr}/{(string.IsNullOrWhiteSpace(st.RosterName) ? "?" : st.RosterName)}" +
+                $"@{p.Address}{(st.BootstrapSent ? "" : "(bootstrap ждёт)")}");
+        }
+
+        return parts.Count == 0 ? "в катке нет пиров" : string.Join(", ", parts);
+    }
+
+    /// <summary>
     /// Last resort for command feedback: one match peer that plausibly is the requester.
     /// Never broadcasts — a private reply must not surface in the shared match chat.
     /// </summary>
@@ -246,6 +266,17 @@ public sealed partial class GameMatchHost : IDisposable
             var sameIp = candidates
                 .Where(c => SameAddress(c.Peer.Address, peerIp))
                 .ToList();
+
+            // Один пир в катке — это заведомо он. Больше одного и ни одного совпадения по
+            // IP — не угадываем: приватный ответ не должен уйти чужому человеку.
+            if (sameIp.Count == 0 && candidates.Count > 1)
+            {
+                Console.WriteLine(
+                    $"[chat] last-chance: ip={peerIp} не совпал ни с кем из {candidates.Count} " +
+                    "пиров — ответ не отправляю (мог бы уйти чужому)");
+                return 0;
+            }
+
             var pool = sameIp.Count > 0 ? sameIp : candidates;
             // Then whoever already has a pawn — an observer without a pawn is the wrong target.
             var spawned = pool.Where(c => room.SpawnedPawns.Contains(c.State.ActorNr)).ToList();
@@ -332,6 +363,18 @@ public sealed partial class GameMatchHost : IDisposable
         _listener.ConnectionRequestEvent += request =>
         {
             var peek = request.Data.AvailableBytes;
+
+            // Бан по IP — на самом раннем входе: дальше не идём, handshake и комнату
+            // не открываем. Один lookup, без диска и без разбора пакета.
+            if (IsBannedAddress(request.RemoteEndPoint.Address))
+            {
+                request.Reject();
+                Console.WriteLine(
+                    $"[ban] CONNECT reject {request.RemoteEndPoint} — IP в бане " +
+                    "(матч не открываем, актор не выдаётся)");
+                return;
+            }
+
             if (!_acceptMatchConnections || !_manager.IsRunning)
             {
                 request.Reject();
@@ -670,11 +713,13 @@ public sealed partial class GameMatchHost : IDisposable
             RoomId = roomId,
         };
         // Actor 1 = lobby fake "Server" — master client / dedicated host, Spectators only.
-        room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name, MatchHostActor.BootstrapUid));
+        // Его id — захардкоженная строка «Server», а не «Offline» и не число: сервер выше
+        // игроков и админов, и в росписи он тоже должен называться своим id.
+        room.Actors.Add((MatchHostActor.ActorNr, MatchHostActor.Name, ServerIdentity.Uid));
         room.ActorProps[(MatchHostActor.ActorNr, MatchRoomPropKeys.Team)] =
             LobbyVariant.FromByte((byte)MatchHostActor.Team);
         room.ActorProps[(MatchHostActor.ActorNr, MatchRoomPropKeys.Uid)] =
-            LobbyVariant.FromString(MatchHostActor.BootstrapUid);
+            LobbyVariant.FromString(ServerIdentity.Uid);
         return room;
     }
 

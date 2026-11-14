@@ -70,13 +70,34 @@ public sealed partial class GameMatchHost
                 pingFromRtt = true;
             }
 
+            // uid: клиент шлёт «Offline» (заглушка в списке игроков). Сервер отдаёт своё
+            // значение — числовой id игрока или «Server» для актора сервера. Если автора
+            // не опознали, свойство ОТБРАСЫВАЕТСЯ, а не проходит как есть: иначе через
+            // этот путь можно было бы протолкнуть чужой id.
+            LobbyVariant serverUid = default;
+            var uidRewritten = false;
+            if (key == MatchRoomPropKeys.Uid && ExposeServerUid)
+            {
+                if (!TryServerUid(actorNr, st, room, out serverUid))
+                {
+                    Console.WriteLine(
+                        $"[match-host] SetProperty uid actor={actorNr} — ник не опознан, " +
+                        "свойство отброшено (id ставит только сервер)");
+                    return;
+                }
+
+                value = serverUid;
+                uidRewritten = true;
+            }
+
             // SetProperty is one of the hottest paths (every hit/death/team change). Log it
             // only in verbose mode; the per-key combat/buy traces below stay (decisive).
             if (Diag.LogVerbose)
                 Console.WriteLine(
                     $"[match-host] SetProperty actor={actorNr} key='{key}' value={value}" +
                     (compressed ? " (LZ4→echo uncompressed HasServerTime)" : "") +
-                    (pingFromRtt ? $" (server RTT={peer.RoundTripTime}ms, not client echo)" : ""));
+                    (pingFromRtt ? $" (server RTT={peer.RoundTripTime}ms, not client echo)" : "") +
+                    (uidRewritten ? " (server id instead of client uid)" : ""));
 
             LobbyVariant prevValue = default;
             bool hadPrev;
@@ -193,8 +214,12 @@ public sealed partial class GameMatchHost
             var accepted = new List<(string Key, LobbyVariant Value)>(props.Count);
             lock (_roomGate)
             {
-                foreach (var (k, v) in props)
+                foreach (var (k, originalValue) in props)
                 {
+                    // Локальная копия: у переменной цикла нельзя менять значение, а uid
+                    // переписывается до записи в комнату и до рассылки.
+                    var v = originalValue;
+
                     if (MatchPropAuthority.RejectsForeignCombatProp(
                             st.ActorNr, actorNr, k, MatchHostActor.ActorNr))
                     {
@@ -209,6 +234,21 @@ public sealed partial class GameMatchHost
                             $"[match-host] SetProperties actor=0 key='{k}' REJECTED " +
                             "(host-owned room prop — not applied/relayed)");
                         continue;
+                    }
+
+                    // uid — как в одиночном SetProperty: серверный id вместо клиентского,
+                    // а неопознанный автор это свойство не получает вовсе.
+                    if (k == MatchRoomPropKeys.Uid && ExposeServerUid)
+                    {
+                        if (!TryServerUid(actorNr, st, room, out var serverUid))
+                        {
+                            Console.WriteLine(
+                                $"[match-host] SetProperties uid actor={actorNr} — ник не опознан, " +
+                                "свойство отброшено (id ставит только сервер)");
+                            continue;
+                        }
+
+                        v = serverUid;
                     }
 
                     var had = room.ActorProps.TryGetValue((actorNr, k), out var prevK);

@@ -1,5 +1,6 @@
 using System.Net;
 using StandChillow.LanServer.Config;
+using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 
@@ -97,6 +98,62 @@ public sealed partial class GameNetHost
             return true;
         }
 
+        if (cmd.Equals("auth", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("код", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleAuthCommand(reply, args, player);
+            return true;
+        }
+
+        if (cmd.Equals("whoami", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("ктоя", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleWhoAmICommand(reply, player);
+            return true;
+        }
+
+        if (cmd.Equals("ban", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("бан", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleBanCommand(reply, args, player);
+            return true;
+        }
+
+        // Старое имя оставлено тихим алиасом: делает то же, что /ban.
+        if (cmd.Equals("banid", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("банид", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleBanCommand(reply, args, player);
+            return true;
+        }
+
+        if (cmd.Equals("unban", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("разбан", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleUnbanCommand(reply, args);
+            return true;
+        }
+
+        if (cmd.Equals("unbanid", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleUnbanCommand(reply, args);
+            return true;
+        }
+
+        if (cmd.Equals("ids", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("айди", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleIdsCommand(reply);
+            return true;
+        }
+
+        if (cmd.Equals("bans", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("баны", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleBansCommand(reply);
+            return true;
+        }
+
         if (cmd.Equals("ready", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("r", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("готов", StringComparison.OrdinalIgnoreCase)
@@ -169,7 +226,7 @@ public sealed partial class GameNetHost
 
     public static string FormatCommandHelp() =>
         """
-        команды: /mode /map /set /play /start /end /ready /help
+        команды: /mode /map /set /play /start /end /ready /ban /help
           /mode [alias]  список или сменить режим
           /map [alias]   карты текущего режима (короткие alias)
           /set …         параметры (start, end, round, wins, …)
@@ -178,26 +235,47 @@ public sealed partial class GameNetHost
           /end           завершить матч сразу (без 5с)
           /ready         отметить готовность (режим старта ready)
           /unready       отменить готовность
+          /ban id срок [причина]    бан на 10m…14d по серверному id (только админ)
+          /unban id                 снять все баны этого id (только админ)
+          /bans                     активные баны и остаток (только админ)
+          /ids                      кто в лобби и катке: id, ник, IP (только админ)
+          /whoami                   что сервер знает про тебя: ник, id, IP, права
+          /auth                     код админа (только из консоли сервера)
         """.Trim();
 
     private static string FormatUnknownCommandHelp(string message) =>
         $"неизвестная команда '{message}' — /help";
 
+    /// <summary>
+    /// Личный ответ игроку: в лобби-сокет и в матч-чат, потому что канал зависит от того,
+    /// где сейчас клиент. Если катка ещё не готова — ответ в очереди и досылается сам.
+    /// </summary>
     private void ReplyPrivate(ConnectedPlayer player, string text)
     {
-        // Лобби-сокет: игрок ещё в лобби — увидит сразу.
+        DashboardHub.PostChat(LobbySession.ServerPlayerName, $"[{player.Name}] {text}", fromServer: true);
+
+        // Лобби-сокет: видно, пока клиент на экране лобби.
         Send(player.Peer, LobbyCodec.BuildChatEvent(LobbySession.ServerMemberId, text));
 
-        // И в катку, но адресно: приватный ответ не должен всплыть в общем чате матча.
-        // Без этого команда выглядела проигнорированной: клиент держит лобби-сокет весь
-        // матч, поэтому «ушло в лобби» в катке не видел никто. Last-chance добивает
-        // ответ в матч, если пир не нашёлся по нику.
-        var peers = _match.SendServerChat(
-            text, nick: player.Name, alsoLastChanceIp: player.Peer.Address);
-        if (peers > 0)
-            Console.WriteLine($"[chat] Server → {player.Name} (match, peers={peers}): {text}");
-        else
-            Console.WriteLine($"[chat] Server → {player.Name}: ответ только в лобби (в катке не найден)");
+        // Матч-чат: адресно. Клиент, ушедший в катку, лобби-кадров больше не рисует —
+        // именно из-за этого «команда выполнилась, а ответа нет».
+        if (_match.SendServerChat(
+                text, nick: player.Name, alsoLastChanceIp: player.Peer.Address) > 0)
+        {
+            Console.WriteLine($"[chat] Server → {player.Name} (match): {text}");
+            return;
+        }
+
+        // Катка идёт? Тогда ответ обязан появиться и в матч-чате — но пир подключается к
+        // 7777 через несколько секунд после op9 (bootstrap ждёт identity до 15 с).
+        if (!_match.IsListening)
+            return;
+
+        var where = player.Status == PlayerLobbyStatus.InMatch ? "в катке" : "в лобби";
+        Console.WriteLine(
+            $"[chat] Server → {player.Name} ({where}): адресата на 7777 пока нет " +
+            $"({_match.DescribePeers()}) — ответ в очереди");
+        RememberMatchReply(player.Name, text, player.Peer.Address);
     }
 
     private void NotifyMatchPlayerJoined(string name)
@@ -208,6 +286,9 @@ public sealed partial class GameNetHost
             _session.TrySetPlayerStatus(player, PlayerLobbyStatus.InMatch);
         BroadcastServerChat($"{name} Подключился!");
         BroadcastServerChat(_session.BuildPlayerListMessage());
+
+        // Команда, набранная до подключения к катке, ждала именно этого момента.
+        FlushMatchReplies(name);
         try { _onRosterChanged?.Invoke(); } catch { /* ignore */ }
     }
 

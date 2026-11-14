@@ -18,6 +18,10 @@
 **/config.json
 !**/config.example.json
 
+# Runtime ban list (nick/IP state; local, never shipped)
+**/banlist.json
+**/banlist.json.tmp
+
 # Reverse-engineering dumps (local only — not shipped)
 decompiled/
 original/
@@ -29,6 +33,9 @@ original/
 
 # IDE / agent tooling (local only — not published)
 .cursor/
+
+# Код админа на запуск (лежит рядом с config.json, никогда не в git)
+auth.txt
 
 # OS junk
 .DS_Store

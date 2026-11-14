@@ -10,6 +10,7 @@ Goal: **no multi-thousand-line god-files**, clear homes for lobby / discovery / 
 | `server/Startup/` | Dedicated-host and ConnectAsClient startup paths | Entry-point orchestration only |
 | `server/Dashboard/` | CLI rendering and console command routing | Shared game commands stay in `GameNetHost` |
 | `server/Diagnostics/` | Verbose switch + async capture sink | **Never** do blocking disk I/O from a network hot path |
+| `server/Bans/` | Ban registry + `banlist.json` store + deterministic nickname→id + duration/message parsing | Shared by lobby **and** match; no sockets, no wire |
 | `tests/` | Socket-free protocol regression tests | xUnit; run in CI on all desktop OSes |
 | `server/Lan/` | Discovery (Bonjour V2 / UDP 5056) | Stay out of match host |
 | `server/Net/Lobby/` | Lobby LiteNetLib + codecs | Stay out of match host |
@@ -22,6 +23,42 @@ Goal: **no multi-thousand-line god-files**, clear homes for lobby / discovery / 
 | `decompiled/` | RE dumps, protocol docs, agent maps | Not compiled into server |
 | `decompiled/tools/` | RE tooling (Ghidra etc.) | **RE agent owns** — do not fight installs |
 | `server/**/captures/`, `logs/` | Runtime captures / run logs | Evidence only; never memcpy into replies |
+
+## Bans (shared layer)
+
+`server/Bans/` owns ban records (nick + IPs + deterministic public id), the seen-player
+directory (`nick ↔ id ↔ IP`) and their text. Lobby and match only **ask** it at three entry
+points — never on the packet path:
+
+| Gate | Where | Keys |
+|------|-------|------|
+| Lobby join / lobby reconnect | `GameNetHost.HandleJoin` | nick + IP |
+| Match connect | `GameMatchHost.ConnectionRequestEvent` | IP only (no nick yet) |
+| Match join / mid-match reconnect | `GameMatchHost.HandleJoinRoom` (before `TryFindRejoinActor`) | nick + IP |
+
+The last gate matters: a mid-match reconnect adopts the old actor and never runs a normal
+join, so a ban checked only at the first connect could be bypassed (e.g. leave VPN →
+reconnect from the banned address). Admins are exempt by nickname at every gate; banning
+an admin is rejected. The install token is deliberately **not** used — nick + IP only.
+Ban keys are never the public id: `/ban <id>` is a selector that resolves to nick + IPs.
+
+`MatchPublicId` derives a stable `1…100 000 000` id from the nickname (SHA-256 of the
+normalized nick); it carries no state, so `/ban <id>` survives restarts. The host also
+substitutes it for the client-authored actor property `uid` (players send the `Offline`
+placeholder from the gold capture) so the in-game player list shows the same number
+`/ids` and `/ban` use. The Server actor carries the hardcoded string id `Server` instead —
+it is outside the player numbering, never bannable, and no client can claim it: the host
+overwrites `uid` from session state on every SetProperty/SetProperties and drops the property
+when the author cannot be resolved. The server nickname is reserved (lobby and match reject
+it, derived from `LobbySession.ServerPlayerName` so a rename moves the reservation).
+
+Admin rights are **not** granted by nickname alone (`AdminAuth`): the nickname a client sends
+is untrusted, so an admin nick gets a shadow lobby until the address enters the per-run code
+printed to the console. The code is 24 random alphanumerics, regenerated on every start,
+authorized IPs live in memory only; the match host and the command dispatcher both consult
+`IsUnauthorizedAdmin`, so a shadowed admin cannot drop or sneak into 7777 either. `PlayerDirectory` persists `nick ↔ id ↔ IP` in `banlist.json` so `/ban` still
+resolves a player who already left. `banlist.json` lives beside `config.json` and is
+git-ignored.
 
 ## Match host split (was 2568-line god-file)
 

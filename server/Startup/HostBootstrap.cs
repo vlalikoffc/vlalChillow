@@ -113,6 +113,15 @@ public static class HostBootstrap
             : string.Join(", ", serverConfig.Admin.Nicknames);
         Console.WriteLine($"[config] файл: {ServerConfig.LastLoadedPath}");
         Console.WriteLine($"[config] админы: {admins}");
+        if (serverConfig.Admin.Nicknames.Count == 0)
+        {
+            // Пустой список — самая частая причина «я не админ»: ник в лобби есть, а
+            // разрешения нет. Пишем готовую строку, которую надо вставить в конфиг.
+            Console.WriteLine(
+                "[config] ВНИМАНИЕ: админ-команд ни у кого нет. Добавь в " +
+                $"{ServerConfig.LastLoadedPath} строку вида: \"nicknames\": [ \"твой ник\" ] " +
+                "внутри admin{} — сервер перечитает файл на ходу");
+        }
         Console.WriteLine(serverConfig.Admin.AdminOnlyCommands.Count == 0
             ? "[config] команд только для админов: нет — все команды доступны всем"
             : $"[config] команд только для админов: " +
@@ -177,7 +186,8 @@ public static class HostBootstrap
                 ? $"Captures: {(string.IsNullOrWhiteSpace(serverConfig.Debug.CapturesDir) ? "captures/" : serverConfig.Debug.CapturesDir)}"
                 : "Captures: off (debug.captures)");
         Console.WriteLine($"Config: {ServerConfig.LastLoadedPath}");
-        Console.WriteLine("Commands: play|start|end|mode|map|set|help|status|binds|roster|plugins|quit");
+        Console.WriteLine(
+            "Commands: play|start|end|mode|map|set|help|status|binds|roster|plugins|auth|whoami|quit");
         Console.WriteLine($"  defaults: {MatchHostSettings.FormatStatusLine()}");
         if (MatchHostSettings.DebugMatchChat)
             Console.WriteLine("  debug-chat: ON — Server posts plant/kill/round-end into lobby chat");
