@@ -3,6 +3,8 @@ using StandChillow.LanServer.Net.Match;
 
 namespace StandChillow.LanServer.Net.Match.Host;
 
+// <see cref="MatchHostSettings"/> живёт в StandChillow.LanServer.Net.Match — using выше.
+
 /// <summary>In-memory LAN match room (password-keyed). Owned by <c>GameMatchHost</c>.</summary>
 internal sealed class MatchRoom
 {
@@ -65,6 +67,38 @@ internal sealed class MatchRoom
     public readonly Dictionary<byte, DateTime> LastAuthoredDeath = new();
     public byte RoomC2 { get; set; }
     public MatchFlowState Flow { get; } = new();
+
+    // ── per-room state (несколько комнат на одном 7777) ─────────────────────────
+
+    /// <summary>
+    /// Номер комнаты в терминах человека (<c>/join 2v2 #3</c>); 0 — legacy-комната <c>Dedik</c>,
+    /// созданная не из панели. Номер не переиспользуется (см. <c>RoomRegistry</c>).
+    /// </summary>
+    public int DisplayNumber { get; init; }
+
+    /// <summary>Название комнаты для панели (в провод не уходит).</summary>
+    public string DisplayName { get; init; } = "";
+
+    /// <summary>
+    /// Гейт старта <b>этой</b> комнаты. Заменяет глобальный
+    /// <see cref="MatchHostSettings.MatchStartArmed"/> для комнат из панели: иначе одно
+    /// «/start» запускало бы все комнаты сразу, а конец катка в одной снимал бы armed у другой.
+    /// </summary>
+    /// <remarks>
+    /// <c>false</c> (значение по умолчанию) означает «комната legacy»: решение по старту
+    /// принимает глобальная настройка, как было до появления комнат. Это сохраняет прежнее
+    /// поведение для <c>/play</c> + <c>/set start</c> и не ломает существующие тесты.
+    /// </remarks>
+    public bool IsPanelRoom { get; init; }
+
+    /// <summary>Старт разрешён именно для этой комнаты (используется только при <see cref="IsPanelRoom"/>).</summary>
+    public bool StartArmed { get; set; }
+
+    /// <summary>
+    /// Сколько раундов нужно выиграть в этой комнате (first-to-N). 0 — взять глобальное
+    /// значение <see cref="MatchHostSettings.WinsNeeded"/> (legacy-поведение).
+    /// </summary>
+    public int WinsNeededOverride { get; init; }
 }
 
 /// <summary>

@@ -22,7 +22,7 @@ public sealed partial class GameMatchHost
                 return;
         }
 
-        if (!MatchHostSettings.MatchStartArmed)
+        if (!MatchHostSettings.IsStartArmed(room))
         {
             Console.WriteLine(
                 "[match-host] match-flow: both teams have ≥1 player — " +
@@ -33,6 +33,66 @@ public sealed partial class GameMatchHost
         Console.WriteLine(
             "[match-host] match-flow: both teams have ≥1 player + start armed — " +
             "will start Warmup on next tick");
+    }
+
+    /// <summary>
+    /// Разрешить старт <b>одной</b> комнаты (её создали из панели). Остальные комнаты не
+    /// трогаются: это замена глобальному <c>/set start</c> для мультикомнатного режима.
+    /// </summary>
+    /// <returns><c>false</c> — комнаты с таким ключом нет.</returns>
+    public bool ArmRoomByPasswordKey(string passwordKey, string reason)
+    {
+        MatchRoom? room;
+        lock (_roomGate)
+            _roomsByPassword.TryGetValue(passwordKey, out room);
+
+        if (room is null)
+        {
+            Console.WriteLine(
+                $"[match-host] arm '{passwordKey}' ({reason}): комнаты нет — " +
+                "старт разрешён будет при её создании");
+            return false;
+        }
+
+        lock (_roomGate)
+            room.StartArmed = true;
+
+        Console.WriteLine(
+            $"[match-host] комната {passwordKey} armed ({reason}) — " +
+            "WarmUp пойдёт, когда в обеих командах будет по игроку");
+        TryBeginMatchFlowIfBothTeams(room);
+        NudgeMatchStartGate();
+        return true;
+    }
+
+    /// <summary>
+    /// Разрешить старт во всех панельных комнатах (для <c>/set start</c> из лобби).
+    /// </summary>
+    /// <returns>Сколько комнат получили armed.</returns>
+    /// <remarks>
+    /// Глобальный флаг панельные комнаты игнорируют — у каждой свой гейт. Без этого
+    /// метода <c>/set start</c> молча не работал бы в комнатах, созданных с сайта.
+    /// </remarks>
+    internal int ArmAllPanelRooms(string reason)
+    {
+        var armed = 0;
+        List<MatchRoom> rooms;
+        lock (_roomGate)
+            rooms = _roomsByPassword.Values.Where(r => r.IsPanelRoom).ToList();
+
+        foreach (var room in rooms)
+        {
+            lock (_roomGate)
+            {
+                if (room.StartArmed)
+                    continue;
+                room.StartArmed = true;
+            }
+            armed++;
+            TryBeginMatchFlowIfBothTeams(room);
+        }
+
+        return armed;
     }
 
     /// <summary>After <c>/set start</c>: re-check WaitingPlayers rooms for both-teams WarmUp.</summary>
@@ -155,7 +215,7 @@ public sealed partial class GameMatchHost
             {
                 if (!BothFightingTeamsPresent(room))
                     return;
-                if (!MatchHostSettings.MatchStartArmed)
+                if (!MatchHostSettings.IsStartArmed(room))
                     return;
             }
             else if (phase == MatchFlowPhase.MatchOver)
@@ -325,7 +385,7 @@ public sealed partial class GameMatchHost
         }
         ClearBombAuthority(room, "WarmUp C2=21");
         // Consumed: next WaitingPlayers (rematch) needs /set start again.
-        MatchHostSettings.MatchStartArmed = false;
+        MatchHostSettings.DisarmStart(room);
         // Time/RoundStartTime are doubles in NetManager.bfqt units (TickCount/1000 seconds).
         // FetchServerTime HasServerTime header stays raw TickCount ms — client dws.bfwi divides.
         BroadcastRoomProps(room,

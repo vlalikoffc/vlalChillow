@@ -102,6 +102,52 @@ public sealed partial class GameMatchHost
             $"len={resp.Length} hex={Convert.ToHexString(resp)}");
     }
 
+    /// <summary>
+    /// В какую комнату пускать этого игрока. Провод неизменен: клиент присылает ник
+    /// (<c>JoinRoomRequest.room</c>) и всегда <c>'Dedik'</c>. Панель записала, кто какую
+    /// комнату создал, — по этой записи и выбираем.
+    /// </summary>
+    /// <remarks>
+    /// Возврат всегда рабочий ключ. Если брони нет или комната уже удалена — уходим в
+    /// legacy <c>Dedik</c> и громко пишем в лог: «тихо пустить не туда» хуже, чем сыграть
+    /// в общей комнате.
+    /// </remarks>
+    private string ResolveJoinRoomKey(JoinRoomRequestBody req, NetPeer peer)
+    {
+        // CreateOnly/JoinOrCreate регистрируют комнату под присланным паролем — уважаем это
+        // и не перебиваем: там пароль осмысленный, а не 'Dedik'.
+        if (req.Mode is JoinRoomMode.CreateOnly or JoinRoomMode.JoinOrCreate
+            && req.Password is { Length: > 0 })
+            return req.Password;
+
+        string identity;
+        lock (_roomGate)
+            identity = _peers.TryGetValue(peer, out var st) ? st.IdentityKey ?? "" : "";
+
+        var address = peer.Address?.ToString() ?? "";
+        if (!PendingRooms.TryResolve(req.Room, identity, address, out var key))
+            return LanCreateRoomPasswordKey;
+
+        MatchRoom? room;
+        lock (_roomGate)
+            _roomsByPassword.TryGetValue(key, out room);
+
+        if (room is null)
+        {
+            Console.WriteLine(
+                $"[match-host] маршрут '{req.Room}' → '{key}' протух: комнаты нет, " +
+                $"иду в '{LanCreateRoomPasswordKey}'");
+            PendingRooms.Release(key);
+            return LanCreateRoomPasswordKey;
+        }
+
+        var roomMode = ReadRoomModeId(room);
+        Console.WriteLine(
+            $"[match-host] маршрут '{req.Room}' → '{key}' " +
+            $"(режим {roomMode ?? "legacy"}) — комната найдена");
+        return key;
+    }
+
     private void HandleJoinRoom(NetPeer peer, LobbyReader body, byte[] raw)
     {
         if (Diag.LogVerbose)
@@ -168,9 +214,13 @@ public sealed partial class GameMatchHost
         else
             EnsureLanRoom();
 
+        // PR 3 плана: комната выбирается по нику, а не по паролю — клиент всегда шлёт
+        // 'Dedik', и без этого все игроки попадали бы в одну комнату. Найденная комната
+        // должна существовать и режим в ней должен совпадать, иначе — legacy 'Dedik'.
+        var roomKey = ResolveJoinRoomKey(req, peer);
         MatchRoom? room;
         lock (_roomGate)
-            _roomsByPassword.TryGetValue(req.Password, out room);
+            _roomsByPassword.TryGetValue(roomKey, out room);
 
         JoinRoomResult result;
         byte? actor = null;
@@ -266,6 +316,12 @@ public sealed partial class GameMatchHost
                     $"roster={MatchRoomField.Describe(req.Room)} actorNr={nr} " +
                     $"(host={MatchHostActor.ActorNr}/'{MatchHostActor.Name}' Spectator) " +
                     $"userId='{st.UserId}'");
+
+                // Бронь продлеваем на входе: игрок может стоять в комнате дольше TTL
+                // (создал, ждёт друзей), и тогда его переподключение ушло бы в legacy 'Dedik'.
+                if (room.IsPanelRoom && st.RosterName is { Length: > 0 } joinedNick)
+                    PendingRooms.Reserve(
+                        room.PasswordKey, joinedNick, st.IdentityKey, peer.Address?.ToString());
             }
         }
 
@@ -280,8 +336,11 @@ public sealed partial class GameMatchHost
             {
                 actorsSnap = room.Actors.ToList();
                 roomC2 = room.RoomC2;
-                modeId = _matchGameModeId;
-                levelId = _matchSelectedLevel;
+                // C0/C1 комнаты — из её собственных props (комната из панели несёт свой режим
+                // и карту); глобальный выбор — только fallback для legacy Dedik-комнаты.
+                // Так две комнаты на одном 7777 не перетирают режим друг друга.
+                modeId = ReadRoomModeId(room) ?? _matchGameModeId;
+                levelId = ReadRoomLevelId(room) ?? _matchSelectedLevel;
                 // Keep actor=0 room props in sync for late-join snapshots.
                 room.ActorProps[(0, MatchRoomPropKeys.C0)] = LobbyVariant.FromString(modeId);
                 room.ActorProps[(0, MatchRoomPropKeys.C1)] = LobbyVariant.FromString(levelId);

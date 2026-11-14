@@ -193,6 +193,84 @@ public sealed class NetworkConfig
     public string? AdvertiseIp { get; set; }
 }
 
+/// <summary>
+/// Веб-панель: список комнат и одна кнопка «создать».
+/// </summary>
+/// <remarks>
+/// <para>
+/// Панель живёт <b>в том же исполняемом файле</b>, что и сервер, и поднимается раньше
+/// игровых сокетов: если 7777 занят (старый процесс, чужой сервер), страница всё равно
+/// открывается и честно говорит, что игровой порт не поднялся. Отдельного бинарника,
+/// отдельного порта для игр и отдельного конфига нет.
+/// </para>
+/// <para>
+/// Порт по умолчанию — 8080 и слушает только <c>127.0.0.1</c>: наружу его отдаёт nginx
+/// по подпути. Менять <see cref="BindAddress"/> на <c>0.0.0.0</c> нужно только для
+/// прямого доступа по локальной сети без прокси.
+/// </para>
+/// </remarks>
+public sealed class WebConfig
+{
+    /// <summary>Поднимать ли панель вообще.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Где слушать. По умолчанию локально — наружу через nginx.</summary>
+    public string BindAddress { get; set; } = "127.0.0.1";
+
+    /// <summary>TCP-порт панели (не игровой; игровые порты не меняются никогда).</summary>
+    public int Port { get; set; } = 8080;
+
+    /// <summary>Сколько комнат разрешено держать одновременно.</summary>
+    public int MaxRooms { get; set; } = 64;
+
+    /// <summary>Через сколько секунд пустая комната удаляется.</summary>
+    public int EmptyRoomTtlSec { get; set; } = 600;
+
+    /// <summary>
+    /// Публичный адрес сайта для ответа «создать можно здесь».
+    /// Пусто — определить самому (внешний IP, затем LAN).
+    /// </summary>
+    /// <remarks>
+    /// Настоящий домен сюда вписывают в <c>config.json</c> на машине владельца;
+    /// в коде и репозитории его нет — это осознанно (CONTRIBUTING.md).
+    /// </remarks>
+    public string PublicBaseUrl { get; set; } = "";
+
+    /// <summary>Лимиты запросов (флуд-защита без паролей и куки).</summary>
+    public WebLimitsConfig Limits { get; set; } = new();
+}
+
+/// <summary>
+/// Лимиты панели. Значения подобраны так, чтобы человек с одним браузером их не замечал,
+/// а скрипт — упирался сразу.
+/// </summary>
+public sealed class WebLimitsConfig
+{
+    /// <summary>Запросов в секунду с одного IP; больше — 429 с Retry-After.</summary>
+    public int RequestsPerSecond { get; set; } = 10;
+
+    /// <summary>После стольких отказов за окно адрес получает паузу.</summary>
+    public int RefusalsBeforeBlock { get; set; } = 5;
+
+    /// <summary>Длина окна подсчёта отказов, секунды.</summary>
+    public int RefusalWindowSec { get; set; } = 10;
+
+    /// <summary>Сколько длится пауза, секунды.</summary>
+    public int BlockDurationSec { get; set; } = 60;
+
+    /// <summary>Максимальный размер заголовков запроса.</summary>
+    public int MaxHeaderBytes { get; set; } = 8 * 1024;
+
+    /// <summary>Максимальный размер тела запроса.</summary>
+    public int MaxBodyBytes { get; set; } = 4 * 1024;
+
+    /// <summary>Сколько секунд ждём запрос целиком.</summary>
+    public int RequestTimeoutSec { get; set; } = 5;
+
+    /// <summary>Одновременных соединений с одного IP.</summary>
+    public int MaxConnectionsPerIp { get; set; } = 2;
+}
+
 /// <summary>Длительности фаз матча в секундах.</summary>
 public sealed class TimingsConfig
 {
@@ -324,6 +402,9 @@ public sealed class ServerConfig
     public TuningConfig Tuning { get; set; } = new();
 
     public DebugConfig Debug { get; set; } = new();
+
+    /// <summary>Веб-панель комнат (тот же исполняемый файл, отдельный TCP-порт).</summary>
+    public WebConfig Web { get; set; } = new();
 
     /// <summary>
     /// Замечание к конфигу: какое значение недопустимо и что применилось вместо него.
@@ -474,6 +555,8 @@ public sealed class ServerConfig
         Timings ??= new TimingsConfig();
         Tuning ??= new TuningConfig();
         Debug ??= new DebugConfig();
+        Web ??= new WebConfig();
+        Web.Limits ??= new WebLimitsConfig();
 
         // Опечатки в именах ключей — до всего остального: из-за них «настроил, а не работает».
         ReportUnknownKeys();
@@ -481,6 +564,8 @@ public sealed class ServerConfig
         // Прова в пробу конфигом запрещена — иначе весь блок debug «утечёт» в пробу.
         // Регистр не важен: --client / -c / ConnectAsClient / --connectasclient.
         Launch.Args.RemoveAll(IsProbeFlag);
+
+        NormalizeWeb();
 
         MatchStart.Auto.MinPlayersPerTeam = Check(
             MatchStart.Auto.MinPlayersPerTeam, 1, 16, 1, "matchStart.auto.minPlayersPerTeam");
@@ -697,6 +782,42 @@ public sealed class ServerConfig
     /// и «поменять дефолты» ничего бы ему не дало. Пользовательские настройки не затираются:
     /// миграция срабатывает только на точном старом наборе и только когда админов нет.
     /// </remarks>
+    /// <summary>
+    /// Панель: границы портов и лимитов. Значения вне диапазона не «молча применяются»,
+    /// а подтягиваются с записью в <see cref="Issues"/> — иначе панель «не открывается»,
+    /// и непонятно почему.
+    /// </summary>
+    private void NormalizeWeb()
+    {
+        Web.Port = Check(Web.Port, 1, 65535, 8080, "web.port");
+        Web.MaxRooms = Check(Web.MaxRooms, 1, 1024, 64, "web.maxRooms");
+        Web.EmptyRoomTtlSec = Check(Web.EmptyRoomTtlSec, 60, 86400, 600, "web.emptyRoomTtlSec");
+
+        Web.BindAddress = string.IsNullOrWhiteSpace(Web.BindAddress)
+            ? "127.0.0.1"
+            : Web.BindAddress.Trim();
+
+        // Пустая строка — «определи сам», а не ошибка.
+        Web.PublicBaseUrl = (Web.PublicBaseUrl ?? string.Empty).Trim();
+
+        Web.Limits.RequestsPerSecond = Check(
+            Web.Limits.RequestsPerSecond, 1, 1000, 10, "web.limits.requestsPerSecond");
+        Web.Limits.RefusalsBeforeBlock = Check(
+            Web.Limits.RefusalsBeforeBlock, 1, 1000, 5, "web.limits.refusalsBeforeBlock");
+        Web.Limits.RefusalWindowSec = Check(
+            Web.Limits.RefusalWindowSec, 1, 3600, 10, "web.limits.refusalWindowSec");
+        Web.Limits.BlockDurationSec = Check(
+            Web.Limits.BlockDurationSec, 1, 86400, 60, "web.limits.blockDurationSec");
+        Web.Limits.MaxHeaderBytes = Check(
+            Web.Limits.MaxHeaderBytes, 1024, 65536, 8192, "web.limits.maxHeaderBytes");
+        Web.Limits.MaxBodyBytes = Check(
+            Web.Limits.MaxBodyBytes, 256, 65536, 4096, "web.limits.maxBodyBytes");
+        Web.Limits.RequestTimeoutSec = Check(
+            Web.Limits.RequestTimeoutSec, 1, 120, 5, "web.limits.requestTimeoutSec");
+        Web.Limits.MaxConnectionsPerIp = Check(
+            Web.Limits.MaxConnectionsPerIp, 1, 64, 2, "web.limits.maxConnectionsPerIp");
+    }
+
     private void MigrateLegacyAdminGate()
     {
         if (Admin.Nicknames.Any(n => !string.IsNullOrWhiteSpace(n)))
@@ -1019,6 +1140,25 @@ public sealed class ServerConfig
 
     "logPackets": false,  // каждый принятый пакет
     "logDiscovery": false // каждый probe
+  },
+
+  // ===== ВЕБ-ПАНЕЛЬ =====
+  // Тот же исполняемый файл, отдельный TCP-порт. Игровые порты (7777/7778/5056)
+  // не меняются никогда.
+  "web": {
+    "enabled": true,
+    "bindAddress": "127.0.0.1",  // снаружи — через nginx; "0.0.0.0" для LAN без прокси
+    "port": 8080,
+    "maxRooms": 64,              // предохранитель; правило — одна комната на игрока
+    "emptyRoomTtlSec": 600,      // пустая комната закрывается через 10 минут
+    "publicBaseUrl": "",         // адрес сайта для «создать можно здесь»; пусто — определить
+
+    "limits": {
+      "requestsPerSecond": 10,   // больше — 429 с Retry-After
+      "refusalsBeforeBlock": 5,
+      "refusalWindowSec": 10,
+      "blockDurationSec": 60     // пауза для адреса, который долбит
+    }
   }
 }
 """;

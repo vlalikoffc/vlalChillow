@@ -93,7 +93,7 @@ public sealed partial class GameMatchHost
             {
                 if (!BothFightingTeamsPresent(room))
                     return;
-                if (!MatchHostSettings.MatchStartArmed)
+                if (!MatchHostSettings.IsStartArmed(room))
                     return;
             }
             else if (phase == MatchFlowPhase.MatchOver)
@@ -231,7 +231,7 @@ public sealed partial class GameMatchHost
             room.Flow.TeamsSwapped = false;
         }
         ClearBombAuthority(room, "Allies WarmUp C2=21");
-        MatchHostSettings.MatchStartArmed = false;
+        MatchHostSettings.DisarmStart(room);
         // 2.07 gold len≈28: Time, Duration, C2 — anchor Time (no RoundStartTime on WarmUp).
         BroadcastRoomProps(room,
         [
@@ -409,11 +409,13 @@ public sealed partial class GameMatchHost
             scoreCt = room.Flow.ScoreCt;
         }
 
-        if (MatchHostSettings.IsAlliesMatchOver(scoreTr, scoreCt))
+        if (MatchHostSettings.IsAlliesMatchOver(room, scoreTr, scoreCt))
         {
             EnterMatchResultsAndArmLobbyReturn(
                 room, scoreTr, scoreCt, "allies", round,
-                extra: $"first-to-{MatchHostSettings.WinsNeeded}");
+                extra: $"first-to-{(room.WinsNeededOverride > 0
+                    ? room.WinsNeededOverride
+                    : MatchHostSettings.WinsNeeded)}");
             return;
         }
 

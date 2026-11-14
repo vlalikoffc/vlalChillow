@@ -49,7 +49,7 @@ public sealed partial class GameMatchHost
             {
                 if (!BothFightingTeamsPresent(room))
                     return;
-                if (!MatchHostSettings.MatchStartArmed)
+                if (!MatchHostSettings.IsStartArmed(room))
                     return;
             }
         }
@@ -133,7 +133,7 @@ public sealed partial class GameMatchHost
             scoreCt = room.Flow.ScoreCt;
         }
 
-        if (MatchHostSettings.IsAlliesMatchOver(scoreTr, scoreCt))
+        if (MatchHostSettings.IsAlliesMatchOver(room, scoreTr, scoreCt))
         {
             EnterDuelFinalHud(room, scoreTr, scoreCt, round);
             return;
@@ -171,7 +171,7 @@ public sealed partial class GameMatchHost
             room.Flow.DuelUsedRoundModifierIds.Clear();
             room.Flow.DuelLobbyLoadout = null;
         }
-        MatchHostSettings.MatchStartArmed = false;
+        MatchHostSettings.DisarmStart(room);
         BroadcastRoomProps(room,
         [
             (MatchRoomPropKeys.Time, LobbyVariant.FromDouble(nowSec)),

@@ -1,0 +1,1192 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>влалChillow — комнаты</title>
+<style>
+/* ══════════════════════════════════════════════════════════════════
+   Material Design 3 (Material You)
+   Цвета ниже сгенерированы официальным алгоритмом tonal-spot
+   (material-color-utilities) из seed #1E5AA8 — не подобраны на глаз.
+   Имена переменных = токены спецификации: --md-sys-color-*
+   ══════════════════════════════════════════════════════════════════ */
+
+:root{
+  /* shape — md.sys.shape */
+  --md-sys-shape-corner-none:0;
+  --md-sys-shape-corner-extra-small:4px;
+  --md-sys-shape-corner-small:8px;
+  --md-sys-shape-corner-medium:12px;
+  --md-sys-shape-corner-large:16px;
+  --md-sys-shape-corner-extra-large:28px;
+  --md-sys-shape-corner-full:9999px;
+
+  /* elevation — md.sys.elevation (tint overlay, M3 не «тени ради теней») */
+  --md-sys-elevation-level0:0;
+  --md-sys-elevation-level1:1;
+  --md-sys-elevation-level2:3;
+  --md-sys-elevation-level3:6;
+  --md-sys-elevation-level4:8;
+  --md-sys-elevation-level5:12;
+
+  /* motion — md.sys.motion */
+  --md-sys-motion-easing-standard:cubic-bezier(0.2,0,0,1);
+  --md-sys-motion-easing-emphasized:cubic-bezier(0.2,0,0,1);
+  --md-sys-motion-duration-short2:100ms;
+  --md-sys-motion-duration-short4:200ms;
+  --md-sys-motion-duration-medium2:300ms;
+  --md-sys-motion-duration-long2:500ms;
+
+  /* typescale — md.sys.typescale (size / line-height / weight / tracking) */
+  --md-sys-typescale-display-small:400 36px/44px;
+  --md-sys-typescale-headline-large:400 32px/40px;
+  --md-sys-typescale-headline-medium:400 28px/36px;
+  --md-sys-typescale-headline-small:400 24px/32px;
+  --md-sys-typescale-title-large:400 22px/28px;
+  --md-sys-typescale-title-medium:500 16px/24px;
+  --md-sys-typescale-title-small:500 14px/20px;
+  --md-sys-typescale-body-large:400 16px/24px;
+  --md-sys-typescale-body-medium:400 14px/20px;
+  --md-sys-typescale-body-small:400 12px/16px;
+  --md-sys-typescale-label-large:500 14px/20px;
+  --md-sys-typescale-label-medium:500 12px/16px;
+  --md-sys-typescale-label-small:500 11px/16px;
+}
+
+/* ══ DARK — tonal-spot, seed #1E5AA8 ══ */
+[data-theme="dark"]{
+  --md-sys-color-primary:#aac7ff;
+  --md-sys-color-on-primary:#0a305f;
+  --md-sys-color-primary-container:#274777;
+  --md-sys-color-on-primary-container:#d6e3ff;
+  --md-sys-color-secondary:#bec6dc;
+  --md-sys-color-on-secondary:#283141;
+  --md-sys-color-secondary-container:#3e4759;
+  --md-sys-color-on-secondary-container:#dae2f9;
+  --md-sys-color-tertiary:#dcbce0;
+  --md-sys-color-on-tertiary:#3f2844;
+  --md-sys-color-tertiary-container:#573e5c;
+  --md-sys-color-on-tertiary-container:#fad8fd;
+  --md-sys-color-error:#ffb4ab;
+  --md-sys-color-on-error:#690005;
+  --md-sys-color-error-container:#93000a;
+  --md-sys-color-on-error-container:#ffdad6;
+  --md-sys-color-surface:#111318;
+  --md-sys-color-on-surface:#e2e2e9;
+  --md-sys-color-surface-variant:#44474e;
+  --md-sys-color-on-surface-variant:#c4c6d0;
+  --md-sys-color-outline:#8e9099;
+  --md-sys-color-outline-variant:#44474e;
+  --md-sys-color-surface-container-lowest:#0c0e13;
+  --md-sys-color-surface-container-low:#191c20;
+  --md-sys-color-surface-container:#1d2024;
+  --md-sys-color-surface-container-high:#282a2f;
+  --md-sys-color-surface-container-highest:#33353a;
+  --md-sys-color-surface-dim:#111318;
+  --md-sys-color-surface-bright:#37393e;
+  --md-sys-color-inverse-surface:#e2e2e9;
+  --md-sys-color-inverse-on-surface:#2e3036;
+  --md-sys-color-scrim:#000000;
+  color-scheme:dark;
+}
+
+/* ══ LIGHT — tonal-spot, seed #1E5AA8 ══ */
+[data-theme="light"]{
+  --md-sys-color-primary:#415f91;
+  --md-sys-color-on-primary:#ffffff;
+  --md-sys-color-primary-container:#d6e3ff;
+  --md-sys-color-on-primary-container:#274777;
+  --md-sys-color-secondary:#565f71;
+  --md-sys-color-on-secondary:#ffffff;
+  --md-sys-color-secondary-container:#dae2f9;
+  --md-sys-color-on-secondary-container:#3e4759;
+  --md-sys-color-tertiary:#705575;
+  --md-sys-color-on-tertiary:#ffffff;
+  --md-sys-color-tertiary-container:#fad8fd;
+  --md-sys-color-on-tertiary-container:#573e5c;
+  --md-sys-color-error:#ba1a1a;
+  --md-sys-color-on-error:#ffffff;
+  --md-sys-color-error-container:#ffdad6;
+  --md-sys-color-on-error-container:#93000a;
+  --md-sys-color-surface:#f9f9ff;
+  --md-sys-color-on-surface:#191c20;
+  --md-sys-color-surface-variant:#e0e2ec;
+  --md-sys-color-on-surface-variant:#44474e;
+  --md-sys-color-outline:#74777f;
+  --md-sys-color-outline-variant:#c4c6d0;
+  --md-sys-color-surface-container-lowest:#ffffff;
+  --md-sys-color-surface-container-low:#f3f3fa;
+  --md-sys-color-surface-container:#ededf4;
+  --md-sys-color-surface-container-high:#e7e8ee;
+  --md-sys-color-surface-container-highest:#e2e2e9;
+  --md-sys-color-surface-dim:#d9d9e0;
+  --md-sys-color-surface-bright:#f9f9ff;
+  --md-sys-color-inverse-surface:#2e3036;
+  --md-sys-color-inverse-on-surface:#f0f0f7;
+  --md-sys-color-scrim:#000000;
+  color-scheme:light;
+}
+
+/* ══════════ reset ══════════ */
+*,*::before,*::after{box-sizing:border-box}
+/* КРИТИЧНО: display в компонентах не должен перебивать hidden */
+[hidden]{display:none !important}
+html,body{margin:0;padding:0}
+body{
+  background:var(--md-sys-color-surface);
+  color:var(--md-sys-color-on-surface);
+  font-family:Roboto,"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  font:var(--md-sys-typescale-body-medium);
+  letter-spacing:.25px;
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+  transition:background var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-standard),
+             color var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-standard);
+}
+h1,h2,h3,p{margin:0}
+button{font-family:inherit}
+:focus-visible{outline:3px solid var(--md-sys-color-primary);outline-offset:2px}
+
+/* ══════════ типовые роли ══════════ */
+.display-small{font:var(--md-sys-typescale-display-small);letter-spacing:0}
+.headline-small{font:var(--md-sys-typescale-headline-small)}
+.title-large{font:var(--md-sys-typescale-title-large)}
+.title-medium{font:var(--md-sys-typescale-title-medium);letter-spacing:.15px}
+.title-small{font:var(--md-sys-typescale-title-small);letter-spacing:.1px}
+.body-medium{font:var(--md-sys-typescale-body-medium);letter-spacing:.25px}
+.body-small{font:var(--md-sys-typescale-body-small);letter-spacing:.4px}
+.label-large{font:var(--md-sys-typescale-label-large);letter-spacing:.1px}
+.label-medium{font:var(--md-sys-typescale-label-medium);letter-spacing:.5px}
+.label-small{font:var(--md-sys-typescale-label-small);letter-spacing:.5px}
+.tnum{font-variant-numeric:tabular-nums}
+
+/* ══════════ layout ══════════ */
+.md-page{max-width:1040px;margin:0 auto;padding:0 16px 48px}
+
+/* ══════════
+   Top app bar (M3):
+   высота 64 · title-large слева · иконки справа
+   ══════════ */
+.md-top-app-bar{
+  position:sticky;top:0;z-index:20;
+  display:flex;align-items:center;gap:12px;
+  height:64px;padding:0 16px;
+  background:var(--md-sys-color-surface);
+  transition:background var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-standard);
+}
+.md-top-app-bar__logo{
+  flex:0 0 auto;
+  width:40px;height:40px;
+  display:grid;place-items:center;
+  border-radius:var(--md-sys-shape-corner-full);
+  background:var(--md-sys-color-primary-container);
+  color:var(--md-sys-color-on-primary-container);
+  font:500 18px/1 Roboto,sans-serif;
+}
+.md-top-app-bar__titles{display:flex;flex-direction:column;min-width:0}
+.md-top-app-bar__title{
+  font:var(--md-sys-typescale-title-large);
+  color:var(--md-sys-color-on-surface);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.md-top-app-bar__subtitle{
+  font:var(--md-sys-typescale-label-medium);
+  letter-spacing:.5px;
+  color:var(--md-sys-color-on-surface-variant);
+}
+.md-top-app-bar__spacer{flex:1}
+
+/* ══════════
+   Icon button (M3): 40×40, corner-full, state-layer 8%
+   ══════════ */
+.md-icon-button{
+  flex:0 0 auto;
+  width:40px;height:40px;
+  display:grid;place-items:center;
+  border:0;border-radius:var(--md-sys-shape-corner-full);
+  background:transparent;
+  color:var(--md-sys-color-on-surface-variant);
+  cursor:pointer;
+  position:relative;overflow:hidden;
+  transition:background var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+             color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+.md-icon-button:hover{background:color-mix(in srgb,var(--md-sys-color-on-surface) 8%,transparent)}
+.md-icon-button:active{background:color-mix(in srgb,var(--md-sys-color-on-surface) 12%,transparent)}
+.md-icon-button svg{width:24px;height:24px;fill:currentColor}
+
+/* ══════════
+   Assist chip (M3): h=32, corner-small, outline
+   ══════════ */
+.md-assist-chip{
+  display:inline-flex;align-items:center;gap:8px;
+  height:32px;padding:0 12px;
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-small);
+  background:transparent;
+  color:var(--md-sys-color-on-surface-variant);
+  font:var(--md-sys-typescale-label-large);
+  letter-spacing:.1px;
+  white-space:nowrap;
+}
+.md-assist-chip__dot{
+  width:8px;height:8px;border-radius:var(--md-sys-shape-corner-full);
+  background:var(--md-sys-color-tertiary);
+  flex:0 0 auto;
+}
+@media(max-width:620px){.md-assist-chip__text{display:none}}
+
+/* ══════════
+   Stats: три карточки на surface-container-low, corner-medium
+   ══════════ */
+.md-stats{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:12px;
+  margin:8px 0 24px;
+}
+@media(max-width:640px){.md-stats{grid-template-columns:1fr}}
+.md-stat{
+  padding:16px;
+  border-radius:var(--md-sys-shape-corner-medium);
+  background:var(--md-sys-color-surface-container-low);
+  transition:background var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-standard);
+}
+.md-stat__label{
+  display:block;margin-bottom:4px;
+  font:var(--md-sys-typescale-label-medium);letter-spacing:.5px;
+  color:var(--md-sys-color-on-surface-variant);
+}
+.md-stat__value{
+  font:var(--md-sys-typescale-display-small);
+  color:var(--md-sys-color-on-surface);
+  font-variant-numeric:tabular-nums;
+  line-height:1.15;
+}
+.md-stat__hint{
+  margin-top:2px;
+  font:var(--md-sys-typescale-body-small);letter-spacing:.4px;
+  color:var(--md-sys-color-on-surface-variant);
+}
+
+/* ══════════
+   Primary tabs (M3): h=48, indicator 3px
+   ══════════ */
+.md-tabs{
+  display:flex;
+  border-bottom:1px solid var(--md-sys-color-outline-variant);
+  margin-bottom:24px;
+}
+.md-tab{
+  position:relative;flex:1;height:48px;
+  border:0;background:transparent;
+  font:var(--md-sys-typescale-label-large);letter-spacing:.1px;
+  color:var(--md-sys-color-on-surface-variant);
+  cursor:pointer;
+  transition:background var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+             color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+.md-tab:hover{background:color-mix(in srgb,var(--md-sys-color-on-surface) 8%,transparent)}
+.md-tab[aria-selected="true"]{color:var(--md-sys-color-primary)}
+.md-tab[aria-selected="true"]::after{
+  content:"";position:absolute;left:0;right:0;bottom:0;height:3px;
+  background:var(--md-sys-color-primary);
+  border-radius:3px 3px 0 0;
+}
+
+/* ══════════
+   Card (M3 filled): surface-container-low, corner-medium, padding 24
+   ══════════ */
+.md-card{
+  border-radius:var(--md-sys-shape-corner-medium);
+  background:var(--md-sys-color-surface-container-low);
+  padding:24px;
+  transition:background var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-standard);
+}
+.md-card--flush{padding:0;overflow:hidden}
+
+/* ══════════
+   Outlined text field (M3)
+   коробка 56 · label «на рамке» — фон ОБЯЗАН совпадать с карточкой
+   ══════════ */
+.md-field{position:relative}
+.md-field + .md-field{margin-top:16px}
+.md-field__box{
+  width:100%;height:56px;
+  padding:0 16px;
+  border:1px solid var(--md-sys-color-outline);
+  border-radius:var(--md-sys-shape-corner-extra-small);
+  background:transparent;
+  color:var(--md-sys-color-on-surface);
+  font:var(--md-sys-typescale-body-large);letter-spacing:.5px;
+  outline:none;
+  transition:border-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+             box-shadow var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+input.md-field__box::placeholder{color:transparent}
+.md-field__box:hover{border-color:var(--md-sys-color-on-surface)}
+.md-field__box:focus{
+  border-color:var(--md-sys-color-primary);
+  box-shadow:inset 0 0 0 1px var(--md-sys-color-primary);
+}
+select.md-field__box{
+  appearance:none;
+  padding-right:48px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%238e9099'><path d='M7 10l5 5 5-5z'/></svg>");
+  background-repeat:no-repeat;
+  background-position:right 12px center;
+  background-size:24px;
+  cursor:pointer;
+}
+.md-field__label{
+  position:absolute;top:-8px;left:12px;
+  padding:0 4px;
+  /* фон = фон карточки, иначе рамка «просвечивает» сквозь подпись */
+  background:var(--md-sys-color-surface-container-low);
+  color:var(--md-sys-color-on-surface-variant);
+  font:var(--md-sys-typescale-body-small);letter-spacing:.4px;
+  pointer-events:none;
+  transition:color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+.md-field__box:focus ~ .md-field__label{color:var(--md-sys-color-primary)}
+.md-field__helper{
+  display:block;margin:6px 16px 0;
+  font:var(--md-sys-typescale-body-small);letter-spacing:.4px;
+  color:var(--md-sys-color-on-surface-variant);
+}
+.md-field__helper--error{color:var(--md-sys-color-error)}
+
+/* ══════════
+   Buttons (M3): filled / outlined / text — h=40, corner-full
+   ══════════ */
+.md-button{
+  position:relative;
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:40px;padding:0 24px;
+  border:0;border-radius:var(--md-sys-shape-corner-full);
+  font:var(--md-sys-typescale-label-large);letter-spacing:.1px;
+  cursor:pointer;
+  transition:box-shadow var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+             background var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+.md-button svg{width:18px;height:18px;fill:currentColor}
+.md-button--filled{
+  background:var(--md-sys-color-primary);
+  color:var(--md-sys-color-on-primary);
+}
+.md-button--filled:hover{
+  box-shadow:0 1px 3px 1px color-mix(in srgb,var(--md-sys-color-on-surface) 16%,transparent);
+}
+.md-button--filled:active{
+  background:color-mix(in srgb,var(--md-sys-color-primary) 88%,var(--md-sys-color-on-primary));
+}
+.md-button--outlined{
+  background:transparent;
+  color:var(--md-sys-color-primary);
+  border:1px solid var(--md-sys-color-outline);
+}
+.md-button--outlined:hover{background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent)}
+.md-button--text{
+  background:transparent;
+  color:var(--md-sys-color-primary);
+  padding:0 12px;
+}
+.md-button--text:hover{background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent)}
+.md-button[disabled]{
+  cursor:not-allowed;
+  background:color-mix(in srgb,var(--md-sys-color-on-surface) 12%,transparent);
+  color:color-mix(in srgb,var(--md-sys-color-on-surface) 38%,transparent);
+  box-shadow:none;
+  border:0;
+}
+
+/* ══════════
+   Filter chip (M3): h=32, corner-small
+   выбранный: secondary-container + галочка (mask-icon)
+   ══════════ */
+.md-chips{display:flex;flex-wrap:wrap;gap:8px}
+.md-chip{
+  display:inline-flex;align-items:center;gap:8px;
+  height:32px;padding:0 12px;
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-small);
+  background:transparent;
+  color:var(--md-sys-color-on-surface-variant);
+  font:var(--md-sys-typescale-label-large);letter-spacing:.1px;
+  cursor:pointer;
+  transition:background var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+             border-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+             color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+.md-chip:hover{background:color-mix(in srgb,var(--md-sys-color-on-surface) 8%,transparent)}
+.md-chip[aria-pressed="true"]{
+  background:var(--md-sys-color-secondary-container);
+  color:var(--md-sys-color-on-secondary-container);
+  border-color:transparent;
+  padding-left:8px;
+}
+.md-chip[aria-pressed="true"]::before{
+  content:"";flex:0 0 auto;
+  width:18px;height:18px;background:currentColor;
+  -webkit-mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/></svg>") center/18px no-repeat;
+  mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/></svg>") center/18px no-repeat;
+}
+
+/* ══════════ секции в карточке ══════════ */
+.md-section{margin-top:24px}
+.md-section__label{
+  display:block;margin-bottom:12px;
+  font:var(--md-sys-typescale-label-medium);letter-spacing:.5px;
+  color:var(--md-sys-color-on-surface-variant);
+}
+.md-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:24px}
+
+/* ══════════
+   Результат: success через tertiary-container (в M3 нет «success»-роли;
+   tertiary — официальный «акцентный» контейнер, а не выдуманный цвет)
+   ══════════ */
+.md-result{
+  margin-top:24px;padding:16px;
+  border-radius:var(--md-sys-shape-corner-medium);
+  background:var(--md-sys-color-tertiary-container);
+  color:var(--md-sys-color-on-tertiary-container);
+}
+.md-result__title{font:var(--md-sys-typescale-title-small);letter-spacing:.1px}
+.md-result__row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}
+.md-result__cmd{
+  padding:10px 14px;
+  border-radius:var(--md-sys-shape-corner-small);
+  background:color-mix(in srgb,var(--md-sys-color-on-tertiary-container) 12%,transparent);
+  color:var(--md-sys-color-on-tertiary-container);
+  font:500 18px/24px "Roboto Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  letter-spacing:.5px;word-break:break-all;
+}
+.md-result .md-button--text{color:var(--md-sys-color-on-tertiary-container)}
+.md-result .md-button--text:hover{
+  background:color-mix(in srgb,var(--md-sys-color-on-tertiary-container) 12%,transparent);
+}
+.md-result__hint{
+  margin-top:10px;
+  font:var(--md-sys-typescale-body-small);letter-spacing:.4px;
+  opacity:.85;
+}
+
+/* ══════════ список комнат (M3 list) ══════════ */
+.md-list{list-style:none;margin:0;padding:0}
+.md-row{
+  display:grid;grid-template-columns:auto 1fr auto;
+  align-items:center;gap:16px;
+  padding:12px 16px;
+  transition:background var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+}
+.md-row:hover{background:color-mix(in srgb,var(--md-sys-color-on-surface) 8%,transparent)}
+.md-row + .md-row{border-top:1px solid var(--md-sys-color-outline-variant)}
+@media(max-width:640px){
+  .md-row{grid-template-columns:auto 1fr;row-gap:12px}
+  .md-row__actions{grid-column:1 / -1}
+}
+.md-row__num{
+  min-width:48px;height:32px;
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:0 8px;
+  border-radius:var(--md-sys-shape-corner-small);
+  background:var(--md-sys-color-surface-container-highest);
+  color:var(--md-sys-color-on-surface);
+  font:500 14px/20px "Roboto Mono",ui-monospace,Menlo,Consolas,monospace;
+  letter-spacing:0;
+}
+.md-row__title{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  font:var(--md-sys-typescale-title-medium);letter-spacing:.15px;
+}
+.md-row__title--muted{
+  color:var(--md-sys-color-on-surface-variant);
+  font:var(--md-sys-typescale-body-large);
+}
+.md-row__meta{
+  margin-top:2px;
+  font:var(--md-sys-typescale-body-small);letter-spacing:.4px;
+  color:var(--md-sys-color-on-surface-variant);
+}
+.md-row__actions{display:flex;align-items:center;gap:12px}
+.md-row__count{
+  font:var(--md-sys-typescale-label-large);
+  color:var(--md-sys-color-on-surface-variant);
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+.md-row__count b{color:var(--md-sys-color-on-surface);font-weight:500}
+
+/* ══════════
+   Badges: в M3 это «label-small на контейнере»,
+   tertiary-container = идёт, surface-container-highest = ждёт,
+   error-container = заполнена
+   ══════════ */
+.md-badge{
+  padding:2px 8px;
+  border-radius:var(--md-sys-shape-corner-small);
+  font:var(--md-sys-typescale-label-small);letter-spacing:.5px;
+  white-space:nowrap;
+}
+.md-badge--live{
+  background:var(--md-sys-color-tertiary-container);
+  color:var(--md-sys-color-on-tertiary-container);
+}
+.md-badge--wait{
+  background:var(--md-sys-color-surface-container-highest);
+  color:var(--md-sys-color-on-surface-variant);
+}
+.md-badge--full{
+  background:var(--md-sys-color-error-container);
+  color:var(--md-sys-color-on-error-container);
+}
+
+/* ══════════ фильтры ══════════ */
+.md-filters{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:12px 16px;
+  border-bottom:1px solid var(--md-sys-color-outline-variant);
+}
+.md-select-outlined{
+  height:40px;padding:0 40px 0 12px;
+  border:1px solid var(--md-sys-color-outline);
+  border-radius:var(--md-sys-shape-corner-extra-small);
+  background:transparent;
+  color:var(--md-sys-color-on-surface);
+  font:var(--md-sys-typescale-body-medium);
+  appearance:none;cursor:pointer;outline:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%238e9099'><path d='M7 10l5 5 5-5z'/></svg>");
+  background-repeat:no-repeat;
+  background-position:right 10px center;
+  background-size:20px;
+  transition:border-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+.md-select-outlined:hover{border-color:var(--md-sys-color-on-surface)}
+.md-select-outlined:focus{
+  border-color:var(--md-sys-color-primary);
+  box-shadow:inset 0 0 0 1px var(--md-sys-color-primary);
+}
+
+/* ══════════ banner (честное состояние) ══════════ */
+/* M3: не «красная плашка», а tonal surface с outline в тон error. */
+.md-banner{
+  display:flex;align-items:center;gap:12px;
+  margin:0 0 16px;padding:12px 16px;
+  border-radius:var(--md-sys-shape-corner-medium);
+  background:var(--md-sys-color-error-container);
+  color:var(--md-sys-color-on-error-container);
+  border:1px solid var(--md-sys-color-error);
+  font:var(--md-sys-typescale-body-medium);
+  letter-spacing:.25px;
+}
+
+/* ══════════ empty / footer ══════════ */
+.md-empty{
+  padding:40px 16px;text-align:center;
+  color:var(--md-sys-color-on-surface-variant);
+  font:var(--md-sys-typescale-body-medium);letter-spacing:.25px;
+}
+.md-foot{
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  margin-top:32px;padding-top:16px;
+  border-top:1px solid var(--md-sys-color-outline-variant);
+  font:var(--md-sys-typescale-body-small);letter-spacing:.4px;
+  color:var(--md-sys-color-on-surface-variant);
+}
+.md-foot__demo{color:var(--md-sys-color-outline)}
+
+/* сетка формы */
+.md-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:720px){.md-form-grid{grid-template-columns:1fr;gap:24px}}
+</style>
+</head>
+<body>
+
+<header class="md-top-app-bar">
+  <div class="md-top-app-bar__logo">В</div>
+  <div class="md-top-app-bar__titles">
+    <span class="md-top-app-bar__title">влалChillow</span>
+    <span class="md-top-app-bar__subtitle">комнаты · LAN</span>
+  </div>
+  <div class="md-top-app-bar__spacer"></div>
+
+  <span class="md-assist-chip" title="сервер отвечает">
+    <span class="md-assist-chip__dot"></span>
+    <span class="md-assist-chip__text">онлайн</span>
+  </span>
+
+  <button class="md-icon-button" id="theme-btn" aria-label="Сменить тему">
+    <svg viewBox="0 0 24 24"><path id="theme-icon" d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.39 5.39 0 0 1-4.4 2.26 5.4 5.4 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>
+  </button>
+</header>
+
+<main class="md-page">
+
+  <section class="md-stats" aria-label="Онлайн">
+    <article class="md-stat">
+      <span class="md-stat__label">Всего онлайн</span>
+      <div class="md-stat__value tnum" id="s-total">0</div>
+      <div class="md-stat__hint">подключено к серверу</div>
+    </article>
+    <article class="md-stat">
+      <span class="md-stat__label">В лобби</span>
+      <div class="md-stat__value tnum" id="s-lobby">0</div>
+      <div class="md-stat__hint">ждут и выбирают режим</div>
+    </article>
+    <article class="md-stat">
+      <span class="md-stat__label">В матчах</span>
+      <div class="md-stat__value tnum" id="s-match">0</div>
+      <div class="md-stat__hint">играют в комнатах</div>
+    </article>
+    <article class="md-stat">
+      <span class="md-stat__label">Комнат открыто</span>
+      <div class="md-stat__value tnum" id="s-rooms">0 / 0</div>
+      <div class="md-stat__hint">одна комната на игрока</div>
+    </article>
+  </section>
+
+  <!-- Честное состояние вместо бодрой кнопки: если UDP 7777 не поднялся, комната
+       создастся в реестре, но играть в неё будет нельзя. Лучше сказать это сразу. -->
+  <p class="md-banner md-banner--warn" id="s-warn" role="status" hidden></p>
+
+  <div class="md-tabs" role="tablist" aria-label="Разделы">
+    <button class="md-tab" role="tab" id="tab-create" aria-selected="true" aria-controls="panel-create">Создать комнату</button>
+    <button class="md-tab" role="tab" id="tab-list" aria-selected="false" aria-controls="panel-list">Публичные комнаты</button>
+  </div>
+
+  <!-- ═══ создать ═══ -->
+  <section class="md-card" id="panel-create" role="tabpanel" aria-labelledby="tab-create">
+    <div class="md-form-grid">
+      <div class="md-field">
+        <select class="md-field__box" id="mode"></select>
+        <label class="md-field__label" for="mode">Режим</label>
+      </div>
+
+      <div class="md-field">
+        <input class="md-field__box" id="room-name" maxlength="24" placeholder="Комната" autocomplete="off">
+        <label class="md-field__label" for="room-name">Название комнаты</label>
+      </div>
+    </div>
+
+    <p class="body-small" id="mode-note" style="margin-top:12px;color:var(--md-sys-color-on-surface-variant)"></p>
+
+    <div class="md-section">
+      <span class="md-section__label">Карта</span>
+      <div class="md-chips" id="maps"></div>
+      <p class="md-field__helper md-field__helper--error" id="map-note" hidden style="margin-left:0"></p>
+    </div>
+
+    <div class="md-section">
+      <div class="md-field">
+        <input class="md-field__box" id="nick" maxlength="20" placeholder="Ник" autocomplete="off">
+        <label class="md-field__label" for="nick">Твой ник в лобби</label>
+      </div>
+      <p class="md-field__helper" style="margin-left:0">сервер сверяет с ником в игре — по нему комната закрепляется за тобой</p>
+    </div>
+
+    <div class="md-actions">
+      <button class="md-button md-button--filled" id="create-btn">
+        <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+        Создать комнату
+      </button>
+      <span class="md-field__helper md-field__helper--error" id="create-err" style="margin:0"></span>
+    </div>
+
+    <div class="md-result" id="result" hidden>
+      <div class="md-result__title">Комната создана и уже открыта</div>
+      <div class="md-result__row">
+        <span class="md-result__cmd" id="result-cmd">/join 2v2 #1</span>
+        <button class="md-button md-button--text" id="copy-btn">
+          <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+          <span>Скопировать</span>
+        </button>
+      </div>
+      <div class="md-result__hint">введи команду в чат лобби — сервер сам закинет тебя в комнату</div>
+    </div>
+  </section>
+
+  <!-- ═══ список ═══ -->
+  <section class="md-card md-card--flush" id="panel-list" role="tabpanel" aria-labelledby="tab-list" hidden>
+    <div class="md-filters">
+      <select class="md-select-outlined" id="f-mode" aria-label="Фильтр по режиму"></select>
+      <select class="md-select-outlined" id="f-map" aria-label="Фильтр по карте"></select>
+      <span class="md-assist-chip" style="margin-left:auto">
+        <span class="md-assist-chip__text">обновление 2 с</span>
+      </span>
+    </div>
+    <ul class="md-list" id="rooms"></ul>
+  </section>
+
+  <footer class="md-foot">
+    <span>влалChillow dedicated</span>
+    <span>·</span>
+    <span>UDP 7777</span>
+    <span>·</span>
+    <span id="f-count">комнат: 0</span>
+    <span>·</span>
+    <span class="md-foot__demo">демо-данные, это макет</span>
+  </footer>
+</main>
+
+<script>
+'use strict';
+
+/* ═══════════ каталог с сервера ═══════════ */
+/* Раньше здесь лежала копия GameModeCatalog.cs. Копия неизбежно разъезжается:
+   сервер добавляет карту — панель продолжает предлагать старый список.
+   Теперь режимы и карты приходят из /api/modes (единственный источник истины). */
+var MODES = [];
+var MAX_PLAYERS = 16;
+
+var rooms = [];  /* заполняется из /api/rooms */
+
+var $ = function(id){ return document.getElementById(id); };
+
+function modeById(id){
+  for (var i=0;i<MODES.length;i++) if (MODES[i].id===id) return MODES[i];
+  return null;
+}
+function esc(s){
+  return String(s).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+/* ═══════════ селекты и карты ═══════════ */
+function buildSelects(){
+  var modeSel = $('mode'), fMode = $('f-mode');
+  modeSel.innerHTML = '';
+  fMode.innerHTML = '';
+
+  /* «Все режимы» добавляем ПЕРВОЙ опцией и явно выбираем её.
+     Раньше опция вставлялась после заполнения, и браузер оставлял выбранной
+     первую настоящую опцию → фильтр молча прятал комнаты. */
+  var all = document.createElement('option');
+  all.value = ''; all.textContent = 'Все режимы';
+  fMode.appendChild(all);
+
+  MODES.forEach(function(m){
+    var o = document.createElement('option');
+    o.value = m.id;
+    o.textContent = m.name + (m.alias && m.alias !== m.id ? ' · ' + m.alias : '');
+    modeSel.appendChild(o);
+
+    var f = document.createElement('option');
+    f.value = m.id; f.textContent = m.name;
+    fMode.appendChild(f);
+  });
+
+  // явная детерминированная выбранность — не полагаемся на побочный эффект DOM
+  fMode.selectedIndex = 0;
+  modeSel.selectedIndex = 0;
+}
+
+function renderMaps(){
+  var m = modeById($('mode').value);
+  if (!m) return;
+
+  $('mode-note').textContent = m.note || '';
+
+  var box = $('maps');
+  box.innerHTML = '';
+
+  /* Выбираем карту по умолчанию из каталога (defaultLevel), а не «первую в списке»:
+     первая карта и дефолтная — не всегда одно и то же, и игрок молча получал не ту. */
+  var preferred = m.defaultLevel && m.levels.indexOf(m.defaultLevel) >= 0
+    ? m.defaultLevel
+    : m.levels[0];
+
+  m.levels.forEach(function(lv){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'md-chip';
+    b.textContent = lv;
+    b.setAttribute('aria-pressed', lv === preferred ? 'true' : 'false');
+    b.addEventListener('click', function(){
+      var kids = box.children;
+      for (var k = 0; k < kids.length; k++) kids[k].setAttribute('aria-pressed', 'false');
+      b.setAttribute('aria-pressed', 'true');
+    });
+    box.appendChild(b);
+  });
+
+  var note = $('map-note');
+  if (m.warn) { note.textContent = m.warn; note.hidden = false; }
+  else { note.textContent = ''; note.hidden = true; }
+
+  var fMap = $('f-map');
+  var keep = fMap.value;
+  fMap.innerHTML = '';
+  var allOpt = document.createElement('option');
+  allOpt.value = ''; allOpt.textContent = 'Все карты';
+  fMap.appendChild(allOpt);
+
+  var seen = {};
+  MODES.forEach(function(x){
+    x.levels.forEach(function(l){
+      if (seen[l]) return;
+      seen[l] = true;
+      var o = document.createElement('option');
+      o.value = l; o.textContent = l;
+      fMap.appendChild(o);
+    });
+  });
+
+  // Возвращаем выбор фильтра, если он ещё существует: renderMaps зовётся после
+  // каждой перерисовки комнат, и без этого фильтр по карте сбрасывался сам.
+  if (keep) {
+    for (var i = 0; i < fMap.options.length; i++) {
+      if (fMap.options[i].value === keep) { fMap.selectedIndex = i; break; }
+    }
+  }
+}
+
+/* ═══════════ статистика ═══════════ */
+var online = { lobby: 0, match: 0, total: 0, next: 1, max: 64 };
+function renderStats(){
+  $('s-lobby').textContent = online.lobby;
+  $('s-match').textContent = online.match;
+  $('s-total').textContent = online.total;
+  var hint = $('s-rooms');
+  if (hint) hint.textContent = rooms.length + ' / ' + online.max;
+}
+
+/* ═══════════ список ═══════════ */
+function joinCmd(r){
+  var m = modeById(r.mode);
+  return '/join ' + (m ? m.alias : r.mode) + ' #' + r.n;
+}
+
+function renderRooms(){
+  var fm = $('f-mode').value, fmap = $('f-map').value;
+  var list = rooms.filter(function(r){
+    if (fm && r.mode !== fm) return false;
+    if (fmap && r.map !== fmap) return false;
+    return true;
+  });
+
+  var box = $('rooms');
+  box.innerHTML = '';
+  $('f-count').textContent = 'комнат: ' + list.length;
+
+  if (list.length === 0){
+    box.innerHTML = '<li class="md-empty">Таких комнат нет.<br>Создай свою — это одна кнопка.</li>';
+    return;
+  }
+
+  list.forEach(function(r){
+    var m = modeById(r.mode);
+    var full = r.players >= MAX_PLAYERS;
+
+    var li = document.createElement('li');
+    li.className = 'md-row';
+
+    var titleHtml = r.name
+      ? esc(r.name)
+      : '<span class="md-row__title--muted">Комната #' + r.n + '</span>';
+
+    // Три состояния реестра: waiting / live / finished. Раунда и счёта в панели нет —
+    // сервер их не публикует, а придумывать «раунд 5 · 3:2» значит врать игроку.
+    var badge;
+    if (r.state === 'live') badge = '<span class="md-badge md-badge--live">идёт</span>';
+    else if (r.state === 'finished') badge = '<span class="md-badge md-badge--full">закончилась</span>';
+    else badge = '<span class="md-badge md-badge--wait">ожидание</span>';
+
+    if (full) badge += ' <span class="md-badge md-badge--full">заполнена</span>';
+
+    li.innerHTML =
+      '<span class="md-row__num">#' + r.n + '</span>' +
+      '<div>' +
+        '<div class="md-row__title">' + titleHtml + badge + '</div>' +
+        '<div class="md-row__meta">' + esc(m ? m.name : r.mode) + ' · ' + esc(r.map) + '</div>' +
+      '</div>' +
+      '<div class="md-row__actions">' +
+        '<span class="md-row__count"><b>' + r.players + '</b>/' + MAX_PLAYERS + '</span>' +
+        '<button class="md-button md-button--outlined"' +
+          (full || r.state === 'finished' ? ' disabled' : '') + '>' +
+          (full ? 'мест нет' : r.state === 'finished' ? 'закрыта' : 'Войти') + '</button>' +
+      '</div>';
+
+    var btn = li.querySelector('button');
+    if (btn && !full && r.state !== 'finished'){
+      btn.addEventListener('click', function(){
+        $('result-cmd').textContent = joinCmd(r);
+        $('result').hidden = false;
+        switchTab('create');
+        copyText($('result-cmd').textContent, $('copy-btn'));
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    }
+
+    box.appendChild(li);
+  });
+}
+
+/* ═══════════ табы ═══════════ */
+function switchTab(which){
+  var isCreate = which === 'create';
+  $('tab-create').setAttribute('aria-selected', String(isCreate));
+  $('tab-list').setAttribute('aria-selected', String(!isCreate));
+  $('panel-create').hidden = !isCreate;
+  $('panel-list').hidden = isCreate;
+  if (!isCreate) renderRooms();
+}
+
+/* ═══════════ создание ═══════════ */
+var creating = false;
+
+function createRoom(){
+  if (creating) return;
+
+  var nick = $('nick').value.trim();
+  var err = $('create-err');
+  err.textContent = '';
+
+  if (!nick){
+    err.textContent = 'укажи ник, под которым ты в лобби';
+    $('nick').focus();
+    return;
+  }
+
+  var mode = modeById($('mode').value);
+  if (!mode){
+    err.textContent = 'выбери режим';
+    return;
+  }
+
+  var mine = null;
+  for (var i=0;i<rooms.length;i++) if (rooms[i].owner === nick) mine = rooms[i];
+  if (mine){
+    err.textContent = 'у тебя уже есть комната #' + mine.n;
+    return;
+  }
+
+  var chip = null;
+  var kids = $('maps').children;
+  for (var k=0;k<kids.length;k++) if (kids[k].getAttribute('aria-pressed')==='true') chip = kids[k];
+
+  var map = chip ? chip.textContent : mode.levels[0];
+  var name = $('room-name').value.trim();
+
+  // Одна кнопка — один запрос. Двойной клик не должен создать две комнаты:
+  // кнопка блокируется до ответа сервера (номер комнаты выдаёт сервер, не страница).
+  creating = true;
+  $('create-btn').disabled = true;
+
+  api('POST', 'api/rooms', { mode: mode.id, level: map, name: name, owner: nick })
+    .then(function(res){
+      if (!res.ok){
+        err.textContent = describeError(res.data, res.status);
+        return;
+      }
+      var r = res.data;
+      rooms.unshift({
+        n: r.number, name: r.name, mode: r.mode, map: r.level,
+        players: 0, state: r.state, owner: r.owner
+      });
+      $('result-cmd').textContent = r.joinCommand;
+      $('result').hidden = false;
+      $('room-name').value = '';
+      try { localStorage.setItem('vlal-nick', nick); } catch (e) { /* ignore */ }
+      renderStats();
+      renderRooms();
+    })
+    .catch(function(){
+      err.textContent = 'сервер не ответил — проверь, что он запущен';
+    })
+    .then(function(){
+      creating = false;
+      $('create-btn').disabled = false;
+    });
+}
+
+/* Текст ошибки API — по коду, а не по английскому тексту: серверные сообщения
+   меняются, а коды (unknown_mode, one_room_per_player, …) — стабильны. */
+function describeError(data, status){
+  var code = data && data.code;
+  if (code === 'one_room_per_player') return 'у тебя уже есть комната — вторую нельзя';
+  if (code === 'unknown_mode') return 'этот режим сервер не знает';
+  if (code === 'unknown_level') return 'такой карты у этого режима нет';
+  if (code === 'empty_owner') return 'укажи ник, под которым ты в лобби';
+  if (code === 'too_many_rooms') return 'комнат уже больше, чем игроков онлайн';
+  if (code === 'room_limit') return 'на сервере кончились комнаты — попробуй позже';
+  if (code === 'room_not_created') return (data && data.message) || 'комната не создалась';
+  if (status === 429) return 'слишком часто — подожди пару секунд';
+  return 'не получилось: ' + (code || status);
+}
+
+/* ═══════════ запросы к серверу ═══════════ */
+function api(method, path, body){
+  var opts = { method: method, headers: {}, cache: 'no-store' };
+  if (body !== undefined){
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  return fetch(path, opts).then(function(r){
+    return r.text().then(function(text){
+      var data = null;
+      try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+      return { ok: r.ok, status: r.status, data: data, retryAfter: r.headers.get('Retry-After') };
+    });
+  });
+}
+
+function loadModes(){
+  return api('GET', 'api/modes').then(function(res){
+    if (!res.ok || !res.data || !res.data.modes) return;
+    MODES = res.data.modes.map(function(m){
+      return {
+        id: m.id, name: m.name, alias: m.alias,
+        levels: m.levels || [], note: '',
+        defaultLevel: m.defaultLevel
+      };
+    });
+    buildSelects();
+    renderMaps();
+  });
+}
+
+function loadRooms(){
+  return api('GET', 'api/rooms').then(function(res){
+    if (!res.ok || !res.data) return;
+    rooms = (res.data.rooms || []).map(function(r){
+      return {
+        n: r.number, name: r.name, mode: r.mode, map: r.level,
+        players: r.players || 0, state: r.state, owner: r.owner
+      };
+    });
+  });
+}
+
+function loadStatus(){
+  return api('GET', 'api/status').then(function(res){
+    if (!res.ok || !res.data) return;
+    online.lobby = res.data.onlineLobby || 0;
+    online.match = res.data.onlineMatch || 0;
+    online.total = res.data.onlineTotal || 0;
+    online.next = res.data.nextNumber;
+    online.max = res.data.roomsMax;
+    var warn = $('s-warn');
+    if (warn){
+      // Честное состояние: игровой сокет мог не подняться, и тогда кнопка бесполезна.
+      var down = res.data.gameListening === false;
+      warn.hidden = !down;
+      if (down) warn.textContent = 'игровой порт 7777 не слушается — комнаты не запустятся';
+    }
+    renderStats();
+  });
+}
+
+/* ═══════════ копирование ═══════════ */
+function copyText(text, btn){
+  var label = btn.querySelector('span');
+  var original = label.textContent;
+
+  function done(){
+    label.textContent = 'Скопировано';
+    setTimeout(function(){ label.textContent = original; }, 1600);
+  }
+  function fallback(){
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* ignore */ }
+    ta.remove();
+  }
+
+  if (navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
+/* ═══════════ тема ═══════════ */
+var ICON_SUN = 'M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1z';
+var ICON_MOON = 'M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.39 5.39 0 0 1-4.4 2.26 5.4 5.4 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z';
+
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  $('theme-icon').setAttribute('d', t === 'dark' ? ICON_SUN : ICON_MOON);
+  try { localStorage.setItem('vlal-theme', t); } catch (e) { /* ignore */ }
+}
+
+/* ═══════════ init ═══════════ */
+function init(){
+  $('mode').addEventListener('change', renderMaps);
+  $('tab-create').addEventListener('click', function(){ switchTab('create'); });
+  $('tab-list').addEventListener('click', function(){ switchTab('list'); });
+  $('create-btn').addEventListener('click', createRoom);
+  $('f-mode').addEventListener('change', renderRooms);
+  $('f-map').addEventListener('change', renderRooms);
+  $('copy-btn').addEventListener('click', function(){
+    copyText($('result-cmd').textContent, $('copy-btn'));
+  });
+  $('theme-btn').addEventListener('click', function(){
+    setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+
+  // Ник запоминается локально: серверу он нужен, а вводить его каждый раз — лишний шаг.
+  try {
+    var savedNick = localStorage.getItem('vlal-nick');
+    if (savedNick) $('nick').value = savedNick;
+  } catch (e) { /* ignore */ }
+
+  var saved = 'dark';
+  try {
+    saved = localStorage.getItem('vlal-theme') ||
+      (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  } catch (e) { /* ignore */ }
+
+  setTheme(saved);
+  switchTab('create');
+
+  // Каталог — первым: без него нечего рисовать. Комнаты и статус — параллельно.
+  loadModes()
+    .then(function(){
+      return Promise.all([loadRooms(), loadStatus()]);
+    })
+    .then(function(){
+      renderMaps();
+      renderStats();
+      renderRooms();
+    })
+    .catch(function(){
+      $('create-err').textContent = 'сервер не ответил — проверь, что он запущен';
+    });
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
+
+/* Живое обновление: раз в 2 секунды — статус и комнаты. Данные идут с сервера,
+   никакой случайной генерации: цифры на экране должны совпадать с реальностью. */
+setInterval(function(){
+  if (document.hidden) return;
+  loadRooms().then(function(){
+    loadStatus().then(function(){
+      renderStats();
+      if (!$('panel-list').hidden) renderRooms();
+    });
+  }).catch(function(){ /* сеть моргнула — до следующего тика */ });
+}, 2000);
+
+/* отдаём функции тесту (jsdom) — в браузере просто игнорируется */
+if (typeof window !== 'undefined') {
+  window.__panel = {
+    get MODES(){ return MODES; },
+    get rooms(){ return rooms; },
+    MAX_PLAYERS: MAX_PLAYERS,
+    renderRooms: renderRooms, renderMaps: renderMaps, buildSelects: buildSelects,
+    switchTab: switchTab, createRoom: createRoom, setTheme: setTheme,
+    joinCmd: joinCmd, describeError: describeError,
+    setMode: function(list){ MODES = list; buildSelects(); renderMaps(); },
+    setRooms: function(list){ rooms = list; }
+  };
+}
+</script>
+</body>
+</html>

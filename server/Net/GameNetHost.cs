@@ -277,6 +277,10 @@ public sealed partial class GameNetHost : IDisposable
         _session.Searching = false;
         _session.GameInProgress = false;
         _session.ResetAllToLobby();
+
+        // Глобальный гейт — принадлежность legacy-пути ('Dedik'). Комнаты из панели
+        // живут своим StartArmed, и снимать его здесь нельзя: конец одной катки не
+        // должен отменять старт другой, которую только что создали на сайте.
         MatchHostSettings.MatchStartArmed = false;
 
         // Катка закончилась — голоса /ready прошлого матча не должны тянуться в следующий.
@@ -733,6 +737,14 @@ public sealed partial class GameNetHost : IDisposable
         var msg = "матч armed — WarmUp когда обе команды ≥1 (/set start)";
         Console.WriteLine($"[lobby] {who}: {msg} (MatchStartArmed=true)");
         BroadcastServerChat(msg);
+
+        // Панельные комнаты решают своим StartArmed: глобальный флаг их не трогает.
+        // Значит /set start должен армить и их, иначе команда «не работает» в комнатах
+        // с сайта — а именно там ей и пользуются, когда игроки уже собрались.
+        var armed = _match.ArmAllPanelRooms($"/set start ({who})");
+        if (armed > 0)
+            Console.WriteLine($"[lobby] {who}: /set start → armed панельных комнат: {armed}");
+
         // Nudge flow if already waiting with both teams.
         _match.NudgeMatchStartGate();
     }

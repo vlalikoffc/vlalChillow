@@ -18,7 +18,11 @@ public sealed partial class GameMatchHost
             if (room.Flow.TeamsSwapped)
                 return false;
         }
-        return roundIndex == AlliesFlowParams.HalfTimeAfterRound;
+
+        // Полу-время — по порогу ЭТОЙ комнаты: casual Defuse (first-to-6) меняется
+        // сторонами после 5-го раунда, союзники (first-to-8) — после 7-го. Глобальное
+        // значение сделало бы половину катки не на своём раунде в чужом режиме.
+        return roundIndex == MatchHostSettings.HalfTimeAfterRoundFor(room);
     }
 
     private void EnterHalfTimeIntro(MatchRoom room)

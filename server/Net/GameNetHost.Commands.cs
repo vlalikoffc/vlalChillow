@@ -91,6 +91,14 @@ public sealed partial class GameNetHost
             return true;
         }
 
+        if (cmd.Equals("join", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("войти", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("комната", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleJoinCommand(reply, args, who, player);
+            return true;
+        }
+
         if (cmd.Equals("map", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("maps", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("level", StringComparison.OrdinalIgnoreCase)
@@ -241,9 +249,10 @@ public sealed partial class GameNetHost
 
     public static string FormatCommandHelp() =>
         """
-        команды: /mode /map /set /play /start /end /ready /ban /help
+        команды: /mode /map /join /set /play /start /end /ready /ban /help
           /mode [alias]  список или сменить режим
           /map [alias]   карты текущего режима (короткие alias)
+          /join <режим> #<номер>  войти в комнату с сайта (только из лобби)
           /set …         параметры (start, end, round, wins, …)
           /play          запуск / рематч
           /start         WarmUp (когда матч уже поднят)
