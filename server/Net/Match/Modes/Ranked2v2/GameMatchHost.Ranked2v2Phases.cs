@@ -5,6 +5,7 @@ using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Kernel;
 using StandChillow.LanServer.Net.Match.Logic.Defuse;
 
 namespace StandChillow.LanServer.Net;
@@ -66,7 +67,7 @@ public sealed partial class GameMatchHost
                 .Where(kv => kv.Key.Key == MatchRoomPropKeys.Team
                              && kv.Key.Actor != MatchHostActor.ActorNr
                              && kv.Value.Kind == LobbyVariantKind.Byte)
-                .Select(kv => (kv.Key.Actor, (MatchTeam)kv.Value.Byte))
+                .Select(kv => (Actor: kv.Key.Actor, Team: (MatchTeam)kv.Value.Byte))
                 .ToList();
         }
 
