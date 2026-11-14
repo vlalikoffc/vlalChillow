@@ -57,7 +57,6 @@ public sealed class BanMessagesTests
     }
 
     [Fact]
-    [Fact]
     public void PublicAnnouncementIsThreeLinesEveryoneCanRead()
     {
         // Пользователь: «Server: Игрок влал забанил Ktulxy! / Длительность бана: 6д /
