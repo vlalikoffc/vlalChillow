@@ -84,7 +84,7 @@ public sealed class WebProtocolTests
         Assert.Equal("POST", context.Method);
         Assert.Equal("/api/rooms", context.Path);
         Assert.Equal("x=1", context.Query);
-        Assert.Equal(1, context.Headers["content-length"]);
+        Assert.Equal("1", context.Headers["content-length"]);
     }
 
     [Fact]
