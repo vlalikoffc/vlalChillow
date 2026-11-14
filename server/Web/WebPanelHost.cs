@@ -217,7 +217,7 @@ public sealed class WebPanelHost : IDisposable
         var rooms = _rooms.Snapshot();
 
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
+        using (var writer = new Utf8JsonWriter(stream, JsonText.WriterOptions))
         {
             writer.WriteStartObject();
             writer.WriteNumber("onlineLobby", lobby);

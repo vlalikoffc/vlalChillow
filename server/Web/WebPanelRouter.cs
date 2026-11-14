@@ -128,7 +128,7 @@ public sealed class WebPanelRouter
     private static string BuildModesJson()
     {
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
+        using (var writer = new Utf8JsonWriter(stream, JsonText.WriterOptions))
         {
             writer.WriteStartObject();
             writer.WriteStartArray("modes");
@@ -160,7 +160,7 @@ public sealed class WebPanelRouter
     {
         var rooms = _rooms.Snapshot();
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
+        using (var writer = new Utf8JsonWriter(stream, JsonText.WriterOptions))
         {
             writer.WriteStartObject();
             writer.WriteNumber("nextNumber", _rooms.NextNumber);
@@ -247,7 +247,7 @@ public sealed class WebPanelRouter
     private string BuildCreatedJson(RoomDescriptor room)
     {
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
+        using (var writer = new Utf8JsonWriter(stream, JsonText.WriterOptions))
         {
             writer.WriteStartObject();
             writer.WriteNumber("number", room.Number);

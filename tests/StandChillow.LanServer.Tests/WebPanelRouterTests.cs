@@ -191,11 +191,15 @@ public sealed class WebPanelRouterTests
 
         Assert.Equal(500, response.Status);
         Assert.Contains("room_not_created", Body(response));
+
+        // Реестр откатился: комнаты нет.
         Assert.Equal(0, rooms.Count);
 
-        // Номер не должен «сгореть» вместе с неудачей — иначе дыры в нумерации.
+        // Номер при этом НЕ переиспользуется: /join 2v2 #1 не должен означать
+        // «та комната, которую уже удалили». Следующая — #2.
         var retry = router.Route(Post("/api/rooms", """{"mode":"2v2","owner":"b"}"""));
         Assert.Equal(201, retry.Status);
+        Assert.Contains("\"number\":2", Body(retry));
     }
 
     [Fact]
