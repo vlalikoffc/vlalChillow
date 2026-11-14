@@ -43,7 +43,7 @@ public sealed class CommandRouter
         var trimmed = line.Trim();
         if (trimmed.Length == 0) return true;
 
-        // Slash form: /set start, /play, … — same as phone chat (silent command, no chat bubble).
+        // Slash form: /set round, /ban, … — same as phone chat (silent command, no chat bubble).
         if (trimmed.StartsWith('/'))
         {
             var body = trimmed[1..].Trim();
@@ -55,9 +55,9 @@ public sealed class CommandRouter
         if (parts.Length == 0 || parts[0].Length == 0) return true;
         var cmd0 = parts[0].ToLowerInvariant();
 
-        // Shared host commands (mode/map/set/play/start/end/help) — same as in-game /.
+        // Shared host commands (mode/map/set/end/help) — same as in-game /.
+        // Запуска катки тут больше нет: play/start убраны, комнаты стартуют сами.
         if (cmd0 is "mode" or "map" or "maps" or "level" or "levels" or "set"
-            or "play" or "start" or "startmatch" or "старт" or "игра"
             or "end" or "stopmatch" or "стопматч" or "help" or "?" or "команды"
             or "режим" or "карта" or "ban" or "бан" or "unban" or "разбан"
             or "bans" or "баны" or "ids" or "айди"

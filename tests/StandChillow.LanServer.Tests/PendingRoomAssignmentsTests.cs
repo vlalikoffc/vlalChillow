@@ -23,6 +23,75 @@ public sealed class PendingRoomAssignmentsTests
     }
 
     [Fact]
+    public void HasReservationIsFalseBeforeAnyJoin()
+    {
+        // Ключевой случай бага: комната на сайте уже создана, но этот игрок
+        // ничего не писал. Звать его на 7777 нельзя.
+        var reg = new PendingRoomAssignments();
+
+        Assert.False(reg.HasReservation("влал"));
+    }
+
+    [Fact]
+    public void HasReservationSeesOwnReservation()
+    {
+        // После /join бронь появляется — теперь hasHosting уместен.
+        var reg = new PendingRoomAssignments();
+        Assert.True(reg.Reserve("room#1", "влал"));
+
+        Assert.True(reg.HasReservation("влал"));
+    }
+
+    [Fact]
+    public void HasReservationDoesNotLeakToOtherPlayers()
+    {
+        // Главная беда была в том, что приглашение получали все подряд.
+        // Бронь одного игрока не делает приглашённым другого.
+        var reg = new PendingRoomAssignments();
+        Assert.True(reg.Reserve("room#1", "влал"));
+
+        Assert.False(reg.HasReservation("FinalSapper78"));
+        Assert.False(reg.HasReservation(""));
+        Assert.False(reg.HasReservation(null));
+    }
+
+    [Fact]
+    public void HasReservationIgnoresCorruptedNick()
+    {
+        var reg = new PendingRoomAssignments();
+        Assert.True(reg.Reserve("room#1", "влал"));
+
+        // Пробелы и регистр — тот же человек, а не чужой.
+        Assert.True(reg.HasReservation("  ВЛАЛ  "));
+    }
+
+    [Fact]
+    public void HasReservationExpiresWithTheReservation()
+    {
+        var state = new ClockState { Now = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc) };
+        var reg = new PendingRoomAssignments(() => state.Now);
+
+        Assert.True(reg.Reserve("room#1", "влал", ttl: TimeSpan.FromSeconds(60)));
+        Assert.True(reg.HasReservation("влал"));
+
+        // Протухшая бронь — уже не приглашение: в комнату всё равно не пустят.
+        state.Now = state.Now.AddSeconds(61);
+        Assert.False(reg.HasReservation("влал"));
+    }
+
+    [Fact]
+    public void HasReservationSurvivesReleaseOfAnotherRoom()
+    {
+        // Снятие чужой брони не должно «отзывать» приглашение этого игрока.
+        var reg = new PendingRoomAssignments();
+        Assert.True(reg.Reserve("room#1", "влал"));
+        Assert.True(reg.Reserve("room#2", "другой"));
+
+        Assert.True(reg.ReleaseByNick("другой"));
+        Assert.True(reg.HasReservation("влал"));
+    }
+
+    [Fact]
     public void ReserveThenResolveSameNick()
     {
         var reg = new PendingRoomAssignments();

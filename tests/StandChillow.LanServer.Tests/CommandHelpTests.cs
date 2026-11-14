@@ -63,18 +63,35 @@ public sealed class CommandHelpTests
     }
 
     [Fact]
-    public void ConsoleHelpKeepsEverything()
+    public void ConsoleHelpKeepsWhatStillExists()
     {
-        // Оператор в консоли не должен потерять ни одной команды из-за того,
+        // Оператор в консоли не должен потерять ни одной живой команды из-за того,
         // что игрокам мы список сократили.
         var help = GameNetHost.FormatConsoleHelp();
 
-        foreach (var command in new[] { "/mode", "/map", "/start", "/play", "/set" })
+        foreach (var command in new[] { "/mode", "/map", "/set", "/join", "/end" })
             Assert.Contains(command, help);
 
         Assert.Contains("/ban", help);
         Assert.Contains("/ids", help);
         Assert.Contains("/chattest", help);
+    }
+
+    [Fact]
+    public void NoHelpMentionsTheRemovedStartCommands()
+    {
+        // /play и /start убраны совсем, а не спрятаны: их не должно быть ни в
+        // памятке игрока, ни в консольной. Иначе кто-то наберёт и решит, что сломалось.
+        foreach (var help in new[]
+                 {
+                     GameNetHost.FormatPlayerHelp(),
+                     GameNetHost.FormatConsoleHelp(),
+                 })
+        {
+            Assert.DoesNotContain("/play", help);
+            Assert.DoesNotContain("/start", help);
+            Assert.DoesNotContain("startmatch", help);
+        }
     }
 
     [Fact]
