@@ -126,16 +126,17 @@ public sealed class CommandAccessPolicyTests
     }
 
     [Fact]
-    public void StartCommandsAreGoneButTheGateStillTreatsSetAsAdminOnly()
+    public void StartCommandsAreGoneButSetItselfIsStillAdminOnly()
     {
         // Запуска катки командой больше нет: /play и /start не разбирает диспетчер.
-        // Гейт прав остался прежним и по-прежнему закрывает /set (а значит и
-        // «/set start», если такой текст вообще придёт) от не-админов.
+        // Гейт прав остался прежним и по-прежнему закрывает /set от не-админов.
+        // («/set start» сюда не годится: он считается запуском матча и открыт всем
+        // пока anyoneCanStart=true — см. SetStart_IsStillRecognisedAsAMatchStartByThePolicy.)
         var cfg = Default();
         cfg.Admin.Nicknames.Add("влал");
 
-        Assert.False(Allowed(cfg, "случайный игрок", "/set start", out _));
-        Assert.True(Allowed(cfg, "влал", "/set start", out _));
+        Assert.False(Allowed(cfg, "случайный игрок", "/set round 8", out _));
+        Assert.True(Allowed(cfg, "влал", "/set round 8", out _));
     }
 
     [Fact]
@@ -242,7 +243,7 @@ public sealed class CommandAccessPolicyTests
     [Theory]
     [InlineData("/help")]
     [InlineData("/ready")]
-    [InlineData("/set start")]
+    [InlineData("/join 2v2 #1")]
     public void PublicCommands_NeverAskForAdminRights(string message)
     {
         Assert.True(CommandAccessPolicy.IsAllowed(
