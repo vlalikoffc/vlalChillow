@@ -25,8 +25,20 @@ public sealed partial class GameNetHost
 
     private readonly object _replyGate = new();
 
+    /// <summary>1 — свипер уже крутится (не плодим таймеры на каждое сообщение).</summary>
+    private int _replySweeperRunning;
+
     /// <summary>Ник (нормализованный) → ещё не доставленные ответы.</summary>
     private readonly Dictionary<string, List<PendingMatchReply>> _matchReplies = new();
+
+    private int PendingReplyCount
+    {
+        get
+        {
+            lock (_replyGate)
+                return _matchReplies.Values.Sum(list => list.Count);
+        }
+    }
 
     private sealed class PendingMatchReply
     {
@@ -62,10 +74,50 @@ public sealed partial class GameNetHost
                 list.RemoveAt(0);
         }
 
+        // Не три попытки по таймеру, а свипер раз в секунду: бутстрап пира ждёт identity
+        // до 15 с (softTimeout), и ответ, отправленный «через 6 секунд», просто терялся.
         Console.WriteLine($"[chat] Server → {nick}: ответ отложен до подключения к катке");
-        Schedule(1200, () => FlushMatchReplies(nick));
-        Schedule(3000, () => FlushMatchReplies(nick));
-        Schedule(6000, () => FlushMatchReplies(nick));
+        StartMatchReplySweeper();
+    }
+
+    /// <summary>Раз в секунду досылаем всё, что ждёт адресата в катке, пока не истечёт TTL.</summary>
+    private void StartMatchReplySweeper()
+    {
+        if (Interlocked.Exchange(ref _replySweeperRunning, 1) != 0)
+            return;
+
+        SweepMatchReplies();
+    }
+
+    private void SweepMatchReplies() =>
+        Schedule(1000, () =>
+        {
+            try
+            {
+                FlushAllPendingReplies();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[chat] свипер ответов: {ex.Message}");
+            }
+
+            if (_cts.IsCancellationRequested || PendingReplyCount == 0)
+            {
+                Interlocked.Exchange(ref _replySweeperRunning, 0);
+                return;
+            }
+
+            SweepMatchReplies();
+        });
+
+    private void FlushAllPendingReplies()
+    {
+        List<string> nicks;
+        lock (_replyGate)
+            nicks = _matchReplies.Keys.ToList();
+
+        foreach (var nick in nicks)
+            FlushMatchReplies(nick);
     }
 
     /// <summary>
@@ -91,7 +143,10 @@ public sealed partial class GameNetHost
         foreach (var item in batch)
         {
             if (item.IsExpired)
+            {
+                Console.WriteLine($"[chat] Server → {nick}: ответ так и не доставлен (истёк): {item.Text}");
                 continue;
+            }
             if (_match.SendServerChat(item.Text, nick: nick, alsoLastChanceIp: item.Address) > 0)
                 Console.WriteLine($"[chat] Server → {nick} (match, отложенно): {item.Text}");
             else

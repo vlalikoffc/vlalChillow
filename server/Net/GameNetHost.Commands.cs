@@ -245,29 +245,36 @@ public sealed partial class GameNetHost
     private static string FormatUnknownCommandHelp(string message) =>
         $"неизвестная команда '{message}' — /help";
 
+    /// <summary>
+    /// Личный ответ игроку: в лобби-сокет и в матч-чат, потому что канал зависит от того,
+    /// где сейчас клиент. Если катка ещё не готова — ответ в очереди и досылается сам.
+    /// </summary>
     private void ReplyPrivate(ConnectedPlayer player, string text)
     {
-        // Лобби-сокет: игрок ещё в лобби — увидит сразу.
+        DashboardHub.PostChat(LobbySession.ServerPlayerName, $"[{player.Name}] {text}", fromServer: true);
+
+        // Лобби-сокет: видно, пока клиент на экране лобби.
         Send(player.Peer, LobbyCodec.BuildChatEvent(LobbySession.ServerMemberId, text));
 
-        // И в катку, но адресно: приватный ответ не должен всплыть в общем чате матча.
-        // Без этого команда выглядела проигнорированной: клиент держит лобби-сокет весь
-        // матч, поэтому «ушло в лобби» в катке не видел никто. Last-chance добивает
-        // ответ в матч, если пир не нашёлся по нику.
-        var peers = _match.SendServerChat(
-            text, nick: player.Name, alsoLastChanceIp: player.Peer.Address);
-        if (peers > 0)
+        // Матч-чат: адресно. Клиент, ушедший в катку, лобби-кадров больше не рисует —
+        // именно из-за этого «команда выполнилась, а ответа нет».
+        if (_match.SendServerChat(
+                text, nick: player.Name, alsoLastChanceIp: player.Peer.Address) > 0)
         {
-            Console.WriteLine($"[chat] Server → {player.Name} (match, peers={peers}): {text}");
+            Console.WriteLine($"[chat] Server → {player.Name} (match): {text}");
             return;
         }
 
-        Console.WriteLine($"[chat] Server → {player.Name}: ответ только в лобби (в катке не найден)");
+        // Катка идёт? Тогда ответ обязан появиться и в матч-чате — но пир подключается к
+        // 7777 через несколько секунд после op9 (bootstrap ждёт identity до 15 с).
+        if (!_match.IsListening)
+            return;
 
-        // Катка ещё не приняла ни одного пира (типичный /start из лобби): ответ в лобби-сокет
-        // клиент уже не покажет, поэтому придержим его и дошлём, когда игрок подключится.
-        if (_match.IsListening)
-            RememberMatchReply(player.Name, text, player.Peer.Address);
+        var where = player.Status == PlayerLobbyStatus.InMatch ? "в катке" : "в лобби";
+        Console.WriteLine(
+            $"[chat] Server → {player.Name} ({where}): адресата на 7777 пока нет " +
+            $"({_match.DescribePeers()}) — ответ в очереди");
+        RememberMatchReply(player.Name, text, player.Peer.Address);
     }
 
     private void NotifyMatchPlayerJoined(string name)

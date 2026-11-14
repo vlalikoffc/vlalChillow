@@ -23,7 +23,7 @@ public static class BanMessages
     public static string CountdownLine(BanRecord record, DateTime nowUtc) =>
         $"Разбан через: {BanDuration.FormatRemaining(record.Remaining(nowUtc))}";
 
-    /// <summary>Строка в общий чат (если admin.ban.notifyEveryone).</summary>
+    /// <summary>Одна строка в общий чат (если admin.ban.notifyEveryone).</summary>
     public static string PublicLine(BanRecord record)
     {
         var reason = string.IsNullOrWhiteSpace(record.Reason)
@@ -31,6 +31,17 @@ public static class BanMessages
             : $" ({record.Reason.Trim()})";
         return $"{record.DisplayNick} забанен на {BanDuration.FormatShort(record.Duration)}{reason}";
     }
+
+    /// <summary>
+    /// Три строки в общий чат: кто забанил, на сколько и за что. Пользователь: «чтоб все
+    /// знали, сервер ваще нихуя не делает» — объявление должно быть видно и в лобби, и в катке.
+    /// </summary>
+    public static string[] PublicLines(BanRecord record) => new[]
+    {
+        $"Игрок {DescribeAdmin(record)} забанил {record.DisplayNick}!",
+        $"Длительность бана: {BanDuration.FormatShort(record.Duration)}",
+        $"Причина: {DescribeReason(record)}",
+    };
 
     private static string DescribeReason(BanRecord record) =>
         string.IsNullOrWhiteSpace(record.Reason) ? "не указана" : record.Reason.Trim();

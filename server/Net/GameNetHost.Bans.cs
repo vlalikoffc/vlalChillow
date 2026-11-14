@@ -403,8 +403,12 @@ public sealed partial class GameNetHost
             $"ids=[{string.Join(", ", record.MatchIds)}]; кик матч={matchKicked}, лобби={lobbyKicked}; " +
             $"выдан {record.CreatedLocalIso} (UTC{BanRecord.CurrentUtcOffsetMinutes() / 60.0:+0.#;-0.#})");
 
+        // Объявление видят все и в лобби, и в катке (BroadcastServerChat идёт в оба канала).
         if (settings.NotifyEveryone)
-            BroadcastServerChat(BanMessages.PublicLine(record));
+        {
+            foreach (var line in BanMessages.PublicLines(record))
+                BroadcastServerChat(line);
+        }
     }
 
     private void HandleUnbanCommand(Action<string> reply, string args)

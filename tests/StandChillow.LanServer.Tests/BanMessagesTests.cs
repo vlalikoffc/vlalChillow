@@ -57,6 +57,24 @@ public sealed class BanMessagesTests
     }
 
     [Fact]
+    [Fact]
+    public void PublicAnnouncementIsThreeLinesEveryoneCanRead()
+    {
+        // Пользователь: «Server: Игрок влал забанил Ktulxy! / Длительность бана: 6д /
+        // Причина: софт удали, тогда поговорим».
+        var record = Sample();
+        record.Reason = "софт удали, тогда поговорим";
+        record.DurationSeconds = 6 * 24 * 60 * 60;
+
+        var lines = BanMessages.PublicLines(record);
+
+        Assert.Equal(3, lines.Length);
+        Assert.Equal("Игрок влал забанил Ktulxy!", lines[0]);
+        Assert.Equal("Длительность бана: 6д", lines[1]);
+        Assert.Equal("Причина: софт удали, тогда поговорим", lines[2]);
+    }
+
+    [Fact]
     public void PublicLineNamesTheDurationAndReason()
     {
         Assert.Equal(

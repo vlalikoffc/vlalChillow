@@ -624,11 +624,17 @@ public sealed partial class GameNetHost : IDisposable
     private void RelayPlayerChat(ConnectedPlayer speaker, string message)
     {
         var bytes = LobbyCodec.BuildChatEvent(speaker.ServerMemberId, message);
+
+        // Эхо автору тоже. Клиент не рисует собственное сообщение сам — ждёт кадр от
+        // сервера, поэтому без эха игрок видел пустое окно и решал, что «чат не работает».
         foreach (var p in _session.JoinedPlayers())
-        {
-            if (ReferenceEquals(p.Peer, speaker.Peer)) continue;
             Send(p.Peer, bytes);
-        }
+
+        // В катке свой чат (ChatManager): лобби-кадр туда не доходит. Игрок в матче
+        // пишет через лобби-сокет, который клиент держит весь матч, — поэтому его текст
+        // надо дослать в матч-чат, иначе его не видит никто из катки.
+        if (speaker.Status == PlayerLobbyStatus.InMatch && _match.IsListening)
+            SendServerChatToMatch($"{speaker.Name}: {message}");
     }
 
         /// <summary>op7 CustomProperties — same bag as live mode/level change (GameModeId + SelectedLevels).</summary>
