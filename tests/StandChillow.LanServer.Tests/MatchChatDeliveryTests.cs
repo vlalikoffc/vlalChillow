@@ -52,6 +52,25 @@ public sealed class MatchChatDeliveryTests
     }
 
     /// <summary>
+    /// Приватный ответ «последним шансом» не должен уходить чужому. latest-2.log:223 — ответ
+    /// для «влал» (192.168.1.70, actor 3, bootstrap ещё не отправлен) получил «влал2»
+    /// (192.168.1.65, actor 2), потому что «готовый пир в катке один» считался достаточным
+    /// признаком. Теперь без совпадения адреса досылаем только когда в комнате действительно
+    /// один пир; иначе 0 доставок — и ответ ждёт адресата в очереди (<c>RememberMatchReply</c>).
+    /// </summary>
+    [Fact]
+    public void LastChancePrivateReply_NeverGoesToSomebodyElse()
+    {
+        // Адрес спросившего совпал — это он, даже если в комнате есть кто-то ещё.
+        Assert.True(MatchChatDelivery.LastChanceMaySend(sameIpMatches: 1, peersInRoom: 3));
+        // Совпадения нет, но и выбирать не из кого: единственный пир комнаты и есть адресат.
+        Assert.True(MatchChatDelivery.LastChanceMaySend(sameIpMatches: 0, peersInRoom: 1));
+        // Совпадения нет, а в комнате больше одного пира — угадывание отдаст ответ чужому.
+        Assert.False(MatchChatDelivery.LastChanceMaySend(sameIpMatches: 0, peersInRoom: 2));
+        Assert.False(MatchChatDelivery.LastChanceMaySend(sameIpMatches: 0, peersInRoom: 3));
+    }
+
+    /// <summary>
     /// Серверный ответ и релей чужого чата обязаны идти недропаемым путём, а релей —
     /// сохранять байт автора (иначе сообщение придёт подписанным чужим актором).
     /// </summary>
@@ -70,6 +89,11 @@ public sealed class MatchChatDeliveryTests
         // Адресный ответ и last-chance — тоже мимо дропа.
         Assert.Contains("SendCritical(p, payload)", host, StringComparison.Ordinal);
         Assert.Contains("SendCritical(final[0].Peer, payload)", host, StringComparison.Ordinal);
+        // «Последний шанс» спрашивает политику, а не угадывает по числу готовых пиров.
+        Assert.Contains(
+            "MatchChatDelivery.LastChanceMaySend(sameIp.Count, inRoom)",
+            host,
+            StringComparison.Ordinal);
         // Релей чужого чата: решение о критичности — из той же политики, автор байтом как пришёл.
         Assert.Contains("MatchChatDelivery.IsStructuralRpc(parsed.ObjectId)", worldObjects, StringComparison.Ordinal);
         Assert.Contains("parsed.RpcId,", worldObjects, StringComparison.Ordinal);

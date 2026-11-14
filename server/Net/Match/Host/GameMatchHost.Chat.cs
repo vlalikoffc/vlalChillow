@@ -202,7 +202,9 @@ public sealed partial class GameMatchHost
 
     /// <summary>
     /// Last resort for command feedback: one match peer that plausibly is the requester.
-    /// Never broadcasts — a private reply must not surface in the shared match chat.
+    /// Never broadcasts — a private reply must not surface in the shared match chat — and
+    /// refuses (returns 0) when the requester cannot be identified by address, so the caller
+    /// queues the reply instead of showing somebody else's <c>/ids</c> to the wrong player.
     /// </summary>
     private int SendServerChatLastChance(string text, System.Net.IPAddress peerIp)
     {
@@ -212,9 +214,15 @@ public sealed partial class GameMatchHost
         foreach (var room in rooms)
         {
             var candidates = new List<(NetPeer Peer, MatchPeerState State)>();
+            // Сколько пиров в комнате вообще: «готов один» и «в комнате один» — разные вещи,
+            // и именно их путала прежняя эвристика (см. MatchChatDelivery.LastChanceMaySend).
+            var inRoom = 0;
             foreach (var (p, st) in _peers)
             {
-                if (st.Room != room || !st.BootstrapSent)
+                if (st.Room != room)
+                    continue;
+                inRoom++;
+                if (!st.BootstrapSent)
                     continue;
                 candidates.Add((p, st));
             }
@@ -225,13 +233,17 @@ public sealed partial class GameMatchHost
                 .Where(c => SameAddress(c.Peer.Address, peerIp))
                 .ToList();
 
-            // Один пир в катке — это заведомо он. Больше одного и ни одного совпадения по
-            // IP — не угадываем: приватный ответ не должен уйти чужому человеку.
-            if (sameIp.Count == 0 && candidates.Count > 1)
+            // Совпадения по адресу нет — угадывать нельзя: приватный ответ уйдёт чужому.
+            // «Готовый пир всего один» больше не аргумент: latest-2.log:223 — ответ для
+            // «влал» (192.168.1.70, actor 3, bootstrap ещё не отправлен) ушёл «влал2»
+            // (192.168.1.65, actor 2) только потому, что тот успел первым. Ноль доставок —
+            // вызывающий положит ответ в очередь, и свипер досылает его уже по нику.
+            if (!MatchChatDelivery.LastChanceMaySend(sameIp.Count, inRoom))
             {
                 Console.WriteLine(
                     $"[chat] last-chance: ip={peerIp} не совпал ни с кем из {candidates.Count} " +
-                    "пиров — ответ не отправляю (мог бы уйти чужому)");
+                    $"готовых (в комнате {inRoom}) — приватный ответ не отправляю: " +
+                    "он ушёл бы чужому, ждём адресата в очереди");
                 return 0;
             }
 

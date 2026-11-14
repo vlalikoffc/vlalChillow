@@ -269,8 +269,12 @@ public sealed partial class GameMatchHost
                     // Ник важнее IP: матч-пир и лобби-пир — два разных сокета (7777/7778),
                     // поэтому резолв только по IP регулярно терял игрока, и команда
                     // молча умирала. Имя актора уже лежит в комнате — берём его.
-                    var actorName = ResolveActorName(st.Room, st.ActorNr);
-                    try { OnMatchChatSlashCommand?.Invoke(actorName, peer.Address, chatText); }
+                    //
+                    // Берём st.ActorNr, а не parsed.RpcId: байт «rpc» клиент заполняет сам, и
+                    // /chattest доказывает, что кадр подписывается чужим актором. Команда
+                    // исполняется от имени отправителя — иначе админ-права проверялись бы по
+                    // нику того, кого кто-то «назначил» автором кадра.
+                    try { OnMatchChatSlashCommand?.Invoke(chatActorName, peer.Address, chatText); }
                     catch (Exception ex)
                     {
                         Console.WriteLine(

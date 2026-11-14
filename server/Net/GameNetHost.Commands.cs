@@ -25,21 +25,30 @@ public sealed partial class GameNetHost
 
     /// <summary>
     /// Пускать ли игрока к команде. Решает <c>config.json</c>:
-    /// <c>admin.nicknames</c>, <c>admin.adminOnlyCommands</c>, <c>admin.anyoneCanStart</c>.
+    /// <c>admin.nicknames</c>, <c>admin.adminOnlyCommands</c>, <c>admin.anyoneCanStart</c>,
+    /// а админство — ещё и код этого запуска (<see cref="IsAdminAuthorized"/>).
     /// </summary>
     private bool IsCommandAllowedFor(ConnectedPlayer player, string message, out string denyReason)
     {
         // Само решение — в CommandAccessPolicy (чистая функция, покрыта тестами).
-        var allowed = CommandAccessPolicy.IsAllowed(_config, player.Name, message, out denyReason);
+        // Права проверяем по нику + адресу: ник присылает клиент, и адрес, который код
+        // запуска не предъявлял, админом не становится — ровно то, что показывает /whoami.
+        var allowed = CommandAccessPolicy.IsAllowed(
+            _config,
+            player.Name,
+            message,
+            out denyReason,
+            nick => IsAdminAuthorized(nick, player.Peer.Address));
         if (allowed)
             return true;
 
         // Отказ виден и в консоли: иначе игрок получает только приватный ответ, а
-        // оператор не понимает, почему команда «не работает».
+        // оператор не понимает, почему команда «не работает». Причина — та же строка,
+        // что ушла игроку (ник без прав и ник без кода — разные случаи).
         var parsed = CommandAccessPolicy.Parse(message);
         Console.WriteLine(
-            $"[chat] /{parsed.Command} ОТКЛОНЕНО: ник '{player.Name}' не в admin.nicknames " +
-            $"[{string.Join(", ", _config.Admin.Nicknames)}]");
+            $"[chat] /{parsed.Command} ОТКЛОНЕНО: {player.Name} ({player.Peer.Address}) — " +
+            denyReason);
         return false;
     }
 
@@ -248,6 +257,8 @@ public sealed partial class GameNetHost
           /whoami                   что сервер знает про тебя: ник, id, IP, права
           /chattest                 диагностика чата катки: 4 варианта кадра (только админ)
           /auth                     код админа (только из консоли сервера)
+        Те же команды работают в чате катки: ответ придёт туда же и только тебе.
+        «Только админ» — это ник в admin.nicknames плюс код этого запуска (/whoami).
         """.Trim();
 
     private static string FormatUnknownCommandHelp(string message) =>

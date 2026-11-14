@@ -596,8 +596,20 @@ public sealed partial class GameNetHost : IDisposable
         Console.WriteLine(
             $"[chat] {player.Name}: {message} (ChatManager command, silent; " +
             $"actor='{actorName}' resolvedBy={resolvedBy})");
-        if (!TryHandleSlashCommand(player, message))
-            ReplyPrivate(player, FormatUnknownCommandHelp(message));
+
+        // Исполняет тот же диспетчер, что и лобби с консолью, и тот же гейт прав
+        // (ник + код запуска). Ответ уходит адресно в матч-чат: сам текст команды другим
+        // игрокам не ретранслируется, поэтому «что случилось» видит только автор.
+        if (TryHandleSlashCommand(player, message))
+        {
+            Console.WriteLine(
+                $"[chat] {player.Name}: команда из катки обработана хостом: {message}");
+            return;
+        }
+
+        Console.WriteLine(
+            $"[chat] {player.Name}: команда из катки не распознана: {message}");
+        ReplyPrivate(player, FormatUnknownCommandHelp(message));
     }
 
     /// <summary>
