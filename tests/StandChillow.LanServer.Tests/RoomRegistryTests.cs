@@ -34,7 +34,7 @@ public sealed class RoomRegistryTests
     }
 
     [Fact]
-    public void Numbers_AreMonotonic_AndNeverReused()
+    public void Numbers_FillTheLowestHole()
     {
         var reg = new RoomRegistry();
 
@@ -43,11 +43,29 @@ public sealed class RoomRegistryTests
         Assert.Equal(1, first!.Number);
         Assert.Equal(2, second!.Number);
 
-        // Удаляем #2 и создаём новую: номер 2 не должен вернуться в оборот,
-        // иначе старая команда «/join duel #2» начнёт означать другую комнату.
+        // Освободили #2 — следующая комната займёт именно её, а не #3.
+        // Номер остаётся коротким, и человеку не нужно помнить, какие ещё живы.
         Assert.True(reg.TryRemove(2, out _));
         Assert.True(Create(reg, "defuse", null, "c", out var third, out _));
-        Assert.Equal(3, third!.Number);
+        Assert.Equal(2, third!.Number);
+    }
+
+    [Fact]
+    public void LowestFreeNumberIsUsedEvenWithGaps()
+    {
+        var reg = new RoomRegistry();
+        Assert.True(Create(reg, "2v2", null, "a", out _, out _));   // #1
+        Assert.True(Create(reg, "2v2", null, "b", out _, out _));   // #2
+        Assert.True(Create(reg, "2v2", null, "c", out _, out _));   // #3
+
+        // Убираем середину: #2 должна достаться следующей комнате.
+        Assert.True(reg.TryRemove(2, out _));
+        Assert.True(Create(reg, "2v2", null, "d", out var next, out _));
+        Assert.Equal(2, next!.Number);
+
+        // #1 и #3 на месте, #2 заняли — следующая #4.
+        Assert.True(Create(reg, "2v2", null, "e", out var after, out _));
+        Assert.Equal(4, after!.Number);
     }
 
     [Fact]
