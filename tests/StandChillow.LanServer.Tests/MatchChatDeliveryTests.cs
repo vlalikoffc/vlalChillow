@@ -59,7 +59,8 @@ public sealed class MatchChatDeliveryTests
     public void ServerChatAndRelay_AreWiredToTheCriticalPath()
     {
         var root = ServerSourceRoot();
-        var host = File.ReadAllText(Path.Combine(root, "Net", "GameMatchHost.cs"));
+        var host = File.ReadAllText(Path.Combine(
+            root, "Net", "Match", "Host", "GameMatchHost.Chat.cs"));
         var worldObjects = File.ReadAllText(Path.Combine(
             root, "Net", "Match", "Host", "GameMatchHost.WorldObjects.cs"));
 
