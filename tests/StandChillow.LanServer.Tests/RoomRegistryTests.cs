@@ -301,17 +301,28 @@ public sealed class RoomRegistryTests
         var created = room.CreatedUtc;
         var ttl = TimeSpan.FromMinutes(3);
 
-        // Играли долго, потом все вышли.
-        var emptiedAt = created.AddHours(1);
-        Assert.True(reg.TryUpdate(room.Number, RoomState.Waiting, 0));
+        // Пока в комнате играют, «момент опустения» не записан: считать нечего.
+        var busy = reg.Snapshot().Single(r => r.Number == room.Number);
+        Assert.Null(busy.EmptySinceUtc);
 
-        // Сразу после выхода и через две минуты — ещё жива.
+        // Все вышли — реестр сам запоминает момент опустения.
+        Assert.True(reg.TryUpdate(room.Number, RoomState.Waiting, 0));
+        var emptied = reg.Snapshot().Single(r => r.Number == room.Number);
+        Assert.NotNull(emptied.EmptySinceUtc);
+        var emptiedAt = emptied.EmptySinceUtc!.Value;
+
+        // Две минуты после выхода — ещё жива (хотя возраст от создания больше).
         Assert.Empty(reg.FindExpired(emptiedAt.AddMinutes(2), ttl, ttl));
 
-        // Через три минуты после опустения (хотя от создания прошёл час) — пора.
+        // Четыре минуты после опустения — пора.
         var expired = reg.FindExpired(emptiedAt.AddMinutes(4), ttl, ttl);
         Assert.Single(expired);
         Assert.Equal(room.Number, expired[0]);
+
+        // Ключевая разница со старым поведением: считаем от выхода, а не от создания.
+        // Если бы возраст брался от created, та же проверка через час после создания
+        // дала бы «пора» сразу же после появления игроков.
+        Assert.NotEqual(created, emptiedAt);
     }
 
     [Fact]
