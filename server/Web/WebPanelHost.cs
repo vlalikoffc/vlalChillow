@@ -195,9 +195,9 @@ public sealed class WebPanelHost : IDisposable
         if (expired.Count == 0)
             return;
 
-        foreach (var room in expired)
+        foreach (var number in expired)
         {
-            if (!_rooms.TryRemove(room.Number, out var removed))
+            if (!_rooms.TryRemove(number, out var removed))
                 continue;
 
             _host?.Match.PendingRooms.Release(removed.PasswordKey);

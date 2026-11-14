@@ -503,7 +503,7 @@ public sealed record WebResponse(
     string ContentType,
     byte[] Body,
     int RetryAfterSec,
-    IReadOnlyList<(string Name, string Value)> ExtraHeaders)
+    IReadOnlyList<(string, string)> ExtraHeaders)
 {
     public static WebResponse Html(string html) =>
         new(200, "text/html; charset=utf-8", Encoding.UTF8.GetBytes(html), 0, Array.Empty<(string, string)>());

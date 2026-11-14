@@ -220,7 +220,7 @@ public sealed class WebPanelRouterTests
             new Dictionary<string, string>()));
 
         Assert.Equal(405, response.Status);
-        Assert.Contains(response.ExtraHeaders, h => h.Name == "Allow" && h.Value == "GET, POST");
+        Assert.Contains(response.ExtraHeaders, h => h.Item1 == "Allow" && h.Item2 == "GET, POST");
     }
 
     [Fact]

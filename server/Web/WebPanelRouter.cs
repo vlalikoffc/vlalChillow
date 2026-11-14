@@ -75,7 +75,7 @@ public sealed class WebPanelRouter
             or "/api/modes" or "/healthz")
             return WithAllow(path == "/api/rooms" ? "GET, POST" : "GET", WebResponse.Text("405", 405));
 
-        return WebResponse.Text("404", 404);
+        return WebResponse.Text("404", status: 404);
     }
 
     /// <summary>

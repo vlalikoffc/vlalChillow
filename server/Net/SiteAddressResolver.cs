@@ -87,8 +87,9 @@ public sealed class SiteAddressResolver
         {
             using var cts = new CancellationTokenSource(ExternalIpTimeout);
             // Не блокируем UDP-цикл на время запроса: ждём ограниченно и только здесь.
-            value = ExternalIpProvider(cts.Token)
-                .Wait(ExternalIpTimeout) ?? null;
+            // Wait(TimeSpan) возвращает bool — берём Result только если дождались.
+            var task = ExternalIpProvider(cts.Token);
+            value = task.Wait(ExternalIpTimeout) ? task.Result : null;
         }
         catch (Exception)
         {
