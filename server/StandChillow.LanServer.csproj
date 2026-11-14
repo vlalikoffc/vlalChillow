@@ -18,6 +18,15 @@
     <PackageReference Include="LiteNetLib" Version="2.1.5" />
   </ItemGroup>
 
+  <!-- Веб-панель: HTML вшивается в сборку. Один исполняемый файл, рядом с ним ничего
+       не нужно — ни папки wwwroot, ни прав на запись. Имя ресурса должно совпадать с
+       WebPanelHost.IndexResourceName. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Web\wwwroot\index.html">
+      <LogicalName>StandChillow.LanServer.Web.wwwroot.index.html</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="Plugins\StandChillow.Server.Plugins\StandChillow.Server.Plugins.csproj" />
   </ItemGroup>

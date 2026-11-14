@@ -48,7 +48,7 @@ public sealed partial class GameMatchHost
             {
                 if (!BothFightingTeamsPresent(room))
                     return;
-                if (!MatchHostSettings.MatchStartArmed)
+                if (!MatchHostSettings.IsStartArmed(room))
                     return;
             }
             else if (phase == MatchFlowPhase.MatchOver)

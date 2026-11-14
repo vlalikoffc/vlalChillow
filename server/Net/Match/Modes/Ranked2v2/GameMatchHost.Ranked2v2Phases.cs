@@ -5,6 +5,7 @@ using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Kernel;
 using StandChillow.LanServer.Net.Match.Logic.Defuse;
 
 namespace StandChillow.LanServer.Net;
@@ -20,9 +21,12 @@ public sealed partial class GameMatchHost
                 return;
             if (!BothFightingTeamsPresent(room))
                 return;
+
+            // Перед стартом выравниваем: «3 на 1» не должно превращаться в катку.
+            BalanceTeamsBeforeStart(room);
         }
 
-        if (!MatchHostSettings.MatchStartArmed)
+        if (!MatchHostSettings.IsStartArmed(room))
         {
             Console.WriteLine(
                 "[match-host] match-flow: both teams have ≥1 player — " +
@@ -33,6 +37,117 @@ public sealed partial class GameMatchHost
         Console.WriteLine(
             "[match-host] match-flow: both teams have ≥1 player + start armed — " +
             "will start Warmup on next tick");
+    }
+
+    /// <summary>
+    /// Выровнять команды перед стартом: разница больше одного человека недопустима.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Команду выбирает клиент, и сервер не может отказать — но может перевести.
+    /// Переводим <b>последнего вошедшего</b> с переполненной стороны: он ещё ничего
+    /// не купил и не встал на точку, а для остальных ничего не меняется.
+    /// </para>
+    /// <para>
+    /// Работает только до начала раунда (<c>WaitingPlayers</c>/прогрев): в идущем
+    /// раунде смена команды — это смерть (см. <c>NoteMidRoundTeamChange</c>), и
+    /// выравнивать там уже поздно.
+    /// </para>
+    /// </remarks>
+    private void BalanceTeamsBeforeStart(MatchRoom room)
+    {
+        List<(byte Actor, MatchTeam Team)> states;
+        lock (_roomGate)
+        {
+            if (room.Flow.Phase != MatchFlowPhase.WaitingPlayers
+                && room.Flow.Phase != MatchFlowPhase.Warmup)
+                return;
+
+            states = room.ActorProps
+                .Where(kv => kv.Key.Key == MatchRoomPropKeys.Team
+                             && kv.Key.Actor != MatchHostActor.ActorNr
+                             && kv.Value.Kind == LobbyVariantKind.Byte)
+                .Select(kv => (Actor: kv.Key.Actor, Team: (MatchTeam)kv.Value.Byte))
+                .ToList();
+        }
+
+        var plan = TeamBalancer.Plan(states);
+        if (plan is not { } move)
+            return;
+
+        foreach (var actor in move.Actors)
+        {
+            var value = LobbyVariant.FromByte((byte)move.To);
+            lock (_roomGate)
+                room.ActorProps[(actor, MatchRoomPropKeys.Team)] = value;
+
+            var pkt = MatchCodec.BuildSetProperty(
+                NextServerTime(), actor, MatchRoomPropKeys.Team, value);
+            BroadcastRoom(room, pkt, tag: "match_tx_SetProperty_balance");
+            Console.WriteLine(
+                $"[match-host] баланс команд: actor={actor} переведён {move.From} → {move.To} " +
+                "(разница больше одного недопустима)");
+        }
+    }
+
+    /// <summary>
+    /// Разрешить старт <b>одной</b> комнаты (её создали из панели). Остальные комнаты не
+    /// трогаются: это замена глобальному <c>/set start</c> для мультикомнатного режима.
+    /// </summary>
+    /// <returns><c>false</c> — комнаты с таким ключом нет.</returns>
+    public bool ArmRoomByPasswordKey(string passwordKey, string reason)
+    {
+        MatchRoom? room;
+        lock (_roomGate)
+            _roomsByPassword.TryGetValue(passwordKey, out room);
+
+        if (room is null)
+        {
+            Console.WriteLine(
+                $"[match-host] arm '{passwordKey}' ({reason}): комнаты нет — " +
+                "старт разрешён будет при её создании");
+            return false;
+        }
+
+        lock (_roomGate)
+            room.StartArmed = true;
+
+        Console.WriteLine(
+            $"[match-host] комната {passwordKey} armed ({reason}) — " +
+            "WarmUp пойдёт, когда в обеих командах будет по игроку");
+        TryBeginMatchFlowIfBothTeams(room);
+        NudgeMatchStartGate();
+        return true;
+    }
+
+    /// <summary>
+    /// Разрешить старт во всех панельных комнатах (для <c>/set start</c> из лобби).
+    /// </summary>
+    /// <returns>Сколько комнат получили armed.</returns>
+    /// <remarks>
+    /// Глобальный флаг панельные комнаты игнорируют — у каждой свой гейт. Без этого
+    /// метода <c>/set start</c> молча не работал бы в комнатах, созданных с сайта.
+    /// </remarks>
+    internal int ArmAllPanelRooms(string reason)
+    {
+        var armed = 0;
+        List<MatchRoom> rooms;
+        lock (_roomGate)
+            rooms = _roomsByPassword.Values.Where(r => r.IsPanelRoom).ToList();
+
+        foreach (var room in rooms)
+        {
+            lock (_roomGate)
+            {
+                if (room.StartArmed)
+                    continue;
+                room.StartArmed = true;
+            }
+            armed++;
+            TryBeginMatchFlowIfBothTeams(room);
+        }
+
+        return armed;
     }
 
     /// <summary>After <c>/set start</c>: re-check WaitingPlayers rooms for both-teams WarmUp.</summary>
@@ -155,7 +270,7 @@ public sealed partial class GameMatchHost
             {
                 if (!BothFightingTeamsPresent(room))
                     return;
-                if (!MatchHostSettings.MatchStartArmed)
+                if (!MatchHostSettings.IsStartArmed(room))
                     return;
             }
             else if (phase == MatchFlowPhase.MatchOver)
@@ -325,7 +440,7 @@ public sealed partial class GameMatchHost
         }
         ClearBombAuthority(room, "WarmUp C2=21");
         // Consumed: next WaitingPlayers (rematch) needs /set start again.
-        MatchHostSettings.MatchStartArmed = false;
+        MatchHostSettings.DisarmStart(room);
         // Time/RoundStartTime are doubles in NetManager.bfqt units (TickCount/1000 seconds).
         // FetchServerTime HasServerTime header stays raw TickCount ms — client dws.bfwi divides.
         BroadcastRoomProps(room,

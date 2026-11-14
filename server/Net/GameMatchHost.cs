@@ -9,6 +9,7 @@ using StandChillow.LanServer.Lan;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Net.Match.Host;
+using StandChillow.LanServer.Net.Match.Kernel;
 
 namespace StandChillow.LanServer.Net;
 
@@ -62,6 +63,16 @@ public sealed partial class GameMatchHost : IDisposable
     /// </summary>
     private string _matchGameModeId = LobbyPropKeys.DefaultGameModeId;
     private string _matchSelectedLevel = LobbyPropKeys.DefaultSelectedLevel;
+
+    /// <summary>
+    /// «Этот ник → эта комната»: панель бронирует комнату за создателем, разбор
+    /// <c>JoinRoom</c> спрашивает реестр. Нужно потому, что провод неизменен и клиент
+    /// присылает только ник с <c>'Dedik'</c> (см. docs/ROOMS_AND_WEB_PLAN.md, PR 3).
+    /// </summary>
+    public PendingRoomAssignments PendingRooms { get; } = new();
+
+    /// <summary>Реестр комнат панели (номер → комната). Создаётся веб-слоем.</summary>
+    internal RoomRegistry? Rooms { get; set; }
 
     // WorldObjectState flood control (same idea as GameMatchClient.AllowNoisyLog).
     private const int StateLogFirst = 8;
@@ -184,6 +195,8 @@ public sealed partial class GameMatchHost : IDisposable
         _lobbyId = lobbyId;
         _listenPort = port;
         _serverTimeSeed = Environment.TickCount;
+        // Kernel-слой не печатает сам: подписываемся здесь, где лог хоста и живёт.
+        PendingRooms.Warning += msg => Console.WriteLine(msg);
 
         _listener = new EventBasedNetListener();
         _manager = new NetManager(_listener)
@@ -290,6 +303,31 @@ public sealed partial class GameMatchHost : IDisposable
     public bool IsListening => _manager.IsRunning;
 
     /// <summary>
+    /// Сколько живых людей сейчас в комнатах (без «серверного» актора №1).
+    /// </summary>
+    /// <remarks>
+    /// Для панели и квоты комнат: <c>Actors.Count</c> включает фейкового сервера, поэтому
+    /// «пустая» комната выглядела бы как один игрок.
+    /// </remarks>
+    public int HumanActorCount
+    {
+        get
+        {
+            var total = 0;
+            lock (_roomGate)
+            {
+                foreach (var room in _roomsByPassword.Values)
+                {
+                    foreach (var (nr, _, _) in room.Actors)
+                        if (nr != MatchHostActor.ActorNr)
+                            total++;
+                }
+            }
+            return total;
+        }
+    }
+
+    /// <summary>
     /// Сколько живых бойцов сейчас за CT и за TR. Читается только сервером
     /// (для автостарта) — на провод не уходит ничего.
     /// </summary>
@@ -338,10 +376,35 @@ public sealed partial class GameMatchHost : IDisposable
     /// After series MatchResults + delay: disconnect peers / clear Dedik, then <c>Stop()</c> UDP
     /// so 7777 is down until the next <see cref="EnsureMatchListening"/>.
     /// </summary>
+    /// <remarks>
+    /// Сокет гасится только когда в хосте <b>не осталось живых комнат</b>: при нескольких
+    /// комнатах конец катки в одной не должен выключать 7777 для остальных.
+    /// </remarks>
     public void SuspendMatchListen(string reason)
     {
+        // Сносим ТОЛЬКО legacy-слот 'Dedik'. Панельная комната — не его: если она случайно
+        // оказалась под этим ключом, сбрасывать её на выходе в лобби нельзя, игроки в ней.
+        bool legacyUnderDedik;
+        lock (_roomGate)
+        {
+            legacyUnderDedik = _roomsByPassword.TryGetValue(LanCreateRoomPasswordKey, out var dedik)
+                && !dedik.IsPanelRoom;
+        }
+
+        if (legacyUnderDedik)
+            HardResetMatchForNewStart(reason, LanCreateRoomPasswordKey);
+
+        if (HasPanelRooms())
+        {
+            // 7777 нужен живым панельным комнатам: гасить его — значит выкинуть их игроков.
+            // Приём JoinRoom тоже оставляем: в комнаты ещё будут заходить.
+            Console.WriteLine(
+                $"[match-host] панельные комнаты живы — UDP {_listenPort} НЕ гасим ({reason})");
+            return;
+        }
+
         _acceptMatchConnections = false;
-        HardResetMatchForNewStart(reason);
+
         if (_manager.IsRunning)
         {
             try { _manager.Stop(); }
@@ -353,6 +416,85 @@ public sealed partial class GameMatchHost : IDisposable
         Console.WriteLine(
             $"[match-host] match listen SUSPENDED UDP {_listenPort} ({reason}) — " +
             "lobby idle until /play");
+    }
+
+    /// <summary>
+    /// Закрыть комнату окончательно: убрать из хоста, отключить её пиров и освободить
+    /// номер в реестре.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Без этого «удаление» из веб-реестра ничего не удаляло: комната оставалась в
+    /// <c>_roomsByPassword</c> и продолжала принимать игроков по <c>/join</c> в мёртвый
+    /// ключ. Чистка реестра и очистка хоста — одна операция, иначе они разъезжаются.
+    /// </para>
+    /// <para>
+    /// Пиров отключаем, а не «оставляем висящими»: их клиент считает, что катка есть,
+    /// но панель её уже не показывает и номер отдан другой комнате.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>true</c>, если комната была и её закрыли.</returns>
+    public bool TryCloseRoom(string passwordKey)
+    {
+        if (string.IsNullOrWhiteSpace(passwordKey))
+            return false;
+
+        MatchRoom? room;
+        List<NetPeer> peers;
+        lock (_roomGate)
+        {
+            if (!_roomsByPassword.Remove(passwordKey, out room))
+                return false;
+
+            peers = _peers
+                .Where(kv => ReferenceEquals(kv.Value.Room, room))
+                .Select(kv => kv.Key)
+                .ToList();
+        }
+
+        foreach (var peer in peers)
+        {
+            try
+            {
+                if (_peers.TryGetValue(peer, out var st))
+                    ResetPeerStateForRematch(st);
+                peer.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[match-host] закрытие комнаты: пир не отключился: {ex.Message}");
+            }
+        }
+
+        Console.WriteLine(
+            $"[match-host] комната '{passwordKey}' закрыта и убрана из хоста " +
+            $"(пиров отключено: {peers.Count})");
+
+        // Последняя панельная комната ушла — 7777 больше не нужен.
+        if (!HasPanelRooms())
+            SuspendMatchListen("все панельные комнаты закрыты");
+
+        return true;
+    }
+
+    /// <summary>
+    /// Есть ли в хосте живые панельные комнаты. Пока есть хоть одна, UDP 7777 гасить
+    /// нельзя: иначе комната из панели умрёт вместе с чужой каткой.
+    /// </summary>
+    /// <remarks>
+    /// Считаем именно наличие <see cref="MatchRoom.IsPanelRoom"/>, а не число акторов:
+    /// в каждой комнате уже есть «серверный» актор №1, так что любой счётчик был бы &gt;0
+    /// всегда и сокет не погас бы никогда (вход в лобби перестал бы освобождать 7777).
+    /// </remarks>
+    private bool HasPanelRooms()
+    {
+        lock (_roomGate)
+        {
+            foreach (var room in _roomsByPassword.Values)
+                if (room.IsPanelRoom)
+                    return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -474,6 +616,35 @@ public sealed partial class GameMatchHost : IDisposable
     }
 
     /// <summary>
+    /// Режим (C0), к которому привязана комната: её собственный prop, если он валиден.
+    /// <c>null</c> — у комнаты нет своего C0 (legacy), решает глобальный выбор.
+    /// </summary>
+    private string? ReadRoomModeId(MatchRoom room)
+    {
+        lock (_roomGate)
+        {
+            return room.ActorProps.TryGetValue((0, MatchRoomPropKeys.C0), out var v)
+                && v.Kind == LobbyVariantKind.String
+                && v.String is { Length: > 0 } id
+                    ? id
+                    : null;
+        }
+    }
+
+    /// <summary>Карта (C1) комнаты; <c>null</c> — своей нет, брать глобальную.</summary>
+    private string? ReadRoomLevelId(MatchRoom room)
+    {
+        lock (_roomGate)
+        {
+            return room.ActorProps.TryGetValue((0, MatchRoomPropKeys.C1), out var v)
+                && v.Kind == LobbyVariantKind.String
+                && v.String is { Length: > 0 } id
+                    ? id
+                    : null;
+        }
+    }
+
+    /// <summary>
     /// Host-authored <c>SetProperty team</c> for the match peer (<c>/set team</c>).
     /// Broadcasts like a normal team pick.
     /// </summary>
@@ -546,12 +717,72 @@ public sealed partial class GameMatchHost : IDisposable
         }
     }
 
-    private static MatchRoom CreateRoomWithServerHost(string passwordKey, string roomId)
+    /// <summary>
+    /// Создать комнату из панели: свой режим/карта в C0/C1 actor=0, свой first-to-N,
+    /// свой гейт старта. Комната сразу armed — из панели её создают, чтобы играть,
+    /// ручного <c>/set start</c> в этом режиме нет (см. docs/ROOMS_AND_WEB_PLAN.md, PR 2).
+    /// </summary>
+    /// <returns><c>null</c>, если ключ уже занят другой комнатой.</returns>
+    internal MatchRoom? TryCreatePanelRoom(
+        string passwordKey,
+        string gameModeId,
+        string selectedLevel,
+        int displayNumber,
+        string displayName,
+        int perTeam = 0)
+    {
+        lock (_roomGate)
+        {
+            if (_roomsByPassword.ContainsKey(passwordKey))
+                return null;
+
+            var room = CreateRoomWithServerHost(
+                passwordKey,
+                _lobbyId,
+                displayNumber: displayNumber,
+                displayName: displayName,
+                isPanelRoom: true,
+                winsNeeded: MatchHostSettings.TryDefaultWinsForMode(gameModeId, out var wins)
+                    ? wins
+                    : 0);
+
+            room.ActorProps[(0, MatchRoomPropKeys.C0)] = LobbyVariant.FromString(gameModeId);
+            room.ActorProps[(0, MatchRoomPropKeys.C1)] = LobbyVariant.FromString(selectedLevel);
+
+            // Размер комнаты: сколько человек пускаем и по сколько в команду.
+            // Без этого «союзники 1 на 1» вмещали бы шестнадцать и половина сидела
+            // бы зрителями, не понимая, почему не играет.
+            room.PerTeam = perTeam > 0 ? perTeam : RoomCapacity.ForMode(gameModeId).PerTeam;
+            room.MaxPlayers = RoomCapacity.TotalFor(gameModeId, room.PerTeam);
+            // Название комнаты в провод не уходит: это подпись панели, клиент её не знает.
+
+            _roomsByPassword[passwordKey] = room;
+            Console.WriteLine(
+                $"[match-host] панельная комната #{displayNumber} '{displayName}' " +
+                $"mode={gameModeId} map={selectedLevel} key='{passwordKey}' " +
+                $"wins=first-to-{(room.WinsNeededOverride > 0 ? room.WinsNeededOverride.ToString() : "global")} " +
+                $"team={room.PerTeam} (всего {room.MaxPlayers}) armed=true");
+            return room;
+        }
+    }
+
+    private static MatchRoom CreateRoomWithServerHost(
+        string passwordKey,
+        string roomId,
+        int displayNumber = 0,
+        string displayName = "",
+        bool isPanelRoom = false,
+        int winsNeeded = 0)
     {
         var room = new MatchRoom
         {
             PasswordKey = passwordKey,
             RoomId = roomId,
+            DisplayNumber = displayNumber,
+            DisplayName = displayName,
+            IsPanelRoom = isPanelRoom,
+            StartArmed = isPanelRoom,
+            WinsNeededOverride = winsNeeded,
         };
         // Actor 1 = lobby fake "Server" — master client / dedicated host, Spectators only.
         // Его id — захардкоженная строка «Server», а не «Offline» и не число: сервер выше
@@ -565,6 +796,8 @@ public sealed partial class GameMatchHost : IDisposable
     }
 
     private long _lastStatsTickUtc;
+    /// <summary>Когда следующий раз отдать состояние комнат в реестр панели.</summary>
+    private long _nextRoomSyncUtc;
 
     /// <summary>
     /// Host simulation tick. Phase/wipe/fuse decisions only need ~30 Hz; polling the
@@ -623,6 +856,13 @@ public sealed partial class GameMatchHost : IDisposable
                 TickWorldReadyGates();
                 // Issue #39: actors whose session disappeared must not linger as alive ghosts.
                 TickGhostActors();
+                // Панель: состояние комнат в реестр, раз в секунду (не каждый тик —
+                // это HTTP-данные, а не игровой путь).
+                if (now >= _nextRoomSyncUtc)
+                {
+                    _nextRoomSyncUtc = now + 1000;
+                    SyncRoomRegistry();
+                }
                 flowMs = Stopwatch.GetElapsedTime(flowSw).TotalMilliseconds;
 
                 if (Diag.StatsEnabled
@@ -943,19 +1183,35 @@ public sealed partial class GameMatchHost : IDisposable
     /// Does <b>not</b> rebind UDP 7777 (singleton). Evidence: dedicated rematch hang was
     /// re-advertising op9 into MatchOver / mid-round state with stale actors/C2.
     /// </summary>
-    public void HardResetMatchForNewStart(string reason)
+    /// <remarks>
+    /// Сбрасывается <b>одна</b> комната — legacy <c>Dedik</c>. Комнаты из панели живут в том же
+    /// хосте и не должны умирать от чужого rematch: иначе конец катки в комнате #1 рвал бы #2.
+    /// </remarks>
+    public void HardResetMatchForNewStart(string reason) =>
+        HardResetMatchForNewStart(reason, LanCreateRoomPasswordKey);
+
+    /// <summary>
+    /// То же, но для конкретной комнаты: сносится только она, её пиры отключаются,
+    /// на её месте — свежая <c>WaitingPlayers</c>. Другие комнаты не затрагиваются.
+    /// </summary>
+    public void HardResetMatchForNewStart(string reason, string passwordKey)
     {
         Console.WriteLine(
-            $"[match-flow] tearing down previous match before start ({reason})");
+            $"[match-flow] tearing down previous match before start ({reason}) " +
+            $"room='{passwordKey}'");
 
         MatchRoom? oldRoom;
         List<NetPeer> peersToDrop;
         List<short> pawnIds;
         lock (_roomGate)
         {
-            _roomsByPassword.TryGetValue(LanCreateRoomPasswordKey, out oldRoom);
+            _roomsByPassword.TryGetValue(passwordKey, out oldRoom);
             peersToDrop = _peers
-                .Where(kv => kv.Value.Room is not null || kv.Value.ActorNr > 0 || kv.Value.Handshaken)
+                .Where(kv => kv.Value.Room == oldRoom
+                             || (oldRoom is null
+                                 && (kv.Value.Room is not null
+                                     || kv.Value.ActorNr > 0
+                                     || kv.Value.Handshaken)))
                 .Select(kv => kv.Key)
                 .ToList();
             pawnIds = oldRoom?.LivingPawns.Keys.ToList() ?? new List<short>();
@@ -1000,14 +1256,34 @@ public sealed partial class GameMatchHost : IDisposable
 
         lock (_roomGate)
         {
-            _roomsByPassword[LanCreateRoomPasswordKey] = CreateRoomWithServerHost(
-                LanCreateRoomPasswordKey, _lobbyId);
+            // Панельная комната пересоздаётся с теми же номером/именем/режимом — иначе
+            // rematch молча превратил бы её в legacy-«Dedik» с глобальными C0/C1.
+            _roomsByPassword[passwordKey] = CreateRoomWithServerHost(
+                passwordKey,
+                _lobbyId,
+                displayNumber: oldRoom?.DisplayNumber ?? 0,
+                displayName: oldRoom?.DisplayName ?? "",
+                isPanelRoom: oldRoom?.IsPanelRoom ?? false,
+                winsNeeded: oldRoom?.WinsNeededOverride ?? 0);
+            var fresh = _roomsByPassword[passwordKey];
+            if (oldRoom is not null)
+            {
+                if (oldRoom.ActorProps.TryGetValue((0, MatchRoomPropKeys.C0), out var c0))
+                    fresh.ActorProps[(0, MatchRoomPropKeys.C0)] = c0;
+                if (oldRoom.ActorProps.TryGetValue((0, MatchRoomPropKeys.C1), out var c1))
+                    fresh.ActorProps[(0, MatchRoomPropKeys.C1)] = c1;
+            }
+
             // Orphan any peer state still pointing at the old room instance.
             foreach (var st in _peers.Values)
                 ResetPeerStateForRematch(st);
         }
 
-        MatchHostSettings.MatchStartArmed = false;
+        // Глобальный флаг — принадлежность legacy-пути. Панельная комната живёт своим
+        // StartArmed (её пересоздали уже armed), поэтому глобал не трогаем, чтобы не
+        // снять старт у чужой legacy-катки.
+        if (oldRoom is not { IsPanelRoom: true })
+            MatchHostSettings.MatchStartArmed = false;
         lock (_roomGate)
             _reconnectTeams.Clear();
         Console.WriteLine("[match-flow] previous match cleared");

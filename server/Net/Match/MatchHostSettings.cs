@@ -185,6 +185,51 @@ public static class MatchHostSettings
         return scoreTr >= wins || scoreCt >= wins;
     }
 
+    // ВНИМАНИЕ: MatchRoom — internal, поэтому эти перегрузки internal, а не public
+    // (иначе CS0051: тип параметра менее доступен, чем метод).
+
+    /// <summary>
+    /// То же правило, но для конкретной комнаты. Комната из панели несёт свой
+    /// first-to-N (<see cref="Host.MatchRoom.WinsNeededOverride"/>), иначе две комнаты с разными
+    /// режимами делили бы один глобальный порог победы.
+    /// </summary>
+    internal static bool IsAlliesMatchOver(
+        Host.MatchRoom? room, int scoreTr, int scoreCt)
+    {
+        if (room is null || room.WinsNeededOverride <= 0)
+            return IsAlliesMatchOver(scoreTr, scoreCt);
+
+        var wins = room.WinsNeededOverride;
+        return scoreTr >= wins || scoreCt >= wins;
+    }
+
+    /// <summary>
+    /// Гейт старта для конкретной комнаты. Комната из панели решает по своему
+    /// <see cref="Host.MatchRoom.StartArmed"/>; legacy-комната — по глобальному флагу,
+    /// как было до появления комнат.
+    /// </summary>
+    internal static bool IsStartArmed(Host.MatchRoom? room) =>
+        room is { IsPanelRoom: true } ? room.StartArmed : MatchStartArmed;
+
+    /// <summary>Снять гейт старта у комнаты — ровно так же, как это делал глобальный флаг.</summary>
+    internal static void DisarmStart(Host.MatchRoom? room)
+    {
+        if (room is { IsPanelRoom: true })
+            room.StartArmed = false;
+        else
+            MatchStartArmed = false;
+    }
+
+    /// <summary>
+    /// Полу-время (половина серии) для конкретной комнаты: <c>wins − 1</c>, но не меньше 1.
+    /// </summary>
+    internal static int HalfTimeAfterRoundFor(Host.MatchRoom? room)
+    {
+        if (room is null || room.WinsNeededOverride <= 0)
+            return HalfTimeAfterRound;
+        return Math.Max(1, room.WinsNeededOverride - 1);
+    }
+
     /// <summary>
     /// Default first-to-N for bomb-round family modes (Allies gold = 8; casual Defuse = 6).
     /// Returns false for modes that do not use this win target.

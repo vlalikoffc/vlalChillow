@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using LiteNetLib;
+using StandChillow.LanServer.Bans;
 using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Diagnostics;
@@ -206,6 +207,101 @@ public sealed partial class GameNetHost : IDisposable
     }
 
     /// <summary>
+    /// Открыть матч-порт для комнаты, созданной на сайте, и разослать op9.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Клиент попадает в комнату только по <c>op9</c> с <c>hasHosting=1</c>
+    /// (<see cref="LobbyOpcode.OpGameHostingStateChangedEvent"/>): сам он адреса 7777
+    /// не знает и в игру не пойдёт. Без этого вызова <c>/join 2v2 #1</c> клал бронь,
+    /// отвечал «заходи в игру» — и игрок оставался в лобби навсегда.
+    /// </para>
+    /// <para>
+    /// <b>Не</b> идёт через <see cref="TryStartMatch"/>: тот на повторном вызове делает
+    /// <c>HardResetMatchForNewStart</c> и снёс бы уже созданные комнаты. Здесь только
+    /// поднимается слушатель и публикуется hosting — комнаты остаются как есть.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>false</c>, если UDP 7777 поднять не удалось.</returns>
+    public bool OpenMatchPortForPanelRoom(string reason)
+    {
+        if (!_match.EnsureMatchListening())
+        {
+            Console.WriteLine(
+                "[lobby] панельная комната создана, но UDP 7777 не поднялся — " +
+                "игроки не смогут войти");
+            return false;
+        }
+
+        lock (_gate)
+            _matchStarted = true;
+
+        // ВАЖНО: здесь НЕ шлём op9 всем. Клиент на любой op9 с hasHosting=1 сразу
+        // прыгает на 7777 (BeginMatchConnect), где без брони его ждёт fallback в
+        // legacy-комнату 'Dedik' с глобальными режимом и картой. Именно поэтому
+        // всех, кто ничего не писал, уносило «в параллельное измерение».
+        // Сигнал уходит адресно — см. NotifyPanelRoomReady(nick).
+        Console.WriteLine(
+            $"[lobby] матч-порт открыт ({reason}): ждём /join " +
+            $"<режим> #<номер> (баннер всем не шлём — только вошедшим)");
+        return true;
+    }
+
+    /// <summary>
+    /// Позвать конкретного игрока в комнату: <c>op9</c> с адресом матча уходит только
+    /// ему, после того как он сам написал <c>/join</c> и получил бронь.
+    /// </summary>
+    /// <remarks>
+    /// Без этого либо никто не попадает в комнату (op9 никому), либо туда уносит всех
+    /// подряд (op9 всем) — второй вариант и был багом: клиент не знает, бронировал ли
+    /// он что-нибудь, и на любой hosting-сигнал идёт на 7777, где попадает в
+    /// legacy-комнату.
+    /// </remarks>
+    /// <returns><c>true</c>, если игрок найден и сигнал отправлен.</returns>
+    public bool NotifyPanelRoomReady(string nick)
+    {
+        if (string.IsNullOrWhiteSpace(nick))
+            return false;
+
+        ConnectedPlayer? target = null;
+        foreach (var p in _session.JoinedPlayers())
+        {
+            if (string.Equals(
+                    ServerConfig.NormalizeNick(p.Name),
+                    ServerConfig.NormalizeNick(nick),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                target = p;
+                break;
+            }
+        }
+
+        if (target is null)
+        {
+            // Игрок ещё не в лобби: он узнает адрес матча из JoinResponse
+            // (hasHosting=1 проставляется по _matchStarted) — путь штатный.
+            Console.WriteLine(
+                $"[lobby] игрок '{nick}' ещё не в лобби — адрес матча получит при входе");
+            return false;
+        }
+
+        var modePkt = LobbyCodec.BuildCustomProperties(_session.BuildModeLevelProps());
+        var searchingPkt = LobbyCodec.BuildCustomProperty(
+            LobbyPropKeys.SearchingStarted, LobbyVariant.FromBool(true));
+        var hostingPkt = LobbyCodec.BuildGameHostingState(
+            _advertiseLanIp.ToString(), (ushort)GameMatchHost.DefaultMatchPort);
+
+        Send(target.Peer, modePkt);
+        Send(target.Peer, searchingPkt);
+        Send(target.Peer, hostingPkt);
+
+        Console.WriteLine(
+            $"[lobby] '{target.Name}' → op9 {_advertiseLanIp}:{GameMatchHost.DefaultMatchPort} " +
+            "(по своей брони, остальные остаются в лобби)");
+        return true;
+    }
+
+    /// <summary>
     /// First Play: emit op7 + SearchingStarted + op9 to existing match host (rebind 7777 if
     /// suspended after MatchOver). Rematch (<c>/play</c> after clients returned to lobby):
     /// <b>tear down</b> previous Dedik room (MatchOver / mid-round / stale actors) then start
@@ -277,6 +373,10 @@ public sealed partial class GameNetHost : IDisposable
         _session.Searching = false;
         _session.GameInProgress = false;
         _session.ResetAllToLobby();
+
+        // Глобальный гейт — принадлежность legacy-пути ('Dedik'). Комнаты из панели
+        // живут своим StartArmed, и снимать его здесь нельзя: конец одной катки не
+        // должен отменять старт другой, которую только что создали на сайте.
         MatchHostSettings.MatchStartArmed = false;
 
         // Катка закончилась — голоса /ready прошлого матча не должны тянуться в следующий.
@@ -502,13 +602,26 @@ public sealed partial class GameNetHost : IDisposable
             var welcome = LobbySession.WelcomeMessageOverride ?? LobbySession.WelcomeMessage;
             if (!string.IsNullOrWhiteSpace(welcome))
                 SendServerChatTo(peer, welcome);
+
+            // Свой id — только самому игроку, не в общий чат. Он же потом приходит
+            // в катке (uid = MatchPublicId.ForNick), поэтому человек видит одно и то же
+            // число и в лобби, и в игре, и может назвать его админу для /ban.
+            SendServerChatTo(peer,
+                $"Ты {self.Name} · ID: {MatchPublicId.ForNick(self.Name)}");
+
             // Lobby join is quiet for match-style Подключился — that fires on JoinRoom Found.
             BroadcastServerChat(_session.BuildPlayerListMessage());
         });
-        Schedule(80, () => SendServerChatTo(peer,
-            _matchStarted
-                ? "матч уже идёт — JoinRoom Dedik на 7777 (не новый start)"
-                : FormatCommandHelp()));
+
+        // Инструкцию по командам при входе НЕ шлём: она занимала весь экран чата
+        // раньше, чем человек успевал что-то прочитать, и половина строк была про
+        // команды, которые больше не нужны (комнаты теперь создаются на сайте).
+        // Игрок видит только «кто он такой», а список — по /help, когда сам попросит.
+        if (_matchStarted)
+        {
+            Schedule(80, () => SendServerChatTo(peer,
+                "матч уже идёт — /join <режим> #<номер> или JoinRoom Dedik на 7777"));
+        }
 
         // Late joiner into running match: also push PropertyChanged + op9 (JoinResponse may already
         // embed hasHosting; op9 is the live phone path clients always listen for).
@@ -733,6 +846,14 @@ public sealed partial class GameNetHost : IDisposable
         var msg = "матч armed — WarmUp когда обе команды ≥1 (/set start)";
         Console.WriteLine($"[lobby] {who}: {msg} (MatchStartArmed=true)");
         BroadcastServerChat(msg);
+
+        // Панельные комнаты решают своим StartArmed: глобальный флаг их не трогает.
+        // Значит /set start должен армить и их, иначе команда «не работает» в комнатах
+        // с сайта — а именно там ей и пользуются, когда игроки уже собрались.
+        var armed = _match.ArmAllPanelRooms($"/set start ({who})");
+        if (armed > 0)
+            Console.WriteLine($"[lobby] {who}: /set start → armed панельных комнат: {armed}");
+
         // Nudge flow if already waiting with both teams.
         _match.NudgeMatchStartGate();
     }

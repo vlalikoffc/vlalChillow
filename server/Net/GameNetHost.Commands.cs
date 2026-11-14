@@ -79,7 +79,10 @@ public sealed partial class GameNetHost
             || cmd.Equals("?", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("команды", StringComparison.OrdinalIgnoreCase))
         {
-            foreach (var line in FormatCommandHelp().Split('\n'))
+            // Игроку — короткая памятка, оператору в консоли — полная.
+            // Консоль зовёт диспетчер с who = "console".
+            var help = who == "console" ? FormatConsoleHelp() : FormatPlayerHelp();
+            foreach (var line in help.Split('\n'))
                 reply(line.TrimEnd());
             return true;
         }
@@ -88,6 +91,14 @@ public sealed partial class GameNetHost
             || cmd.Equals("режим", StringComparison.OrdinalIgnoreCase))
         {
             HandleModeCommand(reply, args, who);
+            return true;
+        }
+
+        if (cmd.Equals("join", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("войти", StringComparison.OrdinalIgnoreCase)
+            || cmd.Equals("комната", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleJoinCommand(reply, args, who, player);
             return true;
         }
 
@@ -239,11 +250,35 @@ public sealed partial class GameNetHost
         || cmd.Equals("stopmatch", StringComparison.OrdinalIgnoreCase)
         || cmd.Equals("стопматч", StringComparison.OrdinalIgnoreCase);
 
-    public static string FormatCommandHelp() =>
+    /// <summary>
+    /// Краткая памятка для игрока: только то, что ему действительно нужно.
+    /// </summary>
+    /// <remarks>
+    /// Комнаты создаются на сайте, поэтому <c>/mode</c>, <c>/map</c>, <c>/start</c>,
+    /// <c>/play</c> и <c>/set</c> в этой памятке не упоминаются: игроку они больше не
+    /// нужны, а длинный список при входе только закрывал экран чата. Команды не
+    /// удалены — они остались для консоли сервера и легаси-пути (см.
+    /// <see cref="FormatConsoleHelp"/>), но игрок о них не узнаёт.
+    /// </remarks>
+    public static string FormatPlayerHelp() =>
         """
-        команды: /mode /map /set /play /start /end /ready /ban /help
+        /join <режим> #<номер>  войти в комнату с сайта
+        /ready, /unready        готовность к старту
+        /whoami                 твой ник, ID и IP
+        /help                   эта памятка
+        Комнату создают на сайте — там же кнопка «создать» и номер комнаты.
+        """.Trim();
+
+    /// <summary>
+    /// Полная памятка: консоль сервера и дашборд. Здесь оператору нужны все команды,
+    /// включая те, что игрокам больше не показываются.
+    /// </summary>
+    public static string FormatConsoleHelp() =>
+        """
+        команды: /mode /map /join /set /play /start /end /ready /ban /help
           /mode [alias]  список или сменить режим
           /map [alias]   карты текущего режима (короткие alias)
+          /join <режим> #<номер>  войти в комнату с сайта (только из лобби)
           /set …         параметры (start, end, round, wins, …)
           /play          запуск / рематч
           /start         WarmUp (когда матч уже поднят)
@@ -260,6 +295,11 @@ public sealed partial class GameNetHost
         Те же команды работают в чате катки: ответ придёт туда же и только тебе.
         «Только админ» — это ник в admin.nicknames плюс код этого запуска (/whoami).
         """.Trim();
+
+    /// <summary>
+    /// Совместимость: прежнее имя полной памятки.
+    /// </summary>
+    public static string FormatCommandHelp() => FormatConsoleHelp();
 
     private static string FormatUnknownCommandHelp(string message) =>
         $"неизвестная команда '{message}' — /help";
@@ -328,6 +368,47 @@ public sealed partial class GameNetHost
         BroadcastServerChat($"{name} Отключился!");
         BroadcastServerChat(_session.BuildPlayerListMessage());
         try { _onRosterChanged?.Invoke(); } catch { /* ignore */ }
+
+        // Вернувшемуся в лобби нельзя оставлять «игра идёт»: клиент рисует кнопку
+        // «вернуться в катку» и считает, что матч ещё жив. Снимаем признак hosting
+        // персонально у него — остальные в комнате продолжают играть.
+        ClearHostingForPlayer(player, name);
+    }
+
+    /// <summary>
+    /// Сказать одному игроку, что матча для него больше нет (<c>hasHosting=0</c>).
+    /// </summary>
+    /// <remarks>
+    /// Именно персонально, а не <c>Broadcast</c>: катка продолжается, и остальным
+    /// снимать hosting нельзя — они в ней остаются. Идемпотентно: если игрок уже ушёл
+    /// из лобби, отправлять некому, и это нормально.
+    /// </remarks>
+    private void ClearHostingForPlayer(ConnectedPlayer? player, string name)
+    {
+        if (player is null)
+        {
+            Console.WriteLine(
+                $"[lobby] '{name}' вышел из катки, но его уже нет в лобби — hosting снимать некому");
+            return;
+        }
+
+        try
+        {
+            Send(player.Peer, LobbyCodec.BuildGameHostingState(null, 0));
+
+            // «Ищу игру» тоже больше не про него: иначе ответ на /join искал бы
+            // матч, которого для этого игрока нет.
+            Send(player.Peer, LobbyCodec.BuildCustomProperty(
+                LobbyPropKeys.SearchingStarted, LobbyVariant.FromBool(false)));
+
+            Console.WriteLine(
+                $"[lobby] '{player.Name}' вернулся в лобби — hosting снят " +
+                "(остальные в катке не затронуты)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[lobby] снять hosting у '{name}': {ex.Message}");
+        }
     }
 
     /// <summary>

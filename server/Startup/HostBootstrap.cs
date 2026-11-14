@@ -7,6 +7,7 @@ using StandChillow.LanServer.Net;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 using StandChillow.LanServer.Plugins;
+using StandChillow.LanServer.Web;
 
 namespace StandChillow.LanServer.Startup;
 
@@ -38,6 +39,30 @@ public static class HostBootstrap
             $"[config] сеть: bind={serverConfig.Network.BindAddress} " +
             $"ignoreVpn={(serverConfig.Network.IgnoreVpn ? "да" : "нет")} " +
             $"advertiseIp={serverConfig.Network.AdvertiseIp ?? "авто"}");
+
+        // ── Веб-панель: поднимается ДО игровых сокетов ──────────────────────────
+        // Спека: если 7777 занят (старый процесс, чужой сервер), страница обязана
+        // открыться и честно сказать, что игровой порт не поднялся. Обратный порядок
+        // дал бы «502 Bad Gateway» на пустом месте.
+        using var web = new WebPanelHost(serverConfig);
+        if (web.TryStart(out var webError))
+        {
+            Console.WriteLine($"[web] открыт: http://{serverConfig.Web.BindAddress}:{web.Port}/");
+        }
+        else
+        {
+            Console.WriteLine($"[web] панель НЕ поднялась: {webError}");
+            Console.WriteLine("[web]   игра и обнаружение работают как обычно.");
+            if (webError.Contains("in use", StringComparison.OrdinalIgnoreCase) ||
+                webError.Contains("занят", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine(
+                    $"[web]   порт {serverConfig.Web.Port} занят другим процессом. " +
+                    "Найди его:  sudo ss -lptn 'sport = :" + serverConfig.Web.Port + "'");
+                Console.WriteLine(
+                    "[web]   либо поставь в config.json другой \"web\".\"port\".");
+            }
+        }
 
         // Keep CLI simple: optional level/title only. Discovery HostName = LobbyId (live phone).
         // Приоритет: аргумент консоли → launch.title → дефолт.
@@ -150,6 +175,10 @@ public static class HostBootstrap
         gameRef = game;
         plugins.AttachHost(game);
         plugins.LoadAll();
+
+        // Панель узнаёт про игровой хост: с этого момента она видит онлайн и умеет
+        // создавать настоящие комнаты. До этого — только показывала нули.
+        web.AttachHost(game);
 
         using var pluginTickCts = new CancellationTokenSource();
         var pluginTick = Task.Run(async () =>

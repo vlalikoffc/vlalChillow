@@ -44,7 +44,7 @@ public sealed partial class GameMatchHost
             {
                 if (!BothFightingTeamsPresent(room))
                     return;
-                if (!MatchHostSettings.MatchStartArmed)
+                if (!MatchHostSettings.IsStartArmed(room))
                     return;
             }
             else if (phase == MatchFlowPhase.MatchOver)
@@ -100,7 +100,7 @@ public sealed partial class GameMatchHost
             room.LastAuthoredDeath.Clear();
         }
 
-        MatchHostSettings.MatchStartArmed = false;
+        MatchHostSettings.DisarmStart(room);
 
         BroadcastRoomProps(room,
         [
