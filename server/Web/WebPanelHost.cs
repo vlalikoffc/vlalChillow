@@ -241,7 +241,9 @@ public sealed class WebPanelHost : IDisposable
     /// </remarks>
     private void SweepExpiredRooms()
     {
-        var emptyTtl = TimeSpan.FromSeconds(Math.Clamp(_config.EmptyRoomTtlSec, 60, 86400));
+        // Нижняя граница 30 с — та же, что в NormalizeWeb: конфиг уже проверен,
+        // второй, более строгий предел здесь только мешал бы (перебивал настройку).
+        var emptyTtl = TimeSpan.FromSeconds(Math.Clamp(_config.EmptyRoomTtlSec, 30, 86400));
         var expired = _rooms.FindExpired(DateTime.UtcNow, emptyTtl, emptyTtl);
         if (expired.Count == 0)
             return;
@@ -251,10 +253,14 @@ public sealed class WebPanelHost : IDisposable
             if (!_rooms.TryRemove(number, out var removed))
                 continue;
 
+            // Убрать из реестра мало: комната живёт ещё и в матч-хосте, откуда её
+            // продолжали бы находить /join и бронь. Закрываем в обеих структурах.
+            _host?.Match.TryCloseRoom(removed.PasswordKey);
             _host?.Match.PendingRooms.Release(removed.PasswordKey);
+
             Console.WriteLine(
-                $"[web] комната #{removed.Number} «{removed.Name}» закрыта " +
-                $"({(removed.Players > 0 ? "катка закончилась" : "никто не пришёл")})");
+                $"[web] комната #{removed.Number} «{removed.Name}» закрыта и номер " +
+                $"освобождён ({(removed.Players > 0 ? "катка закончилась" : "никто не пришёл")})");
         }
     }
 
@@ -311,7 +317,8 @@ public sealed class WebPanelHost : IDisposable
             room.ModeId,
             room.Level,
             room.Number,
-            BuildRoomLabel(room));
+            BuildRoomLabel(room),
+            room.PerTeam);
 
         if (created is null)
             return "комната с таким номером уже существует — обнови страницу";

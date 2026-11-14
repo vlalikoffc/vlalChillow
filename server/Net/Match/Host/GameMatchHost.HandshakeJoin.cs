@@ -291,13 +291,25 @@ public sealed partial class GameMatchHost
             // Accept JoinOnly when password hits Dedik. Do not gate on room==LobbyId —
             // room is roster semantics, not the dict key. Multi-name encoding TBD.
             byte? freeNr;
+            var roomIsFull = false;
             lock (_roomGate)
-                freeNr = MatchRoomRoster.FindFreeActorNr(room.Actors);
+            {
+                // Комната знает свой размер: «союзники 1 на 1» — два места, а не
+                // шестнадцать. Без этой проверки в неё набивались лишние люди и
+                // сидели зрителями, не понимая, почему не играют.
+                roomIsFull = room.MaxPlayers > 0
+                             && MatchRoomRoster.CountHumans(room.Actors) >= room.MaxPlayers;
+                freeNr = roomIsFull ? null : MatchRoomRoster.FindFreeActorNr(room.Actors);
+            }
+
             if (freeNr is not { } nr)
             {
-                // 254 human actors + Server: no free id. Honest refusal (result=1).
-                Console.WriteLine(
-                    "[match-host] JoinRoom Found refused — all actor numbers 2..255 are in use");
+                // Две разные причины отказа, и в лог они идут разными словами:
+                // «мест по правилам комнаты нет» и «кончились номера актёров».
+                Console.WriteLine(roomIsFull
+                    ? $"[match-host] JoinRoom в '{room.PasswordKey}' отклонён: комнату " +
+                      $"заполнили ({room.MaxPlayers} мест, команда по {room.PerTeam})"
+                    : "[match-host] JoinRoom Found refused — all actor numbers 2..255 are in use");
                 result = JoinRoomResult.RoomIsFull;
             }
             else

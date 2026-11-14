@@ -337,6 +337,47 @@ public sealed partial class GameNetHost
         BroadcastServerChat($"{name} Отключился!");
         BroadcastServerChat(_session.BuildPlayerListMessage());
         try { _onRosterChanged?.Invoke(); } catch { /* ignore */ }
+
+        // Вернувшемуся в лобби нельзя оставлять «игра идёт»: клиент рисует кнопку
+        // «вернуться в катку» и считает, что матч ещё жив. Снимаем признак hosting
+        // персонально у него — остальные в комнате продолжают играть.
+        ClearHostingForPlayer(player, name);
+    }
+
+    /// <summary>
+    /// Сказать одному игроку, что матча для него больше нет (<c>hasHosting=0</c>).
+    /// </summary>
+    /// <remarks>
+    /// Именно персонально, а не <c>Broadcast</c>: катка продолжается, и остальным
+    /// снимать hosting нельзя — они в ней остаются. Идемпотентно: если игрок уже ушёл
+    /// из лобби, отправлять некому, и это нормально.
+    /// </remarks>
+    private void ClearHostingForPlayer(ConnectedPlayer? player, string name)
+    {
+        if (player is null)
+        {
+            Console.WriteLine(
+                $"[lobby] '{name}' вышел из катки, но его уже нет в лобби — hosting снимать некому");
+            return;
+        }
+
+        try
+        {
+            Send(player.Peer, LobbyCodec.BuildGameHostingState(null, 0));
+
+            // «Ищу игру» тоже больше не про него: иначе ответ на /join искал бы
+            // матч, которого для этого игрока нет.
+            Send(player.Peer, LobbyCodec.BuildCustomProperty(
+                LobbyPropKeys.SearchingStarted, LobbyVariant.FromBool(false)));
+
+            Console.WriteLine(
+                $"[lobby] '{player.Name}' вернулся в лобби — hosting снят " +
+                "(остальные в катке не затронуты)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[lobby] снять hosting у '{name}': {ex.Message}");
+        }
     }
 
     /// <summary>

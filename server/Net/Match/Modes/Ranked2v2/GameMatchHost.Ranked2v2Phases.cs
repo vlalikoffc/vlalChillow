@@ -20,6 +20,9 @@ public sealed partial class GameMatchHost
                 return;
             if (!BothFightingTeamsPresent(room))
                 return;
+
+            // Перед стартом выравниваем: «3 на 1» не должно превращаться в катку.
+            BalanceTeamsBeforeStart(room);
         }
 
         if (!MatchHostSettings.IsStartArmed(room))
@@ -33,6 +36,57 @@ public sealed partial class GameMatchHost
         Console.WriteLine(
             "[match-host] match-flow: both teams have ≥1 player + start armed — " +
             "will start Warmup on next tick");
+    }
+
+    /// <summary>
+    /// Выровнять команды перед стартом: разница больше одного человека недопустима.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Команду выбирает клиент, и сервер не может отказать — но может перевести.
+    /// Переводим <b>последнего вошедшего</b> с переполненной стороны: он ещё ничего
+    /// не купил и не встал на точку, а для остальных ничего не меняется.
+    /// </para>
+    /// <para>
+    /// Работает только до начала раунда (<c>WaitingPlayers</c>/прогрев): в идущем
+    /// раунде смена команды — это смерть (см. <c>NoteMidRoundTeamChange</c>), и
+    /// выравнивать там уже поздно.
+    /// </para>
+    /// </remarks>
+    private void BalanceTeamsBeforeStart(MatchRoom room)
+    {
+        List<(byte Actor, MatchTeam Team)> states;
+        lock (_roomGate)
+        {
+            if (room.Flow.Phase != MatchFlowPhase.WaitingPlayers
+                && room.Flow.Phase != MatchFlowPhase.Warmup)
+                return;
+
+            states = room.ActorProps
+                .Where(kv => kv.Key.Key == MatchRoomPropKeys.Team
+                             && kv.Key.Actor != MatchHostActor.ActorNr
+                             && kv.Value.Kind == LobbyVariantKind.Byte)
+                .Select(kv => (kv.Key.Actor, (MatchTeam)kv.Value.Byte))
+                .ToList();
+        }
+
+        var plan = TeamBalancer.Plan(states);
+        if (plan is not { } move)
+            return;
+
+        foreach (var actor in move.Actors)
+        {
+            var value = LobbyVariant.FromByte((byte)move.To);
+            lock (_roomGate)
+                room.ActorProps[(actor, MatchRoomPropKeys.Team)] = value;
+
+            var pkt = MatchCodec.BuildSetProperty(
+                NextServerTime(), actor, MatchRoomPropKeys.Team, value);
+            BroadcastRoom(room, pkt, tag: "match_tx_SetProperty_balance");
+            Console.WriteLine(
+                $"[match-host] баланс команд: actor={actor} переведён {move.From} → {move.To} " +
+                "(разница больше одного недопустима)");
+        }
     }
 
     /// <summary>

@@ -16,6 +16,25 @@ internal static class MatchRoomRoster
     /// <summary>Actor 1 is always the synthetic Server; humans start at 2.</summary>
     public const byte FirstHumanActorNr = MatchHostActor.ActorNr + 1;
 
+    /// <summary>
+    /// Сколько живых людей в комнате — без «серверного» актора №1.
+    /// </summary>
+    /// <remarks>
+    /// Именно по людям, а не по числу акторов: серверный актор есть в любой комнате,
+    /// и если считать его, комната «до 2 человек» пустила бы только одного.
+    /// </remarks>
+    public static int CountHumans(IReadOnlyList<(byte Nr, string Name, string UserId)> actors)
+    {
+        var humans = 0;
+        for (var i = 0; i < actors.Count; i++)
+        {
+            if (actors[i].Nr != MatchHostActor.ActorNr)
+                humans++;
+        }
+
+        return humans;
+    }
+
     /// <summary>Lowest free actor number in <paramref name="actors"/>, or <c>null</c> when full.</summary>
     public static byte? FindFreeActorNr(
         IReadOnlyList<(byte Nr, string Name, string UserId)> actors)

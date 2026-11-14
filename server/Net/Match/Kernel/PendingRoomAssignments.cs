@@ -1,3 +1,4 @@
+using StandChillow.LanServer.Bans;
 using StandChillow.LanServer.Config;
 
 namespace StandChillow.LanServer.Net.Match.Kernel;
@@ -85,6 +86,7 @@ public sealed class PendingRoomAssignments
         {
             PasswordKey = passwordKey.Trim(),
             Nick = normalized,
+            Id = MatchPublicId.ForNick(normalized),
             IdentityKey = identityKey?.Trim() ?? "",
             Address = address?.Trim() ?? "",
             CreatedUtc = now,
@@ -95,8 +97,10 @@ public sealed class PendingRoomAssignments
         {
             PruneLocked(now);
 
+            // Замена прежней брони того же игрока: id — устойчивый ключ, ник
+            // подтверждает его на случай теоретической коллизии хеша.
             var sameNick = _items.FindIndex(a =>
-                string.Equals(a.Nick, item.Nick, NickComparison));
+                a.Id == item.Id && string.Equals(a.Nick, item.Nick, NickComparison));
             if (sameNick >= 0)
             {
                 _items[sameNick] = item;

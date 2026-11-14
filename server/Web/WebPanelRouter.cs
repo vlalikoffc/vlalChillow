@@ -139,6 +139,16 @@ public sealed class WebPanelRouter
                 writer.WriteString("name", mode.DisplayName);
                 writer.WriteString("alias", GameModeCatalog.PrimaryAlias(mode));
                 writer.WriteString("defaultLevel", GameModeCatalog.DefaultLevelFor(mode.GameModeId));
+
+                // Размер команды: страница показывает выбор только там, где он есть.
+                var shape = RoomCapacity.ForMode(mode.GameModeId);
+                writer.WriteNumber("perTeam", shape.PerTeam);
+                writer.WriteNumber("maxPlayers", shape.Total);
+                writer.WriteString("teamLabel", RoomCapacity.Describe(mode.GameModeId, shape.PerTeam));
+                writer.WriteStartArray("teamSizes");
+                foreach (var size in shape.Choosable)
+                    writer.WriteNumberValue(size);
+                writer.WriteEndArray();
                 writer.WriteStartArray("levels");
                 foreach (var level in mode.Levels)
                     writer.WriteStringValue(level);
@@ -178,6 +188,11 @@ public sealed class WebPanelRouter
                 writer.WriteString("owner", room.OwnerNick);
                 writer.WriteString("state", room.State.ToString().ToLowerInvariant());
                 writer.WriteNumber("players", room.Players);
+                writer.WriteNumber("perTeam", room.PerTeam);
+                writer.WriteNumber("maxPlayers",
+                    RoomCapacity.TotalFor(room.ModeId, room.PerTeam));
+                writer.WriteString("teamLabel",
+                    RoomCapacity.Describe(room.ModeId, room.PerTeam));
                 writer.WriteString("joinCommand", FormatJoinCommand(room));
                 writer.WriteString("createdUtc", room.CreatedUtc.ToString("O"));
                 writer.WriteEndObject();
@@ -225,7 +240,8 @@ public sealed class WebPanelRouter
             : parsed.Mode;
 
         if (!_rooms.TryCreate(
-                modeToken, parsed.Level, parsed.Name, parsed.Owner, out var room, out var error)
+                modeToken, parsed.Level, parsed.Name, parsed.Owner, out var room, out var error,
+                perTeam: parsed.PerTeam)
             || room is null)
         {
             var (status, code, message) = MapCreateError(error);
@@ -275,6 +291,8 @@ public sealed class WebPanelRouter
             RoomCreateError.TooManyRooms => (409, "too_many_rooms",
                 "комнат больше, чем игроков онлайн"),
             RoomCreateError.RoomLimitReached => (503, "room_limit", "на сервере кончились комнаты"),
+            RoomCreateError.UnknownTeamSize => (400, "unknown_team_size",
+                "этот режим не поддерживает такой размер команды"),
             _ => (400, "bad_request", "не получилось"),
         };
 
@@ -303,7 +321,16 @@ public sealed class WebPanelRouter
     /// <param name="Level">Карта; пусто — карта по умолчанию для режима.</param>
     /// <param name="Name">Название комнаты; пусто — придумает реестр.</param>
     /// <param name="Owner">Ник создателя (из лобби).</param>
-    private sealed record CreateRoomRequest(string? Mode, string? Level, string? Name, string? Owner);
+    /// <summary>
+    /// Тело создания комнаты. <paramref name="PerTeam"/> — размер команды для режимов,
+    /// где он выбирается (1 или 2 у союзников и дуэли); <c>0</c> — «как в режиме».
+    /// </summary>
+    private sealed record CreateRoomRequest(
+        string? Mode,
+        string? Level,
+        string? Name,
+        string? Owner,
+        int PerTeam = 0);
 }
 
 /// <summary>Что роутеру нужно от хоста и конфига.</summary>

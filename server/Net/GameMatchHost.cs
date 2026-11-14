@@ -419,6 +419,65 @@ public sealed partial class GameMatchHost : IDisposable
     }
 
     /// <summary>
+    /// Закрыть комнату окончательно: убрать из хоста, отключить её пиров и освободить
+    /// номер в реестре.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Без этого «удаление» из веб-реестра ничего не удаляло: комната оставалась в
+    /// <c>_roomsByPassword</c> и продолжала принимать игроков по <c>/join</c> в мёртвый
+    /// ключ. Чистка реестра и очистка хоста — одна операция, иначе они разъезжаются.
+    /// </para>
+    /// <para>
+    /// Пиров отключаем, а не «оставляем висящими»: их клиент считает, что катка есть,
+    /// но панель её уже не показывает и номер отдан другой комнате.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>true</c>, если комната была и её закрыли.</returns>
+    public bool TryCloseRoom(string passwordKey)
+    {
+        if (string.IsNullOrWhiteSpace(passwordKey))
+            return false;
+
+        MatchRoom? room;
+        List<NetPeer> peers;
+        lock (_roomGate)
+        {
+            if (!_roomsByPassword.Remove(passwordKey, out room))
+                return false;
+
+            peers = _peers
+                .Where(kv => ReferenceEquals(kv.Value.Room, room))
+                .Select(kv => kv.Key)
+                .ToList();
+        }
+
+        foreach (var peer in peers)
+        {
+            try
+            {
+                if (_peers.TryGetValue(peer, out var st))
+                    ResetPeerStateForRematch(st);
+                peer.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[match-host] закрытие комнаты: пир не отключился: {ex.Message}");
+            }
+        }
+
+        Console.WriteLine(
+            $"[match-host] комната '{passwordKey}' закрыта и убрана из хоста " +
+            $"(пиров отключено: {peers.Count})");
+
+        // Последняя панельная комната ушла — 7777 больше не нужен.
+        if (!HasPanelRooms())
+            SuspendMatchListen("все панельные комнаты закрыты");
+
+        return true;
+    }
+
+    /// <summary>
     /// Есть ли в хосте живые панельные комнаты. Пока есть хоть одна, UDP 7777 гасить
     /// нельзя: иначе комната из панели умрёт вместе с чужой каткой.
     /// </summary>
@@ -669,7 +728,8 @@ public sealed partial class GameMatchHost : IDisposable
         string gameModeId,
         string selectedLevel,
         int displayNumber,
-        string displayName)
+        string displayName,
+        int perTeam = 0)
     {
         lock (_roomGate)
         {
@@ -688,6 +748,12 @@ public sealed partial class GameMatchHost : IDisposable
 
             room.ActorProps[(0, MatchRoomPropKeys.C0)] = LobbyVariant.FromString(gameModeId);
             room.ActorProps[(0, MatchRoomPropKeys.C1)] = LobbyVariant.FromString(selectedLevel);
+
+            // Размер комнаты: сколько человек пускаем и по сколько в команду.
+            // Без этого «союзники 1 на 1» вмещали бы шестнадцать и половина сидела
+            // бы зрителями, не понимая, почему не играет.
+            room.PerTeam = perTeam > 0 ? perTeam : RoomCapacity.ForMode(gameModeId).PerTeam;
+            room.MaxPlayers = RoomCapacity.TotalFor(gameModeId, room.PerTeam);
             // Название комнаты в провод не уходит: это подпись панели, клиент её не знает.
 
             _roomsByPassword[passwordKey] = room;
@@ -695,7 +761,7 @@ public sealed partial class GameMatchHost : IDisposable
                 $"[match-host] панельная комната #{displayNumber} '{displayName}' " +
                 $"mode={gameModeId} map={selectedLevel} key='{passwordKey}' " +
                 $"wins=first-to-{(room.WinsNeededOverride > 0 ? room.WinsNeededOverride.ToString() : "global")} " +
-                "armed=true");
+                $"team={room.PerTeam} (всего {room.MaxPlayers}) armed=true");
             return room;
         }
     }

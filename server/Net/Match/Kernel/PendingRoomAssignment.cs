@@ -30,6 +30,17 @@ public sealed class PendingRoomAssignment
     /// <summary>Нормализованный ник (см. <c>ServerConfig.NormalizeNick</c>).</summary>
     public required string Nick { get; init; }
 
+    /// <summary>
+    /// Серверный id игрока — та же функция, что даёт <c>uid</c> в катке
+    /// (<c>MatchPublicId.ForNick</c>).
+    /// </summary>
+    /// <remarks>
+    /// Тот же расчёт, что и в катке в поле <c>uid</c>: в лобби и в игре у человека
+    /// одно и то же число. Бронь ищется по паре «id + ник», поэтому двое с одинаковым
+    /// ником больше не претендуют на одну комнату — расходится не расчёт, а ник.
+    /// </remarks>
+    public int Id { get; init; }
+
     /// <summary>Install-stable идентичность, если клиент уже её прислал; иначе пусто.</summary>
     public string IdentityKey { get; init; } = "";
 

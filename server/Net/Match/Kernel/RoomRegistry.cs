@@ -24,9 +24,10 @@ public enum RoomState : byte
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Номер</b> монотонно растёт и <b>никогда не переиспользуется</b>. Игрок видит его в
-/// команде <c>/join 2v2 #3</c>, поэтому «свободный номер» сделал бы команду двусмысленной:
-/// старая комната #3 закрылась, а новая #3 уже про другой режим.
+/// <b>Номер</b> — наименьший свободный. Комнаты #1 и #3 открыты, значит новая получит #2.
+/// Так номер всегда короткий и не приходится помнить, какие ещё живы. Обратная сторона
+/// честно покрывается в тексте команды: игроку показывают режим и карту комнаты, а не
+/// только номер, поэтому «после закрытия #2 новая #2 — уже другая катка» не путает.
 /// </para>
 /// <para>
 /// <b>Владелец</b> — это ник из лобби. Одна комната на ник: это не игровое правило, а
@@ -42,7 +43,18 @@ public sealed record RoomDescriptor(
     string OwnerNick,
     DateTime CreatedUtc,
     RoomState State,
-    int Players);
+    int Players,
+    DateTime? EmptySinceUtc,
+    int PerTeam);
+
+/// <summary>
+/// Верхняя граница номера комнаты. Номер печатается в команде <c>/join 2v2 #N</c>,
+/// поэтому он остаётся коротким; 999 комнат на LAN-сервер — заведомо больше, чем нужно.
+/// </summary>
+public static class RoomLimits
+{
+    public const int MaxRoomNumber = 999;
+}
 
 /// <summary>Результат <see cref="RoomRegistry.TryCreate"/> — без исключений на потоке HTTP.</summary>
 public enum RoomCreateError : byte
@@ -54,6 +66,7 @@ public enum RoomCreateError : byte
     DuplicateNick = 4,
     TooManyRooms = 5,
     RoomLimitReached = 6,
+    UnknownTeamSize = 7,
 }
 
 /// <summary>Чья-то лимитная квота: сколько комнат ещё можно открыть.</summary>
@@ -87,7 +100,6 @@ public sealed class RoomRegistry
     private readonly object _gate = new();
     private readonly Dictionary<int, RoomDescriptor> _rooms = new();
     private readonly Dictionary<string, int> _byOwner = new(StringComparer.OrdinalIgnoreCase);
-    private int _nextNumber = 1;
     private int _maxRooms = DefaultMaxRooms;
 
     /// <summary>Потолок открытых комнат. Значения вне 1..1024 подтягиваются в диапазон.</summary>
@@ -123,10 +135,17 @@ public sealed class RoomRegistry
         get { lock (_gate) return _rooms.Count; }
     }
 
-    /// <summary>Следующий номер, который получит новая комната (для подсказок в UI).</summary>
+    /// <summary>
+    /// Номер, который получит новая комната (для подсказок в UI).
+    /// </summary>
+    /// <remarks>
+    /// Это именно наименьший свободный, а не «последний + 1»: нумерация теперь
+    /// заполняет дыры, и подсказка обязана совпадать с тем, что реально выдаст
+    /// <see cref="TryCreate"/>.
+    /// </remarks>
     public int NextNumber
     {
-        get { lock (_gate) return _nextNumber; }
+        get { lock (_gate) return AllocateNumber(); }
     }
 
     /// <summary>
@@ -143,7 +162,8 @@ public sealed class RoomRegistry
         string? name,
         string? ownerNick,
         out RoomDescriptor? room,
-        out RoomCreateError error)
+        out RoomCreateError error,
+        int perTeam = 0)
     {
         room = null;
         error = RoomCreateError.None;
@@ -159,6 +179,12 @@ public sealed class RoomRegistry
             && !GameModeCatalog.TryResolveLevel(mode, levelToken!, out level, out _))
         {
             error = RoomCreateError.UnknownLevel;
+            return false;
+        }
+
+        if (!RoomCapacity.TryResolvePerTeam(mode.GameModeId, perTeam, out var teamSize))
+        {
+            error = RoomCreateError.UnknownTeamSize;
             return false;
         }
 
@@ -194,7 +220,11 @@ public sealed class RoomRegistry
                 return false;
             }
 
-            var number = _nextNumber++;
+            // Наименьший свободный номер: комнаты #1 и #3 открыты → новая получит #2.
+            // Раньше номера шли монотонно и дыр не заполняли, но тогда после закрытия
+            // комнаты #2 следующая становилась #4, и людям приходилось держать в
+            // голове «какие номера ещё живы». Свободный номер избавляет от этого.
+            var number = AllocateNumber();
             var created = new RoomDescriptor(
                 Number: number,
                 ModeId: mode.GameModeId,
@@ -204,13 +234,35 @@ public sealed class RoomRegistry
                 OwnerNick: nick,
                 CreatedUtc: DateTime.UtcNow,
                 State: RoomState.Waiting,
-                Players: 0);
+                Players: 0,
+                EmptySinceUtc: DateTime.UtcNow,
+                PerTeam: teamSize);
 
             _rooms[number] = created;
             _byOwner[nick] = number;
             room = created;
             return true;
         }
+    }
+
+    /// <summary>
+    /// Наименьший номер, которого сейчас нет среди открытых комнат.
+    /// </summary>
+    /// <remarks>
+    /// Вызывается под <c>_gate</c>. Верхняя граница — <see cref="RoomLimits.MaxRoomNumber"/>:
+    /// номер уходит в команду <c>/join 2v2 #N</c>, и он должен оставаться коротким.
+    /// </remarks>
+    private int AllocateNumber()
+    {
+        for (var candidate = 1; candidate <= RoomLimits.MaxRoomNumber; candidate++)
+        {
+            if (!_rooms.ContainsKey(candidate))
+                return candidate;
+        }
+
+        // Теоретически недостижимо: _maxRooms (≤1024) меньше MaxRoomNumber.
+        // Если случится — не выдаём номер за границей, а честно упираемся в потолок.
+        return RoomLimits.MaxRoomNumber;
     }
 
     /// <summary>
@@ -276,13 +328,25 @@ public sealed class RoomRegistry
                 return false;
 
             var clampedPlayers = players < 0 ? 0 : players;
-            if (current.State == state && current.Players == clampedPlayers)
+
+            // Отсчёт «комната пустует» начинается с момента, когда из неё ушёл
+            // последний человек, а не с создания. Иначе катка, в которой играли час,
+            // удалялась бы мгновенно при выходе всех: возраст-то уже большой.
+            var emptySince = current.EmptySinceUtc;
+            if (clampedPlayers > 0)
+                emptySince = null;
+            else if (current.Players > 0)
+                emptySince = DateTime.UtcNow;
+
+            if (current.State == state && current.Players == clampedPlayers
+                && current.EmptySinceUtc == emptySince)
                 return true;
 
             _rooms[number] = current with
             {
                 State = state,
                 Players = clampedPlayers,
+                EmptySinceUtc = emptySince,
             };
             return true;
         }
@@ -322,10 +386,21 @@ public sealed class RoomRegistry
             var expired = new List<int>();
             foreach (var room in _rooms.Values)
             {
-                var age = (nowUtc - room.CreatedUtc).TotalSeconds;
-                var limit = room.State == RoomState.Finished ? finishedSeconds : emptySeconds;
-                var idle = room.State == RoomState.Finished || room.Players <= 0;
-                if (idle && age >= limit)
+                if (room.State == RoomState.Finished)
+                {
+                    // Завершённая катка живёт от конца матча, а не от создания.
+                    var finishedAge = (nowUtc - room.CreatedUtc).TotalSeconds;
+                    if (finishedAge >= finishedSeconds)
+                        expired.Add(room.Number);
+                    continue;
+                }
+
+                // Пустая комната — ровно от того момента, когда в ней никого не стало.
+                if (room.Players > 0)
+                    continue;
+
+                var since = room.EmptySinceUtc ?? room.CreatedUtc;
+                if ((nowUtc - since).TotalSeconds >= emptySeconds)
                     expired.Add(room.Number);
             }
             return expired;

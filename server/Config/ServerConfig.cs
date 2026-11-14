@@ -231,8 +231,15 @@ public sealed class WebConfig
     /// <summary>Сколько комнат разрешено держать одновременно.</summary>
     public int MaxRooms { get; set; } = 64;
 
-    /// <summary>Через сколько секунд пустая комната удаляется.</summary>
-    public int EmptyRoomTtlSec { get; set; } = 600;
+    /// <summary>
+    /// Через сколько секунд пустая комната удаляется и её номер освобождается.
+    /// </summary>
+    /// <remarks>
+    /// Отсчёт идёт с момента, когда из комнаты ушёл последний игрок, а не с её создания.
+    /// Три минуты — компромисс: за это время человек успевает переподключиться после
+    /// обрыва мобильной сети, и при этом брошенные катки не копятся.
+    /// </remarks>
+    public int EmptyRoomTtlSec { get; set; } = 180;
 
     /// <summary>
     /// Публичный адрес сайта для ответа «создать можно здесь».
@@ -799,7 +806,7 @@ public sealed class ServerConfig
     {
         Web.Port = Check(Web.Port, 1, 65535, 8080, "web.port");
         Web.MaxRooms = Check(Web.MaxRooms, 1, 1024, 64, "web.maxRooms");
-        Web.EmptyRoomTtlSec = Check(Web.EmptyRoomTtlSec, 60, 86400, 600, "web.emptyRoomTtlSec");
+        Web.EmptyRoomTtlSec = Check(Web.EmptyRoomTtlSec, 30, 86400, 180, "web.emptyRoomTtlSec");
 
         Web.BindAddress = string.IsNullOrWhiteSpace(Web.BindAddress)
             ? "0.0.0.0"
@@ -1159,7 +1166,7 @@ public sealed class ServerConfig
                                  // "127.0.0.1" — только если nginx на этом же хосте
     "port": 8080,
     "maxRooms": 64,              // предохранитель; правило — одна комната на игрока
-    "emptyRoomTtlSec": 600,      // пустая комната закрывается через 10 минут
+    "emptyRoomTtlSec": 180,      // пустая комната закрывается через 3 минуты, номер освобождается
     "publicBaseUrl": "",         // адрес сайта для «создать можно здесь»; пусто — определить
 
     "limits": {

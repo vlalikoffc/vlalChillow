@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using LiteNetLib;
+using StandChillow.LanServer.Bans;
 using StandChillow.LanServer.Config;
 using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Diagnostics;
@@ -601,6 +602,13 @@ public sealed partial class GameNetHost : IDisposable
             var welcome = LobbySession.WelcomeMessageOverride ?? LobbySession.WelcomeMessage;
             if (!string.IsNullOrWhiteSpace(welcome))
                 SendServerChatTo(peer, welcome);
+
+            // Свой id — только самому игроку, не в общий чат. Он же потом приходит
+            // в катке (uid = MatchPublicId.ForNick), поэтому человек видит одно и то же
+            // число и в лобби, и в игре, и может назвать его админу для /ban.
+            SendServerChatTo(peer,
+                $"Ты {self.Name} · ID: {MatchPublicId.ForNick(self.Name)}");
+
             // Lobby join is quiet for match-style Подключился — that fires on JoinRoom Found.
             BroadcastServerChat(_session.BuildPlayerListMessage());
         });

@@ -99,6 +99,26 @@ internal sealed class MatchRoom
     /// значение <see cref="MatchHostSettings.WinsNeeded"/> (legacy-поведение).
     /// </summary>
     public int WinsNeededOverride { get; init; }
+
+    /// <summary>
+    /// Сколько человек в одной команде этой комнаты.
+    /// </summary>
+    /// <remarks>
+    /// <c>0</c> — «не ограничено» (legacy-комната <c>Dedik</c> и режимы без команд).
+    /// Для панельных комнат выставляется при создании: «союзники 1 на 1» — это
+    /// <c>PerTeam = 1</c>, «2 на 2» — <c>2</c>, бомба — 5 или 6.
+    /// </remarks>
+    public int PerTeam { get; set; }
+
+    /// <summary>
+    /// Сколько всего людей помещается в комнату.
+    /// </summary>
+    /// <remarks>
+    /// <c>0</c> — движковый потолок (шестнадцать человек).
+    /// Считается от <see cref="PerTeam"/>, но хранится отдельно: у режимов без команд
+    /// команды нет, а потолок есть.
+    /// </remarks>
+    public int MaxPlayers { get; set; }
 }
 
 /// <summary>
