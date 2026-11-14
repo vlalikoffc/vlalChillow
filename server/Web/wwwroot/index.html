@@ -670,6 +670,15 @@ select.md-field__box{
 
     <p class="body-small" id="mode-note" style="margin-top:12px;color:var(--md-sys-color-on-surface-variant)"></p>
 
+    <!-- Размер команды: показываем только там, где режим его выбирает
+         (союзники и дуэль — 1 на 1 или 2 на 2). У бомбы размер фиксированный,
+         у остальных режимов деления на команды нет — секция скрыта. -->
+    <div class="md-section" id="team-section" hidden>
+      <span class="md-section__label">Сколько игроков</span>
+      <div class="md-chips" id="teams" role="radiogroup" aria-label="Размер команды"></div>
+      <p class="md-field__helper" id="team-note" style="margin-left:0"></p>
+    </div>
+
     <div class="md-section">
       <span class="md-section__label">Карта</span>
       <div class="md-chips" id="maps"></div>
@@ -781,6 +790,79 @@ function buildSelects(){
   modeSel.selectedIndex = 0;
 }
 
+/* Размер команды: чипы «1 на 1» / «2 на 2» — только для режимов, где он
+   выбирается. Сервер отдаёт teamSizes в /api/modes (пустой список — не выбирается),
+   поэтому страница не держит свою копию правил и не разъедется с сервером. */
+function renderTeams(){
+  var m = modeById($('mode').value);
+  var section = $('team-section');
+  var box = $('teams');
+  box.innerHTML = '';
+  if (!m) { section.hidden = true; return; }
+
+  var sizes = m.teamSizes || [];
+  if (!sizes.length) { section.hidden = true; return; }
+
+  section.hidden = false;
+
+  /* По умолчанию — самый большой вариант: человек, которому всё равно,
+     получит полноценную катку, а не «1 на 1» по недоразумению. */
+  var preferred = sizes[sizes.length - 1];
+  var saved = teamChoice[m.id];
+  if (saved && sizes.indexOf(saved) >= 0) preferred = saved;
+
+  sizes.forEach(function(size){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'md-chip';
+    b.textContent = size + ' на ' + size;
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', size === preferred ? 'true' : 'false');
+    b.setAttribute('aria-pressed', size === preferred ? 'true' : 'false');
+    b.dataset.perTeam = String(size);
+    b.addEventListener('click', function(){
+      var kids = box.children;
+      for (var k = 0; k < kids.length; k++){
+        kids[k].setAttribute('aria-checked', 'false');
+        kids[k].setAttribute('aria-pressed', 'false');
+      }
+      b.setAttribute('aria-checked', 'true');
+      b.setAttribute('aria-pressed', 'true');
+      teamChoice[m.id] = size;
+      updateTeamNote(m, size);
+    });
+    box.appendChild(b);
+  });
+
+  updateTeamNote(m, preferred);
+}
+
+/* Подпись под чипами: сколько всего человек поместится. Без неё «2 на 2»
+   не говорит, что это четыре места, а не два. */
+function updateTeamNote(m, perTeam){
+  var total = perTeam * 2;
+  $('team-note').textContent = total + ' человек: по ' + perTeam + ' в каждой команде';
+}
+
+/* Выбранный размер за режимом запоминаем: переключил режим и вернулся —
+   выбор на месте, а не сброшен на дефолт. */
+var teamChoice = {};
+
+function selectedPerTeam(){
+  var m = modeById($('mode').value);
+  if (!m) return 0;
+  var sizes = m.teamSizes || [];
+  if (!sizes.length) return 0;
+
+  var kids = $('teams').children;
+  for (var k = 0; k < kids.length; k++){
+    if (kids[k].getAttribute('aria-checked') === 'true')
+      return parseInt(kids[k].dataset.perTeam, 10) || 0;
+  }
+
+  return sizes[sizes.length - 1];
+}
+
 function renderMaps(){
   var m = modeById($('mode').value);
   if (!m) return;
@@ -876,7 +958,10 @@ function renderRooms(){
 
   list.forEach(function(r){
     var m = modeById(r.mode);
-    var full = r.players >= MAX_PLAYERS;
+    /* Потолок у каждой комнаты свой: «1 на 1» — два места, «2 на 2» — четыре.
+       Глобальные 16 здесь врали бы и красили 2/2 как «есть места». */
+    var cap = r.maxPlayers || MAX_PLAYERS;
+    var full = r.players >= cap;
 
     var li = document.createElement('li');
     li.className = 'md-row';
@@ -898,10 +983,12 @@ function renderRooms(){
       '<span class="md-row__num">#' + r.n + '</span>' +
       '<div>' +
         '<div class="md-row__title">' + titleHtml + badge + '</div>' +
-        '<div class="md-row__meta">' + esc(m ? m.name : r.mode) + ' · ' + esc(r.map) + '</div>' +
+        '<div class="md-row__meta">' + esc(m ? m.name : r.mode) +
+          (r.teamLabel ? ' · ' + esc(r.teamLabel) : '') +
+          ' · ' + esc(r.map) + '</div>' +
       '</div>' +
       '<div class="md-row__actions">' +
-        '<span class="md-row__count"><b>' + r.players + '</b>/' + MAX_PLAYERS + '</span>' +
+        '<span class="md-row__count"><b>' + r.players + '</b>/' + cap + '</span>' +
         '<button class="md-button md-button--outlined"' +
           (full || r.state === 'finished' ? ' disabled' : '') + '>' +
           (full ? 'мест нет' : r.state === 'finished' ? 'закрыта' : 'Войти') + '</button>' +
@@ -973,7 +1060,10 @@ function createRoom(){
   creating = true;
   $('create-btn').disabled = true;
 
-  api('POST', 'api/rooms', { mode: mode.id, level: map, name: name, owner: nick })
+  api('POST', 'api/rooms', {
+    mode: mode.id, level: map, name: name, owner: nick,
+    perTeam: selectedPerTeam()
+  })
     .then(function(res){
       if (!res.ok){
         err.textContent = describeError(res.data, res.status);
@@ -982,7 +1072,8 @@ function createRoom(){
       var r = res.data;
       rooms.unshift({
         n: r.number, name: r.name, mode: r.mode, map: r.level,
-        players: 0, state: r.state, owner: r.owner
+        players: 0, state: r.state, owner: r.owner,
+        perTeam: r.perTeam, maxPlayers: r.maxPlayers, teamLabel: r.teamLabel
       });
       $('result-cmd').textContent = r.joinCommand;
       $('result').hidden = false;
@@ -1038,10 +1129,13 @@ function loadModes(){
       return {
         id: m.id, name: m.name, alias: m.alias,
         levels: m.levels || [], note: '',
-        defaultLevel: m.defaultLevel
+        defaultLevel: m.defaultLevel,
+        /* Размер команды приходит с сервера: пустой список — режим не выбирает. */
+        teamSizes: m.teamSizes || []
       };
     });
     buildSelects();
+    renderTeams();
     renderMaps();
   });
 }
@@ -1052,7 +1146,8 @@ function loadRooms(){
     rooms = (res.data.rooms || []).map(function(r){
       return {
         n: r.number, name: r.name, mode: r.mode, map: r.level,
-        players: r.players || 0, state: r.state, owner: r.owner
+        players: r.players || 0, state: r.state, owner: r.owner,
+        perTeam: r.perTeam, maxPlayers: r.maxPlayers, teamLabel: r.teamLabel
       };
     });
   });
@@ -1116,7 +1211,7 @@ function setTheme(t){
 
 /* ═══════════ init ═══════════ */
 function init(){
-  $('mode').addEventListener('change', renderMaps);
+  $('mode').addEventListener('change', function(){ renderTeams(); renderMaps(); });
   $('tab-create').addEventListener('click', function(){ switchTab('create'); });
   $('tab-list').addEventListener('click', function(){ switchTab('list'); });
   $('create-btn').addEventListener('click', createRoom);
@@ -1150,6 +1245,7 @@ function init(){
       return Promise.all([loadRooms(), loadStatus()]);
     })
     .then(function(){
+      renderTeams();
       renderMaps();
       renderStats();
       renderRooms();
@@ -1183,7 +1279,7 @@ if (typeof window !== 'undefined') {
     renderRooms: renderRooms, renderMaps: renderMaps, buildSelects: buildSelects,
     switchTab: switchTab, createRoom: createRoom, setTheme: setTheme,
     joinCmd: joinCmd, describeError: describeError,
-    setMode: function(list){ MODES = list; buildSelects(); renderMaps(); },
+    setMode: function(list){ MODES = list; buildSelects(); renderTeams(); renderMaps(); },
     setRooms: function(list){ rooms = list; }
   };
 }

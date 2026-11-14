@@ -33,15 +33,19 @@ function check(name, cond, extra) {
 const MODES = {
   modes: [
     { id: 'Ranked2v2', name: 'Союзники', alias: '2v2', defaultLevel: 'Sandstone 2x2',
-      levels: ['Prison 2x2', 'Sandstone 2x2'], aliases: ['2v2', 'союзники'] },
+      levels: ['Prison 2x2', 'Sandstone 2x2'], aliases: ['2v2', 'союзники'],
+      teamSizes: [1, 2] },
     { id: 'Duel', name: 'Дуэль', alias: 'duel', defaultLevel: 'Yard',
-      levels: ['Block', 'Yard'], aliases: ['duel'] },
+      levels: ['Block', 'Yard'], aliases: ['duel'], teamSizes: [1, 2] },
+    { id: 'DeathMatch', name: 'Командный бой', alias: 'tdm', defaultLevel: 'Arena',
+      levels: ['Arena'], aliases: ['tdm'], teamSizes: [] },
   ],
 };
 
 let roomsState = [
   { number: 1, mode: 'Ranked2v2', level: 'Sandstone 2x2', name: 'рялна',
-    owner: 'vlal', state: 'live', players: 4, joinCommand: '/join 2v2 #1' },
+    owner: 'vlal', state: 'live', players: 4, joinCommand: '/join 2v2 #1',
+    perTeam: 2, maxPlayers: 4, teamLabel: '2 на 2' },
   { number: 2, mode: 'Duel', level: 'Yard', name: '', owner: 'botx',
     state: 'waiting', players: 1, joinCommand: '/join duel #2' },
 ];
@@ -103,8 +107,8 @@ function fakeFetch(url, opts) {
   if (!P) { report(); return; }
 
   /* ── каталог пришёл с сервера ── */
-  check('каталог загружен с /api/modes', P.MODES.length === 2, 'MODES=' + P.MODES.length);
-  check('селект режимов заполнен', $('mode').options.length === 2, 'options=' + $('mode').options.length);
+  check('каталог загружен с /api/modes', P.MODES.length === 3, 'MODES=' + P.MODES.length);
+  check('селект режимов заполнен', $('mode').options.length === 3, 'options=' + $('mode').options.length);
   check('фильтр режимов начинается с «Все режимы»',
     $('f-mode').options[0].value === '' && $('f-mode').selectedIndex === 0);
 
@@ -206,7 +210,68 @@ function fakeFetch(url, opts) {
   check('закрытая комната: кнопка неактивна', deadBtn && deadBtn.disabled === true);
   check('закрытая комната подписана', $('rooms').textContent.indexOf('закрыта') >= 0);
 
-  report();
+  /* ── выбор размера команды ── */
+  // Союзники: размер выбирается, по умолчанию — наибольший (2 на 2).
+  P.setMode(MODES.modes);
+  $('mode').value = 'Ranked2v2';
+  $('mode').dispatchEvent(new window.Event('change'));
+
+  check('союзники: выбор размера виден', $('team-section').hidden === false);
+  check('союзники: два варианта (1 и 2)',
+    $('teams').children.length === 2);
+  check('союзники: подписи «1 на 1» и «2 на 2»',
+    $('teams').textContent.indexOf('1 на 1') >= 0 &&
+    $('teams').textContent.indexOf('2 на 2') >= 0);
+
+  const chosen = Array.from($('teams').children)
+    .filter(b => b.getAttribute('aria-checked') === 'true');
+  check('союзники: выбран ровно один вариант', chosen.length === 1);
+  check('союзники: по умолчанию 2 на 2',
+    chosen[0] && chosen[0].textContent === '2 на 2');
+  check('союзники: подпись про 4 человека',
+    $('team-note').textContent.indexOf('4') >= 0);
+
+  // Переключение на 1 на 1 — выбор запоминается и уходит на сервер.
+  const oneOnOne = Array.from($('teams').children)
+    .find(b => b.textContent === '1 на 1');
+  oneOnOne.dispatchEvent(new window.Event('click'));
+  check('1 на 1: стало выбрано',
+    oneOnOne.getAttribute('aria-checked') === 'true' &&
+    $('teams').querySelectorAll('[aria-checked="true"]').length === 1);
+  check('1 на 1: подпись про 2 человека',
+    $('team-note').textContent.indexOf('2') >= 0);
+
+  // Режим, где размер не выбирается: секция обязана исчезнуть, а не показать пустоту.
+  $('mode').value = 'DeathMatch';
+  $('mode').dispatchEvent(new window.Event('change'));
+  check('tdm: выбор размера скрыт', $('team-section').hidden === true);
+
+  // Возврат на союзников — прежний выбор на месте, а не сброшен на дефолт.
+  $('mode').value = 'Ranked2v2';
+  $('mode').dispatchEvent(new window.Event('change'));
+  const again = Array.from($('teams').children)
+    .find(b => b.getAttribute('aria-checked') === 'true');
+  check('возврат на союзников: выбор помнится',
+    again && again.textContent === '1 на 1');
+
+  // Создание комнаты отправляет perTeam.
+  posted = null;
+  $('nick').value = 'влал999';
+  $('create-btn').dispatchEvent(new window.Event('click'));
+  return new Promise(resolve => setTimeout(resolve, 30)).then(() => {
+    check('perTeam уходит на сервер', posted && posted.perTeam === 1);
+
+    /* ── потолок комнаты берётся из самой комнаты ── */
+    P.setRooms([{ n: 7, name: 'малая', mode: 'Ranked2v2', map: 'Sandstone 2x2',
+                  players: 2, state: 'waiting', owner: 'x',
+                  perTeam: 1, maxPlayers: 2, teamLabel: '1 на 1' }]);
+    P.switchTab('list');
+    const row = $('rooms').textContent;
+    check('счётчик по потолку комнаты: 2/2', row.indexOf('2/2') >= 0);
+    check('подпись размера в списке', row.indexOf('1 на 1') >= 0);
+
+    report();
+  });
 
   function report() {
     console.log('\n──────────────────────────────────────────');
