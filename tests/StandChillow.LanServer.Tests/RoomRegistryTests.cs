@@ -143,10 +143,11 @@ public sealed class RoomRegistryTests
         Assert.True(reg.TryRemove(room!.Number, out var removed));
         Assert.Equal("влал", removed.OwnerNick);
 
-        // Ник свободен — можно создать новую комнату (номер будет следующим).
+        // Ник свободен — можно создать новую комнату. Номер тоже освободился:
+        // #1 закрылась, значит следующая берёт наименьший свободный — #1.
         Assert.True(reg.Quota("влал").Allowed);
         Assert.True(Create(reg, "duel", null, "влал", out var second, out _));
-        Assert.Equal(2, second!.Number);
+        Assert.Equal(1, second!.Number);
     }
 
     [Fact]
@@ -276,15 +277,41 @@ public sealed class RoomRegistryTests
     {
         var reg = new RoomRegistry();
         Assert.True(Create(reg, "2v2", null, "a", out var room, out _));
-        var created = room!.CreatedUtc;
 
+        // Отсчёт идёт от момента, когда комната опустела: она пустая с рождения.
+        var emptySince = room!.EmptySinceUtc ?? room.CreatedUtc;
         var ttl = TimeSpan.FromMinutes(10);
 
         // Через 9 минут — ещё жива.
-        Assert.Empty(reg.FindExpired(created.AddMinutes(9), ttl, ttl));
+        Assert.Empty(reg.FindExpired(emptySince.AddMinutes(9), ttl, ttl));
 
         // Через 10 — пора.
-        Assert.Single(reg.FindExpired(created.AddMinutes(10), ttl, ttl));
+        Assert.Single(reg.FindExpired(emptySince.AddMinutes(10), ttl, ttl));
+    }
+
+    [Fact]
+    public void FindExpired_CountsFromWhenRoomEmptied_NotFromCreation()
+    {
+        // Катка, в которой играли час, не должна удаляться мгновенно при выходе всех:
+        // возраст от создания тут ни при чём — важен момент опустения.
+        var reg = new RoomRegistry();
+        Assert.True(Create(reg, "2v2", null, "a", out var room, out _));
+        Assert.True(reg.TryUpdate(room!.Number, RoomState.Live, 4));
+
+        var created = room.CreatedUtc;
+        var ttl = TimeSpan.FromMinutes(3);
+
+        // Играли долго, потом все вышли.
+        var emptiedAt = created.AddHours(1);
+        Assert.True(reg.TryUpdate(room.Number, RoomState.Waiting, 0));
+
+        // Сразу после выхода и через две минуты — ещё жива.
+        Assert.Empty(reg.FindExpired(emptiedAt.AddMinutes(2), ttl, ttl));
+
+        // Через три минуты после опустения (хотя от создания прошёл час) — пора.
+        var expired = reg.FindExpired(emptiedAt.AddMinutes(4), ttl, ttl);
+        Assert.Single(expired);
+        Assert.Equal(room.Number, expired[0]);
     }
 
     [Fact]
