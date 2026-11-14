@@ -322,6 +322,16 @@ public sealed class WebPanelHost : IDisposable
         host.Match.ArmRoomByPasswordKey(
             room.PasswordKey, $"создана с сайта, #{room.Number}");
 
+        // Комната с сайта обязана сразу быть играбельной: клиент узнаёт адрес матча
+        // только из op9 с hasHosting=1. Без этого /join клал бронь, отвечал
+        // «заходи в игру» — и игрок навсегда оставался в лобби (peers=0 на 7777).
+        if (!host.OpenMatchPortForPanelRoom($"комната #{room.Number} с сайта"))
+        {
+            Console.WriteLine(
+                $"[web] комната #{room.Number} создана, но игровой порт не открылся — " +
+                "игроки не смогут войти; проверь, не занят ли UDP 7777");
+        }
+
         Console.WriteLine(
             $"[web] создана комната #{room.Number} «{BuildRoomLabel(room)}» " +
             $"({room.ModeId} / {room.Level}) владелец '{room.OwnerNick}' — " +

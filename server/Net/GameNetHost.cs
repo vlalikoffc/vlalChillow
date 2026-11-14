@@ -206,6 +206,48 @@ public sealed partial class GameNetHost : IDisposable
     }
 
     /// <summary>
+    /// Открыть матч-порт для комнаты, созданной на сайте, и разослать op9.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Клиент попадает в комнату только по <c>op9</c> с <c>hasHosting=1</c>
+    /// (<see cref="LobbyOpcode.OpGameHostingStateChangedEvent"/>): сам он адреса 7777
+    /// не знает и в игру не пойдёт. Без этого вызова <c>/join 2v2 #1</c> клал бронь,
+    /// отвечал «заходи в игру» — и игрок оставался в лобби навсегда.
+    /// </para>
+    /// <para>
+    /// <b>Не</b> идёт через <see cref="TryStartMatch"/>: тот на повторном вызове делает
+    /// <c>HardResetMatchForNewStart</c> и снёс бы уже созданные комнаты. Здесь только
+    /// поднимается слушатель и публикуется hosting — комнаты остаются как есть.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>false</c>, если UDP 7777 поднять не удалось.</returns>
+    public bool OpenMatchPortForPanelRoom(string reason)
+    {
+        if (!_match.EnsureMatchListening())
+        {
+            Console.WriteLine(
+                "[lobby] панельная комната создана, но UDP 7777 не поднялся — " +
+                "игроки не смогут войти");
+            return false;
+        }
+
+        lock (_gate)
+            _matchStarted = true;
+
+        _session.Searching = true;
+        _session.GameInProgress = true;
+
+        PushInProgressLobbySignals(broadcastAll: true);
+
+        Console.WriteLine(
+            $"[lobby] матч-порт открыт ({reason}): op9 " +
+            $"{_advertiseLanIp}:{GameMatchHost.DefaultMatchPort} " +
+            "(комнаты панели ждут игроков)");
+        return true;
+    }
+
+    /// <summary>
     /// First Play: emit op7 + SearchingStarted + op9 to existing match host (rebind 7777 if
     /// suspended after MatchOver). Rematch (<c>/play</c> after clients returned to lobby):
     /// <b>tear down</b> previous Dedik room (MatchOver / mid-round / stale actors) then start
