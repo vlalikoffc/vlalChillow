@@ -3,6 +3,7 @@ using System.Text;
 using StandChillow.LanServer.Net.Match.Kernel;
 using StandChillow.LanServer.Web;
 using Xunit;
+using WebResponse = StandChillow.LanServer.Web.WebResponse;
 
 namespace StandChillow.LanServer.Tests;
 
