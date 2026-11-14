@@ -25,21 +25,30 @@ public sealed partial class GameNetHost
 
     /// <summary>
     /// Пускать ли игрока к команде. Решает <c>config.json</c>:
-    /// <c>admin.nicknames</c>, <c>admin.adminOnlyCommands</c>, <c>admin.anyoneCanStart</c>.
+    /// <c>admin.nicknames</c>, <c>admin.adminOnlyCommands</c>, <c>admin.anyoneCanStart</c>,
+    /// а админство — ещё и код этого запуска (<see cref="IsAdminAuthorized"/>).
     /// </summary>
     private bool IsCommandAllowedFor(ConnectedPlayer player, string message, out string denyReason)
     {
         // Само решение — в CommandAccessPolicy (чистая функция, покрыта тестами).
-        var allowed = CommandAccessPolicy.IsAllowed(_config, player.Name, message, out denyReason);
+        // Права проверяем по нику + адресу: ник присылает клиент, и адрес, который код
+        // запуска не предъявлял, админом не становится — ровно то, что показывает /whoami.
+        var allowed = CommandAccessPolicy.IsAllowed(
+            _config,
+            player.Name,
+            message,
+            out denyReason,
+            nick => IsAdminAuthorized(nick, player.Peer.Address));
         if (allowed)
             return true;
 
         // Отказ виден и в консоли: иначе игрок получает только приватный ответ, а
-        // оператор не понимает, почему команда «не работает».
+        // оператор не понимает, почему команда «не работает». Причина — та же строка,
+        // что ушла игроку (ник без прав и ник без кода — разные случаи).
         var parsed = CommandAccessPolicy.Parse(message);
         Console.WriteLine(
-            $"[chat] /{parsed.Command} ОТКЛОНЕНО: ник '{player.Name}' не в admin.nicknames " +
-            $"[{string.Join(", ", _config.Admin.Nicknames)}]");
+            $"[chat] /{parsed.Command} ОТКЛОНЕНО: {player.Name} ({player.Peer.Address}) — " +
+            denyReason);
         return false;
     }
 
@@ -147,6 +156,12 @@ public sealed partial class GameNetHost
             return true;
         }
 
+        if (CommandAccessPolicy.IsChatTestCommand(cmd))
+        {
+            HandleChatTestCommand(reply, player);
+            return true;
+        }
+
         if (cmd.Equals("bans", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("баны", StringComparison.OrdinalIgnoreCase))
         {
@@ -240,7 +255,10 @@ public sealed partial class GameNetHost
           /bans                     активные баны и остаток (только админ)
           /ids                      кто в лобби и катке: id, ник, IP (только админ)
           /whoami                   что сервер знает про тебя: ник, id, IP, права
+          /chattest                 диагностика чата катки: 4 варианта кадра (только админ)
           /auth                     код админа (только из консоли сервера)
+        Те же команды работают в чате катки: ответ придёт туда же и только тебе.
+        «Только админ» — это ник в admin.nicknames плюс код этого запуска (/whoami).
         """.Trim();
 
     private static string FormatUnknownCommandHelp(string message) =>
@@ -718,5 +736,76 @@ public sealed partial class GameNetHost
         Console.WriteLine($"[lobby] {who}: {msg}");
         BroadcastServerChat(msg);
         reply(msg);
+    }
+
+    /// <summary>
+    /// Диагностика матч-чата (<c>/chattest</c>, только админ): один и тот же текст уходит
+    /// четырьмя кадрами ChatManager — автор (актор хоста «Server» / живой игрок) ×
+    /// <c>field</c> (1/2). Задача — одним прогоном на живом клиенте узнать, какой из
+    /// вариантов он вообще рисует.
+    /// </summary>
+    /// <remarks>
+    /// Почему это не выдумка, а эксперимент: latest.log (2026-11-14, 3 пира) показал, что
+    /// серверный кадр доходит до всех (<c>Server → match: матч armed … (peers=3)</c>), но на
+    /// экране ничего нет, и в обратную сторону клиенты не прислали ни одного Rpc на id=7
+    /// (80 Rpc — только пешки, RadarManager id=6, BombManager id=8). Значит чат клиента к
+    /// нашему ChatManager не привязан. Обе ниточки одинаково подтверждены капчурами:
+    /// <c>field</c> у живого чата бывает 1 и 2 (gold …040303/…040308 против …040310 «сучка»),
+    /// а байт автора — это номер актора (в том же логе id=257→rpc=2, id=385→rpc=3, id=513→rpc=4,
+    /// то есть rpc==owner пешки). Выбрать между ними по капчурам нельзя — нужно наблюдение.
+    /// </remarks>
+    private void HandleChatTestCommand(Action<string> reply, ConnectedPlayer? player)
+    {
+        if (!_match.IsListening || !_match.HasMatchPeers)
+        {
+            reply("chattest: катка не идёт — сначала /start, нужны живые клиенты на 7777");
+            return;
+        }
+
+        // Аудитория важнее самих проб: кадры, ушедшие в комнату без заказчика, не отвечают
+        // ни на один вопрос (latest-3.log: /chattest из лобби при отключённом 7777 — буквы
+        // увидели двое других, а ответы заказчику истекли в очереди).
+        var audience = _match.DescribeChatAudience(
+            player?.Name, player?.Peer.Address, out var requesterPresent);
+        Console.WriteLine(
+            $"[chat] chattest: аудитория — {audience}; заказчик " +
+            (player is null ? "неизвестен (консоль)" : player.Name) +
+            (requesterPresent ? " в катке" : " НЕ в катке"));
+        reply($"chattest: аудитория — {audience}");
+        if (!requesterPresent)
+            reply("chattest: тебя среди них нет — буквы увидят только они (зайди в катку и повтори)");
+
+        // SnapshotPublicIds уже без актора сервера, поэтому первый — живой игрок.
+        var human = _match.SnapshotPublicIds().FirstOrDefault();
+        var hasHuman = !string.IsNullOrWhiteSpace(human.Nick);
+        var variants = new List<(string Label, byte Author, string Who, short Field)>
+        {
+            ("A", MatchHostActor.ActorNr, "Server", 1),
+            ("B", MatchHostActor.ActorNr, "Server", 2),
+        };
+        if (hasHuman)
+        {
+            variants.Add(("C", human.ActorNr, human.Nick, 1));
+            variants.Add(("D", human.ActorNr, human.Nick, 2));
+        }
+
+        foreach (var (label, author, who, field) in variants)
+        {
+            var text = $"chattest {label} (автор {author}={who}, field={field})";
+            var peers = _match.SendServerChatProbe(text, author, field);
+            Console.WriteLine(
+                $"[chat] chattest {label}: author={author} field={field} → peers={peers} " +
+                $"(аудитория: {audience})");
+            reply($"chattest {label} → peers={peers}: автор {author} ({who}), field={field}");
+        }
+
+        // Прогон 2026-11-14 (3 пира) дал ответ: видна только C — живой автор и field=1.
+        // A/B (актор сервера) и D (field=2) клиент не рисует, поэтому серверный чат теперь
+        // подписывается живым актором (MatchChatAuthor). Проба оставлена как регрессия.
+        reply(hasHuman
+            ? "chattest: известно с 2026-11-14 — видна только C (живой автор, field=1); " +
+              "A/B от актора сервера и D с field=2 клиент не рисует. Серверный чат теперь " +
+              $"подписывается живым актором как C (здесь это {human.ActorNr}={human.Nick})."
+            : "chattest: живых игроков в ростере нет — отправлены только варианты от актора сервера.");
     }
 }

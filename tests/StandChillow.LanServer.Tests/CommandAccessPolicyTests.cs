@@ -96,6 +96,27 @@ public sealed class CommandAccessPolicyTests
         Assert.True(Allowed(Default(), "кто угодно", message, out _));
     }
 
+    /// <summary>
+    /// <c>/chattest</c> шлёт кадры ChatManager, подписанные чужим актором, — это диагностика
+    /// для админа. Гейт не зависит от <c>admin.adminOnlyCommands</c>, иначе он снимался бы
+    /// правкой конфига (так же сделано для банов).
+    /// </summary>
+    [Theory]
+    [InlineData("/chattest")]
+    [InlineData("/чаттест")]
+    [InlineData("chattest")]
+    public void ChatTestDiagnostic_NeedsAdmin_EvenWithoutConfig(string message)
+    {
+        var cfg = Default();
+
+        Assert.False(Allowed(cfg, "случайный игрок", message, out var reason),
+            $"'{message}' подписывает чат чужим актором — только админ");
+        Assert.Contains("только для админов", reason);
+
+        cfg.Admin.Nicknames.Add("влал");
+        Assert.True(Allowed(cfg, "влал", message, out _));
+    }
+
     [Theory]
     [InlineData("/set round 16")]
     [InlineData("/end")]
@@ -177,5 +198,67 @@ public sealed class CommandAccessPolicyTests
         // Не «молча проигнорировали»: в причине есть и команда, и ник игрока.
         Assert.Contains("/set", reason);
         Assert.Contains("влал3", reason);
+    }
+
+    /// <summary>
+    /// Ник из <c>admin.nicknames</c> — ещё не права: адрес обязан предъявить код этого
+    /// запуска (<c>AdminAuth</c>). Гейт спрашивает <c>hasAdminRights</c>, а не список
+    /// напрямую, иначе любой клиент, назвавшийся «влал», получил бы <c>/set</c> и <c>/ban</c>
+    /// — при том что <c>/whoami</c> ему же честно отвечал «ник админский, код не введён».
+    /// </summary>
+    [Theory]
+    [InlineData("/set round 16")]
+    [InlineData("/end")]
+    [InlineData("/ban 12345678 1h тест")]
+    [InlineData("/chattest")]
+    public void AdminNick_WithoutTheRunCode_HasNoAdminRights(string message)
+    {
+        var cfg = Default();
+        cfg.Admin.Nicknames.Add("влал");
+
+        var allowed = CommandAccessPolicy.IsAllowed(
+            cfg, "влал", message, out var reason, hasAdminRights: _ => false);
+
+        Assert.False(allowed, $"'{message}' не должен исполняться без кода запуска");
+        // Отказ объясняет именно этот случай: ник в списке есть, прав нет.
+        Assert.Contains("код", reason);
+        Assert.Contains("влал", reason);
+        Assert.Contains("/" + CommandAccessPolicy.Parse(message).Command, reason);
+    }
+
+    [Theory]
+    [InlineData("/set round 16")]
+    [InlineData("/end")]
+    [InlineData("/chattest")]
+    public void AdminNick_WithTheRunCode_KeepsAdminRights(string message)
+    {
+        var cfg = Default();
+        cfg.Admin.Nicknames.Add("влал");
+
+        var allowed = CommandAccessPolicy.IsAllowed(
+            cfg, "влал", message, out var reason, hasAdminRights: nick => cfg.IsAdmin(nick));
+
+        Assert.True(allowed, $"'{message}' обязан исполняться для авторизованного админа");
+        Assert.Equal(string.Empty, reason);
+    }
+
+    /// <summary>
+    /// Справка и открытый запуск матча прав не спрашивают вовсе — делегат не вызывается.
+    /// Иначе игрок, которого админ-гейт не касается, потерял бы ещё и <c>/help</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("/help")]
+    [InlineData("/ready")]
+    [InlineData("/start")]
+    [InlineData("/set start")]
+    public void PublicCommands_NeverAskForAdminRights(string message)
+    {
+        Assert.True(CommandAccessPolicy.IsAllowed(
+            Default(),
+            "кто угодно",
+            message,
+            out _,
+            hasAdminRights: _ => throw new InvalidOperationException(
+                $"'{message}' не должна спрашивать админ-права")));
     }
 }

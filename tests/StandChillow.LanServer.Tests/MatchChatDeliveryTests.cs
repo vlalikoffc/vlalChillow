@@ -1,0 +1,141 @@
+using StandChillow.LanServer.Net.Match;
+using StandChillow.LanServer.Net.Match.Host;
+using Xunit;
+
+namespace StandChillow.LanServer.Tests;
+
+/// <summary>
+/// Чат катки — структурный трафик, а не косметика. Отчёт: «сервер видит команды, но не пишет
+/// ничего в ответ в чат матча … свои сообщения вовсе не шлёт». Единственный канал чата в матче —
+/// <c>WorldObjectRpc</c> на ChatManager (в <c>captures/chat.zip</c> на id=7 нет ни State, ни
+/// SetProperty), а этот опкод хост дропал отстающему пиру: сообщение терялось молча.
+/// </summary>
+public sealed class MatchChatDeliveryTests
+{
+    [Fact]
+    public void ChatManagerRpc_IsStructural_AndNeverDroppable()
+    {
+        Assert.True(MatchChatDelivery.IsChatRpc(MatchSceneManagers.ChatManagerObjectId));
+        Assert.True(MatchChatDelivery.IsStructuralRpc(MatchSceneManagers.ChatManagerObjectId));
+    }
+
+    /// <summary>#33: plant/defuse/explode тем же опкодом — уже были на недропаемом пути.</summary>
+    [Fact]
+    public void BombManagerRpc_StaysStructural()
+    {
+        Assert.False(MatchChatDelivery.IsChatRpc(MatchFlowTestParams.BombManagerObjectId));
+        Assert.True(MatchChatDelivery.IsStructuralRpc(MatchFlowTestParams.BombManagerObjectId));
+    }
+
+    [Theory]
+    [InlineData(MatchSceneManagers.RadarManagerObjectId)]
+    [InlineData(4)]   // WeaponDropManager — поток дропов
+    [InlineData(5)]   // GrenadeManager
+    [InlineData(129)] // пешка: позы устаревают на следующем кадре
+    public void EverythingElse_StaysDroppableCosmetic(int objectId)
+    {
+        Assert.False(MatchChatDelivery.IsChatRpc((short)objectId));
+        Assert.False(MatchChatDelivery.IsStructuralRpc((short)objectId));
+    }
+
+    /// <summary>
+    /// «Никто не получил» должно называть причину: иначе peers=0 не отличить от «сервер
+    /// ничего не отправил», а это ровно та неопределённость, из которой родился отчёт.
+    /// </summary>
+    [Fact]
+    public void NoTarget_ReportsWhichOfTheThreeReasonsItIs()
+    {
+        Assert.Contains("нет пиров", MatchChatDelivery.DescribeNoTarget(0, 0, 0));
+        Assert.Contains("world-gate", MatchChatDelivery.DescribeNoTarget(2, 0, 2));
+        Assert.Contains("bootstrap", MatchChatDelivery.DescribeNoTarget(2, 0, 0));
+        Assert.Contains("не совпал", MatchChatDelivery.DescribeNoTarget(2, 2, 0));
+    }
+
+    /// <summary>
+    /// Приватный ответ «последним шансом» не должен уходить чужому. latest-2.log:223 — ответ
+    /// для «влал» (192.168.1.70, actor 3, bootstrap ещё не отправлен) получил «влал2»
+    /// (192.168.1.65, actor 2), потому что «готовый пир в катке один» считался достаточным
+    /// признаком. Теперь без совпадения адреса досылаем только когда в комнате действительно
+    /// один пир; иначе 0 доставок — и ответ ждёт адресата в очереди (<c>RememberMatchReply</c>).
+    /// </summary>
+    [Fact]
+    public void LastChancePrivateReply_NeverGoesToSomebodyElse()
+    {
+        // Адрес спросившего совпал — это он, даже если в комнате есть кто-то ещё.
+        Assert.True(MatchChatDelivery.LastChanceMaySend(sameIpMatches: 1, peersInRoom: 3));
+        // Совпадения нет, но и выбирать не из кого: единственный пир комнаты и есть адресат.
+        Assert.True(MatchChatDelivery.LastChanceMaySend(sameIpMatches: 0, peersInRoom: 1));
+        // Совпадения нет, а в комнате больше одного пира — угадывание отдаст ответ чужому.
+        Assert.False(MatchChatDelivery.LastChanceMaySend(sameIpMatches: 0, peersInRoom: 2));
+        Assert.False(MatchChatDelivery.LastChanceMaySend(sameIpMatches: 0, peersInRoom: 3));
+    }
+
+    /// <summary>
+    /// Серверный ответ и релей чужого чата обязаны идти недропаемым путём, а релей —
+    /// сохранять байт автора (иначе сообщение придёт подписанным чужим актором).
+    /// </summary>
+    [Fact]
+    public void ServerChatAndRelay_AreWiredToTheCriticalPath()
+    {
+        var root = ServerSourceRoot();
+        var host = File.ReadAllText(Path.Combine(
+            root, "Net", "Match", "Host", "GameMatchHost.Chat.cs"));
+        var worldObjects = File.ReadAllText(Path.Combine(
+            root, "Net", "Match", "Host", "GameMatchHost.WorldObjects.cs"));
+
+        // Широкая рассылка (ник не задан) — критичным бордкастом, иначе её дропает бэкпрешер.
+        Assert.Contains("BroadcastInitReadyCritical(", host, StringComparison.Ordinal);
+        Assert.Contains("CountChatTargets(room)", host, StringComparison.Ordinal);
+        // Адресный ответ и last-chance — тоже мимо дропа.
+        Assert.Contains("SendCritical(p, payload)", host, StringComparison.Ordinal);
+        Assert.Contains("SendCritical(final[0].Peer, payload)", host, StringComparison.Ordinal);
+        // «Последний шанс» спрашивает политику, а не угадывает по числу готовых пиров.
+        Assert.Contains(
+            "MatchChatDelivery.LastChanceMaySend(sameIp.Count, inRoom)",
+            host,
+            StringComparison.Ordinal);
+        // Серверный кадр подписывает живой актор и помечает текст: кадр от актора сервера
+        // клиент не рисует (проба /chattest, latest-3.log — видна только буква C).
+        Assert.Contains("MatchChatAuthor.PickServerVoice(", host, StringComparison.Ordinal);
+        Assert.Contains("MatchChatAuthor.Sign(text)", host, StringComparison.Ordinal);
+        // Релей чужого чата: решение о критичности — из той же политики, автор байтом как пришёл.
+        Assert.Contains("MatchChatDelivery.IsStructuralRpc(parsed.ObjectId)", worldObjects, StringComparison.Ordinal);
+        Assert.Contains("parsed.RpcId,", worldObjects, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Повтор одного и того же промаха в журнал — не чаще раза в
+    /// <see cref="MatchChatDelivery.MissRepeatSeconds"/>: свипер отложенных ответов пробует
+    /// каждую секунду, и latest-3.log принёс 300 одинаковых отказов last-chance (пять
+    /// сообщений × 60 секунд) плюс 60 «никто не получил» на одном окне бутстрапа.
+    /// </summary>
+    [Fact]
+    public void RepeatedDeliveryMiss_IsLoggedOnceUntilTheReasonChanges()
+    {
+        var t0 = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc);
+        const string noPeers = "в катке нет пиров";
+
+        // Первый промах виден сразу.
+        Assert.True(MatchChatDelivery.ShouldLogMiss(null, t0, null, noPeers));
+        // Через секунду та же причина — молчим (это и есть шторм из latest-3.log).
+        Assert.False(MatchChatDelivery.ShouldLogMiss(t0, t0.AddSeconds(1), noPeers, noPeers));
+        // Причина сменилась — пишем сразу: это уже другое событие.
+        Assert.True(MatchChatDelivery.ShouldLogMiss(
+            t0, t0.AddSeconds(1), noPeers, "3 пир(а) без bootstrap — INIT не разблокирован"));
+        // Та же причина, но время пришло — напоминаем, что ничего не изменилось.
+        Assert.True(MatchChatDelivery.ShouldLogMiss(
+            t0,
+            t0.AddSeconds(MatchChatDelivery.MissRepeatSeconds),
+            noPeers,
+            noPeers));
+    }
+
+    private static string ServerSourceRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "server")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        return Path.Combine(dir!.FullName, "server");
+    }
+}

@@ -596,8 +596,20 @@ public sealed partial class GameNetHost : IDisposable
         Console.WriteLine(
             $"[chat] {player.Name}: {message} (ChatManager command, silent; " +
             $"actor='{actorName}' resolvedBy={resolvedBy})");
-        if (!TryHandleSlashCommand(player, message))
-            ReplyPrivate(player, FormatUnknownCommandHelp(message));
+
+        // Исполняет тот же диспетчер, что и лобби с консолью, и тот же гейт прав
+        // (ник + код запуска). Ответ уходит адресно в матч-чат: сам текст команды другим
+        // игрокам не ретранслируется, поэтому «что случилось» видит только автор.
+        if (TryHandleSlashCommand(player, message))
+        {
+            Console.WriteLine(
+                $"[chat] {player.Name}: команда из катки обработана хостом: {message}");
+            return;
+        }
+
+        Console.WriteLine(
+            $"[chat] {player.Name}: команда из катки не распознана: {message}");
+        ReplyPrivate(player, FormatUnknownCommandHelp(message));
     }
 
     /// <summary>
@@ -917,7 +929,18 @@ public sealed partial class GameNetHost : IDisposable
         {
             var peers = _match.SendServerChat(text);
             if (peers > 0)
+            {
                 Console.WriteLine($"[chat] Server → match: {text} (peers={peers})");
+                return;
+            }
+
+            // Широкая рассылка без адресата раньше терялась молча: в катке ещё нет пиров
+            // (сообщение «матч armed» уходит ровно в этот момент) или их сцена строится за
+            // world-gate. Адресные ответы уже умеют ждать в очереди — пусть умеет и эта.
+            // Но только когда в катке кто-то есть: до старта туда зеркалится каждый лобби-ростер,
+            // и копить их — значит высыпать в чат восемь устаревших строк при первом же джойне.
+            if (_match.IsListening && _match.HasMatchPeers)
+                RememberMatchReply(BroadcastReplyNick, text, address: null);
         }
         catch (Exception ex)
         {

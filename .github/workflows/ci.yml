@@ -167,8 +167,12 @@ jobs:
 
       # The gold capture set (captures/captures.zip, session 20261112_0351..0404) IS
       # committed on purpose: it is the evidence the whole match decoder is built
-      # from (see ARCHITECTURE.md). Everything else under captures/ and any run log
-      # still stays out — see .gitignore.
+      # from (see ARCHITECTURE.md). captures/chat.zip is the probe client at the
+      # phone host (sessions 20261114_0444..0445, 4326 frames) — the evidence for the
+      # ChatManager author byte and field=1/2 that README and MatchChatWireTests cite.
+      # Everything else under captures/ and any run log still stays out — see
+      # .gitignore; a new probe drop needs its own entry here on purpose, so an
+      # accidental large dump still fails the build.
       - name: Reject committed logs and stray captures
         shell: bash
         run: |
@@ -181,9 +185,9 @@ jobs:
             found=1
           fi
 
-          stray=$(git ls-files 'captures/*' | grep -vE '^captures/(README\.md|captures\.zip)$' || true)
+          stray=$(git ls-files 'captures/*' | grep -vE '^captures/(README\.md|captures\.zip|chat\.zip)$' || true)
           if [ -n "$stray" ]; then
-            echo "::error::Only the gold capture set may be committed (see ARCHITECTURE.md):"
+            echo "::error::Only the capture sets listed above may be committed (see ARCHITECTURE.md):"
             echo "$stray"
             found=1
           fi
