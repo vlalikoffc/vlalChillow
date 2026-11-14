@@ -1,5 +1,6 @@
 using System.Net;
 using StandChillow.LanServer.Config;
+using StandChillow.LanServer.Dashboard;
 using StandChillow.LanServer.Net.Lobby;
 using StandChillow.LanServer.Net.Match;
 
