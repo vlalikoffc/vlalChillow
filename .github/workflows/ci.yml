@@ -103,7 +103,7 @@ jobs:
 
       # One subdirectory per artifact (all three builds share the same file names,
       # so they must NOT be merged into one directory).
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: release
 
