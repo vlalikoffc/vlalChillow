@@ -48,7 +48,12 @@ public sealed class SiteAddressResolver
     /// <summary>Как узнать внешний IP; <c>null</c> — не спрашивать (тесты, офлайн-сервер).</summary>
     public Func<CancellationToken, Task<string?>>? ExternalIpProvider { get; init; }
 
-    /// <summary>LAN-адрес машины; <c>null</c> — взять через <c>LanInterfacePicker</c>.</summary>
+    /// <summary>
+    /// LAN-адрес машины. <c>null</c> (не задан) — спросить <c>LanInterfacePicker</c>;
+    /// заданный делегат, вернувший <c>null</c>, означает «LAN-адреса нет» и в сеть
+    /// больше не ходим. Разница важна: иначе тест не может запретить реальный сетевой
+    /// интерфейс, и результат зависит от машины, на которой он запущен.
+    /// </summary>
     public Func<string?>? LanAddressProvider { get; init; }
 
     /// <summary>Что показать игроку.</summary>
@@ -61,7 +66,9 @@ public sealed class SiteAddressResolver
         if (!string.IsNullOrEmpty(external))
             return external;
 
-        var lan = LanAddressProvider?.Invoke() ?? LanAddressFallback();
+        // Заданный делегат — окончательный ответ, даже если это null:
+        // «LAN-адреса нет» не повод лезть в реальные интерфейсы.
+        var lan = LanAddressProvider is null ? LanAddressFallback() : LanAddressProvider();
         return string.IsNullOrEmpty(lan) ? "localhost" : lan;
     }
 

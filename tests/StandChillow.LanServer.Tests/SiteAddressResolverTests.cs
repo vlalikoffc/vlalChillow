@@ -63,6 +63,31 @@ public sealed class SiteAddressResolverTests
     }
 
     [Fact]
+    public void ExplicitLanProviderBlocksRealInterfaces()
+    {
+        // Заданный делегат — окончательный ответ: «LAN-адреса нет» не значит
+        // «спроси настоящие интерфейсы». Иначе тест зависел бы от машины,
+        // на которой он запущен (на CI раннере LAN-адрес есть — 10.x).
+        var called = false;
+        var r = new SiteAddressResolver
+        {
+            LanAddressProvider = () => { called = true; return null; },
+        };
+
+        Assert.Equal("localhost", r.Resolve());
+        Assert.True(called);
+    }
+
+    [Fact]
+    public void MissingLanProviderFallsBackToInterfaces()
+    {
+        // Провайдер не задан — поведение по умолчанию: взять LAN-адрес машины.
+        // Проверяем только что ответ непустой (конкретный адрес зависит от машины).
+        var r = new SiteAddressResolver();
+        Assert.False(string.IsNullOrWhiteSpace(r.Resolve()));
+    }
+
+    [Fact]
     public void ProviderFailureFallsBackToLan()
     {
         var r = new SiteAddressResolver
