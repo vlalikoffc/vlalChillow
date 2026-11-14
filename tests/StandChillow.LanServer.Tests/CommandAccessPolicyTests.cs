@@ -96,6 +96,27 @@ public sealed class CommandAccessPolicyTests
         Assert.True(Allowed(Default(), "кто угодно", message, out _));
     }
 
+    /// <summary>
+    /// <c>/chattest</c> шлёт кадры ChatManager, подписанные чужим актором, — это диагностика
+    /// для админа. Гейт не зависит от <c>admin.adminOnlyCommands</c>, иначе он снимался бы
+    /// правкой конфига (так же сделано для банов).
+    /// </summary>
+    [Theory]
+    [InlineData("/chattest")]
+    [InlineData("/чаттест")]
+    [InlineData("chattest")]
+    public void ChatTestDiagnostic_NeedsAdmin_EvenWithoutConfig(string message)
+    {
+        var cfg = Default();
+
+        Assert.False(Allowed(cfg, "случайный игрок", message, out var reason),
+            $"'{message}' подписывает чат чужим актором — только админ");
+        Assert.Contains("только для админов", reason);
+
+        cfg.Admin.Nicknames.Add("влал");
+        Assert.True(Allowed(cfg, "влал", message, out _));
+    }
+
     [Theory]
     [InlineData("/set round 16")]
     [InlineData("/end")]

@@ -147,6 +147,12 @@ public sealed partial class GameNetHost
             return true;
         }
 
+        if (CommandAccessPolicy.IsChatTestCommand(cmd))
+        {
+            HandleChatTestCommand(reply);
+            return true;
+        }
+
         if (cmd.Equals("bans", StringComparison.OrdinalIgnoreCase)
             || cmd.Equals("баны", StringComparison.OrdinalIgnoreCase))
         {
@@ -240,6 +246,7 @@ public sealed partial class GameNetHost
           /bans                     активные баны и остаток (только админ)
           /ids                      кто в лобби и катке: id, ник, IP (только админ)
           /whoami                   что сервер знает про тебя: ник, id, IP, права
+          /chattest                 диагностика чата катки: 4 варианта кадра (только админ)
           /auth                     код админа (только из консоли сервера)
         """.Trim();
 
@@ -718,5 +725,57 @@ public sealed partial class GameNetHost
         Console.WriteLine($"[lobby] {who}: {msg}");
         BroadcastServerChat(msg);
         reply(msg);
+    }
+
+    /// <summary>
+    /// Диагностика матч-чата (<c>/chattest</c>, только админ): один и тот же текст уходит
+    /// четырьмя кадрами ChatManager — автор (актор хоста «Server» / живой игрок) ×
+    /// <c>field</c> (1/2). Задача — одним прогоном на живом клиенте узнать, какой из
+    /// вариантов он вообще рисует.
+    /// </summary>
+    /// <remarks>
+    /// Почему это не выдумка, а эксперимент: latest.log (2026-11-14, 3 пира) показал, что
+    /// серверный кадр доходит до всех (<c>Server → match: матч armed … (peers=3)</c>), но на
+    /// экране ничего нет, и в обратную сторону клиенты не прислали ни одного Rpc на id=7
+    /// (80 Rpc — только пешки, RadarManager id=6, BombManager id=8). Значит чат клиента к
+    /// нашему ChatManager не привязан. Обе ниточки одинаково подтверждены капчурами:
+    /// <c>field</c> у живого чата бывает 1 и 2 (gold …040303/…040308 против …040310 «сучка»),
+    /// а байт автора — это номер актора (в том же логе id=257→rpc=2, id=385→rpc=3, id=513→rpc=4,
+    /// то есть rpc==owner пешки). Выбрать между ними по капчурам нельзя — нужно наблюдение.
+    /// </remarks>
+    private void HandleChatTestCommand(Action<string> reply)
+    {
+        if (!_match.IsListening || !_match.HasMatchPeers)
+        {
+            reply("chattest: катка не идёт — сначала /start, нужны живые клиенты на 7777");
+            return;
+        }
+
+        // SnapshotPublicIds уже без актора сервера, поэтому первый — живой игрок.
+        var human = _match.SnapshotPublicIds().FirstOrDefault();
+        var hasHuman = !string.IsNullOrWhiteSpace(human.Nick);
+        var variants = new List<(string Label, byte Author, string Who, short Field)>
+        {
+            ("A", MatchHostActor.ActorNr, "Server", 1),
+            ("B", MatchHostActor.ActorNr, "Server", 2),
+        };
+        if (hasHuman)
+        {
+            variants.Add(("C", human.ActorNr, human.Nick, 1));
+            variants.Add(("D", human.ActorNr, human.Nick, 2));
+        }
+
+        foreach (var (label, author, who, field) in variants)
+        {
+            var text = $"chattest {label} (автор {author}={who}, field={field})";
+            var peers = _match.SendServerChatProbe(text, author, field);
+            Console.WriteLine($"[chat] chattest {label}: author={author} field={field} → peers={peers}");
+            reply($"chattest {label} → peers={peers}: автор {author} ({who}), field={field}");
+        }
+
+        reply(hasHuman
+            ? $"chattest: какие буквы появились в чате катки? C/D подписаны актором {human.ActorNr} " +
+              $"({human.Nick}) — на его собственном экране их не будет (клиент не рисует своё сообщение)."
+            : "chattest: живых игроков в ростере нет — отправлены только варианты от актора сервера.");
     }
 }

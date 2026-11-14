@@ -86,6 +86,17 @@ public static class CommandAccessPolicy
             return false;
         }
 
+        // Диагностика матч-чата шлёт кадры от имени чужого актора — тоже только админ,
+        // и тоже независимо от admin.adminOnlyCommands (иначе гейт снимается правкой конфига).
+        if (IsChatTestCommand(parsed.Command))
+        {
+            if (config.IsAdmin(playerNick))
+                return true;
+
+            denyReason = AdminDenied(config, parsed.Command, playerNick);
+            return false;
+        }
+
         if (!config.IsAdminOnly(parsed.Command) && !IsAdminOnlyAlias(config, parsed.Command))
             return true;
 
@@ -142,4 +153,15 @@ public static class CommandAccessPolicy
             || command.Equals("баны", StringComparison.OrdinalIgnoreCase)
             || command.Equals("ids", StringComparison.OrdinalIgnoreCase)
             || command.Equals("айди", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Диагностика матч-чата (<c>/chattest</c>): шлёт один и тот же текст четырьмя кадрами —
+    /// автор (хост/живой игрок) × <c>field</c> (1/2). Все значения из капчур, но кадры
+    /// подписаны чужим актором, поэтому команда админская.
+    /// </summary>
+    public static bool IsChatTestCommand(string? command) =>
+        command is not null
+        && (command.Equals("chattest", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("чаттест", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("testchat", StringComparison.OrdinalIgnoreCase));
 }

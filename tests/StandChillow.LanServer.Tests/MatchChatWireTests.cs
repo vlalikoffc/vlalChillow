@@ -45,24 +45,56 @@ public sealed class MatchChatWireTests
         Assert.Equal(11221652 / 1000.0, parsed.TimeValue, 3);
     }
 
-    [Fact]
-    public void BuiltPacket_MatchesTheLiveCaptureFieldByField()
+    /// <summary>
+    /// Побайтовая сверка с настоящими золотыми кадрами. Раньше здесь был один «золотой» hex,
+    /// в котором <c>field</c> стоял <c>0100</c>, а в самом файле
+    /// <c>20261112_040310_23085_…len35.bin</c> — <c>0200</c>: тест сверялся не с капчурой, а
+    /// с нашим же билдером, и потому «проходил». Теперь строки взяты из файлов как есть, и
+    /// видно, что у чата катки наблюдаются <b>два</b> значения <c>field</c> — 1 и 2.
+    /// </summary>
+    /// <remarks>
+    /// Единственное, что не совпадает побайтово, — double времени: в капчуре timeValue
+    /// чуть отличается от serverTime/1000 (хост сэмплирует их отдельно, разница ~9–16 мс).
+    /// Это не наша выдумка и не повод «подгонять» число.
+    /// </remarks>
+    [Theory]
+    [InlineData(
+        "04CB943AAB0000000000070001030100AAF1D24DD2EAC5400DD183D0B5D0B1D0B8D189D0B520",
+        11221652, "уебище ", 1, 11221.643)]
+    [InlineData(
+        "04CB884CAB000000000007000103010085EB51B81EEDC5400BD0B8D0B3D180D0B0D0B920",
+        11226248, "играй ", 1, 11226.240)]
+    [InlineData(
+        "04CBE755AB0000000000070001030200E3A59BC450EEC5400AD181D183D187D0BAD0B0",
+        11228647, "сучка", 2, 11228.631)]
+    public void BuiltPacket_MatchesTheLiveCaptureFieldByField(
+        string goldenHex, int serverTime, string text, int field, double captureTimeValue)
     {
-        // Золотой пакет (captures.zip/20261112_040310_23085_…len35.bin):
-        // 04cb e755ab00 00000000 0700 01 03 0100 e3a59bc450eec540 0a <«сучка» utf-8>.
-        // Единственное, что не совпадает побайтово, — double времени: в капчуре
-        // timeValue=11228.631 при serverTime=11228647, то есть хост сэмплирует их
-        // отдельно (разница ~9 мс). Это не наша выдумка и не повод «подгонять» число.
-        var golden = Convert.FromHexString(
-            "04CBE755AB0000000000070001030100E3A59BC450EEC5400AD181D183D187D0BAD0B0");
-        var rebuilt = MatchCodec.BuildChatManagerText(11228647, "сучка");
+        var golden = Convert.FromHexString(goldenHex);
+        var rebuilt = MatchCodec.BuildChatManagerText(serverTime, text, field: (short)field);
 
         Assert.Equal(golden.Length, rebuilt.Length);
-        // Всё до double включительно-исключительно.
+        // Всё до double включительно-исключительно: заголовок, id=7, автор, gaa, field.
         Assert.Equal(golden.AsSpan(0, 16).ToArray(), rebuilt.AsSpan(0, 16).ToArray());
         // Хвост: length byte + текст.
         Assert.Equal(golden.AsSpan(24).ToArray(), rebuilt.AsSpan(24).ToArray());
-        Assert.Equal(11228.631, BitConverter.ToDouble(golden.AsSpan(16, 8)), 3);
+        Assert.Equal(captureTimeValue, BitConverter.ToDouble(golden.AsSpan(16, 8)), 3);
+    }
+
+    /// <summary>
+    /// Оба значения <c>field</c> из капчур несут один и тот же payload (байт длины + UTF-8),
+    /// то есть это два метода ChatManager (<c>[Rpc(1)]</c>/<c>[Rpc(2)]</c>), а не другой формат.
+    /// </summary>
+    [Fact]
+    public void BothObservedFields_CarryTheSameLengthPrefixedText()
+    {
+        var one = MatchCodec.BuildChatManagerText(1000, "текст", field: 1);
+        var two = MatchCodec.BuildChatManagerText(1000, "текст", field: 2);
+
+        Assert.Equal(one.Length, two.Length);
+        Assert.Equal(1, one[HostHeaderLen + 4]);
+        Assert.Equal(2, two[HostHeaderLen + 4]);
+        Assert.Equal(one.AsSpan(HostHeaderLen + 6).ToArray(), two.AsSpan(HostHeaderLen + 6).ToArray());
     }
 
     [Fact]

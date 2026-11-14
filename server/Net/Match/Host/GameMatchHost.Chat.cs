@@ -72,9 +72,16 @@ public sealed partial class GameMatchHost
                 if (n == 0)
                 {
                     var (inRoom, ready, held) = CountChatTargets(room);
-                    Console.WriteLine(
-                        $"[chat] Server → match: '{text}' — никто не получил " +
-                        $"({MatchChatDelivery.DescribeNoTarget(inRoom, ready, held)})");
+                    // До старта катки в комнате никого нет, а лобби-строки (ростер,
+                    // приветствия) зеркалятся сюда постоянно — логировать каждый такой
+                    // промах значит вытеснить из журнала всё остальное (latest.log: 170
+                    // строк «Server → match», из них 63 — «в катке нет пиров»).
+                    if (inRoom > 0)
+                    {
+                        Console.WriteLine(
+                            $"[chat] Server → match: '{FirstLine(text)}' — никто не получил " +
+                            $"({MatchChatDelivery.DescribeNoTarget(inRoom, ready, held)})");
+                    }
                 }
 
                 continue;
@@ -131,6 +138,46 @@ public sealed partial class GameMatchHost
         }
 
         return (inRoom, ready, held);
+    }
+
+    /// <summary>Есть ли в катке хоть один пир (даже если его сцена ещё строится).</summary>
+    public bool HasMatchPeers => !_peers.IsEmpty;
+
+    /// <summary>Первая строка текста — ростер приходит многострочным, в журнал хватит заголовка.</summary>
+    private static string FirstLine(string text)
+    {
+        var nl = text.IndexOf('\n');
+        return nl < 0 ? text : text[..nl].TrimEnd('\r');
+    }
+
+    /// <summary>
+    /// Диагностика матч-чата (<c>/chattest</c>): тот же ChatManager-кадр, но с явно заданными
+    /// автором и <c>field</c>. Оба значения <c>field</c> (1 и 2) взяты из живых капчур —
+    /// gold <c>20261112_040303_23056</c>/<c>…_040308_23079</c> идут с <c>field=1</c>,
+    /// <c>…_040310_23085</c> «сучка» с <c>field=2</c>, payload одинаковый (байт длины + UTF-8).
+    /// </summary>
+    /// <remarks>
+    /// Зачем: latest.log (2026-11-14, 3 пира) показал, что серверный кадр доходит
+    /// (<c>peers=3</c>), но клиент его не рисует, и наоборот — сами клиенты ни одного Rpc на
+    /// id=7 не прислали (80 Rpc, все на пешках, RadarManager id=6 и BombManager id=8). Значит
+    /// чат клиента к нашему ChatManager не привязан, и выбирать между «автор должен быть живым
+    /// игроком» и «нужен field=2» по капчурам нельзя — обе версии одинаково подтверждены.
+    /// Прогон четырёх комбинаций на живом клиенте даёт недостающее наблюдение; в бой идёт
+    /// только <see cref="SendServerChat"/>.
+    /// </remarks>
+    public int SendServerChatProbe(string text, byte authorActorNr, short field)
+    {
+        List<MatchRoom> rooms;
+        lock (_roomGate)
+            rooms = _roomsByPassword.Values.Distinct().ToList();
+
+        var payload = MatchCodec.BuildChatManagerText(
+            NextServerTime(), text, authorActorNr, field: field);
+        var sent = 0;
+        foreach (var room in rooms)
+            sent += BroadcastInitReadyCritical(
+                room, payload, tag: "match_tx_ChatManager_probe");
+        return sent;
     }
 
     /// <summary>

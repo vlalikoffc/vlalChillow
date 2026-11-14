@@ -925,7 +925,9 @@ public sealed partial class GameNetHost : IDisposable
             // Широкая рассылка без адресата раньше терялась молча: в катке ещё нет пиров
             // (сообщение «матч armed» уходит ровно в этот момент) или их сцена строится за
             // world-gate. Адресные ответы уже умеют ждать в очереди — пусть умеет и эта.
-            if (_match.IsListening)
+            // Но только когда в катке кто-то есть: до старта туда зеркалится каждый лобби-ростер,
+            // и копить их — значит высыпать в чат восемь устаревших строк при первом же джойне.
+            if (_match.IsListening && _match.HasMatchPeers)
                 RememberMatchReply(BroadcastReplyNick, text, address: null);
         }
         catch (Exception ex)
